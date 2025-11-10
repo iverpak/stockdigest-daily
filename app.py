@@ -22263,7 +22263,8 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 def generate_email_html_core_editorial(
     ticker: str,
     hours: int = 24,
-    recipient_email: str = None
+    recipient_email: str = None,
+    summary_date: date = None
 ) -> Dict[str, any]:
     """
     Email #4 generation - SAME AS generate_email_html_core but uses editorial_markdown.
@@ -22276,6 +22277,7 @@ def generate_email_html_core_editorial(
         recipient_email:
             - If provided: Generate real unsubscribe token (for test/immediate send)
             - If None: Use placeholder {{UNSUBSCRIBE_TOKEN}} (for production multi-recipient)
+        summary_date: Date of summary (defaults to today if not specified)
 
     Returns:
         {
@@ -22285,7 +22287,7 @@ def generate_email_html_core_editorial(
             "article_count": Number of articles analyzed
         }
     """
-    LOG.info(f"Generating Email #4 (Editorial) for {ticker} (recipient: {recipient_email or 'placeholder'})")
+    LOG.info(f"Generating Email #4 (Editorial) for {ticker} (recipient: {recipient_email or 'placeholder'}, date: {summary_date or 'today'})")
 
     # Fetch ticker config
     config = get_ticker_config(ticker)
@@ -22328,18 +22330,22 @@ def generate_email_html_core_editorial(
                 ytd_return_color = "#4ade80" if ytd >= 0 else "#ef4444"
 
     # ========== DIFFERENT: Fetch editorial_markdown instead of summary_text ==========
+    # Use provided summary_date or default to today
+    if not summary_date:
+        summary_date = datetime.now(timezone.utc).date()
+
     editorial_markdown = ""
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
             SELECT editorial_markdown FROM executive_summaries
-            WHERE ticker = %s AND summary_date = CURRENT_DATE
+            WHERE ticker = %s AND summary_date = %s
             ORDER BY generated_at DESC LIMIT 1
-        """, (ticker,))
+        """, (ticker, summary_date))
         result = cur.fetchone()
         if result and result['editorial_markdown']:
             editorial_markdown = result['editorial_markdown']
         else:
-            LOG.warning(f"No editorial markdown found for {ticker}")
+            LOG.warning(f"No editorial markdown found for {ticker} on {summary_date}")
             return None
 
     # ========== DIFFERENT: Parse markdown instead of JSON ==========
@@ -22356,14 +22362,14 @@ def generate_email_html_core_editorial(
     articles_by_category = {"company": [], "industry": [], "competitor": [], "value_chain": []}
 
     # Note: Email #4 uses same flagged articles as Email #3 (from Phase 1/2)
-    # We fetch from executive_summaries metadata
+    # We fetch from executive_summaries metadata using same summary_date
     flagged_article_ids = []
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
             SELECT article_ids FROM executive_summaries
-            WHERE ticker = %s AND summary_date = CURRENT_DATE
+            WHERE ticker = %s AND summary_date = %s
             ORDER BY generated_at DESC LIMIT 1
-        """, (ticker,))
+        """, (ticker, summary_date))
         result = cur.fetchone()
         if result and result['article_ids']:
             # Parse JSON string to Python list for SQL query
@@ -22569,10 +22575,17 @@ def generate_email_html_core_editorial(
 def send_editorial_intelligence_report(
     hours: int = 24,
     tickers: List[str] = None,
-    recipient_email: str = None
+    recipient_email: str = None,
+    summary_date: date = None
 ) -> Dict:
     """
     Email #4 wrapper - SAME AS send_user_intelligence_report but uses editorial version.
+
+    Args:
+        hours: Lookback window
+        tickers: List with one ticker
+        recipient_email: Email recipient
+        summary_date: Date of summary (defaults to today if not specified)
 
     Returns: {"status": "sent" | "failed", "articles_analyzed": X, ...}
     """
@@ -22589,7 +22602,8 @@ def send_editorial_intelligence_report(
     email_data = generate_email_html_core_editorial(
         ticker=ticker,
         hours=hours,
-        recipient_email=recipient_email or DIGEST_TO
+        recipient_email=recipient_email or DIGEST_TO,
+        summary_date=summary_date
     )
 
     if not email_data:
@@ -24702,12 +24716,13 @@ async def process_ticker_job(job: dict):
                                 if success:
                                     LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 3 editorial saved to database")
 
-                                    # Send Email #4 immediately
+                                    # Send Email #4 immediately (use today's date)
                                     LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #4 (Editorial)...")
                                     editorial_result = send_editorial_intelligence_report(
                                         hours=int(minutes/60),
                                         tickers=[ticker],
-                                        recipient_email=DIGEST_TO
+                                        recipient_email=DIGEST_TO,
+                                        summary_date=datetime.now().date()
                                     )
 
                                     if editorial_result and editorial_result.get('status') == 'sent':
@@ -34587,12 +34602,13 @@ async def regenerate_email_api(request: Request):
                     if success:
                         LOG.info(f"✅ [{ticker}] Phase 3 editorial saved to database")
 
-                        # Send Email #4 immediately
+                        # Send Email #4 immediately (pass target_date for correct query)
                         LOG.info(f"[{ticker}] 📧 Sending Email #4 (Editorial)...")
                         editorial_result = send_editorial_intelligence_report(
                             hours=hours,
                             tickers=[ticker],
-                            recipient_email=admin_email
+                            recipient_email=admin_email,
+                            summary_date=target_date
                         )
 
                         if editorial_result and editorial_result.get('status') == 'sent':

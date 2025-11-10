@@ -910,6 +910,9 @@ def merge_phase3_with_phase2(phase2_json: Dict, phase3_json: Dict) -> Dict:
             if bullet_id in phase3_map:
                 # Overlay integrated content (keep all Phase 2 metadata)
                 bullet['content'] = phase3_map[bullet_id]['content']
+                # Remove context field since it's now integrated into content
+                if 'context' in bullet:
+                    del bullet['context']
 
     # Scenarios (bottom_line, upside_scenario, downside_scenario)
     for section_name in ["bottom_line", "upside_scenario", "downside_scenario"]:
@@ -918,5 +921,8 @@ def merge_phase3_with_phase2(phase2_json: Dict, phase3_json: Dict) -> Dict:
             if phase3_section and phase3_section.get("content"):
                 # Overlay integrated content (keep date_range from Phase 2)
                 merged["sections"][section_name]["content"] = phase3_section["content"]
+                # Remove context field since it's now integrated into content
+                if 'context' in merged["sections"][section_name]:
+                    del merged["sections"][section_name]['context']
 
     return merged

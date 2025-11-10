@@ -237,20 +237,32 @@ Example:
 - Context: "Acquisition valued **$3.4B**"
 → DISCARD context (duplicate)
 
-Step 2 - Relevance check: "Does this context help understand what the bullet claims?"
+Step 2 - Relevance check: "Does this context answer a material question ABOUT what the bullet discusses?"
+
+Material questions include:
+- Materiality/scale (% of revenue/assets, customer ranking)
+- Economics/profitability (margins, ROIC, cash generation)
+- Dependencies (customer/supplier concentration, critical vendors)
+- Trends (QoQ/YoY, sequential improvement/deterioration)
+- Risks (disclosed risks, litigation, contingencies)
+- Competitive position (market share, capacity, cost position)
+- Capital allocation (ROIC vs WACC, investment returns)
+- Timeline (on schedule, delays, milestone dates)
+- Business model fit (strategic alignment, revenue streams)
+- Input/output exposure (COGS breakdown, pricing power)
+- Entity definition (what is this entity, its scale)
 
 Keep context that:
 - Proves claim (quantifies materiality)
-- Explains why it matters (driver, impact)
+- Explains why it matters (driver, impact, economics)
 - Adds dimension (trend, scale, comparison, segment breakdown)
 
 Discard context that:
 - Is tangentially related (general background, unrelated facts)
-- Doesn't advance narrative
+- Doesn't answer ANY of the material questions above
 - Is about different aspect without clear connection
 
-Ask: "Does this context answer a material question ABOUT what the bullet discusses?"
-If NO → Discard
+If NO material question answered → Discard
 
 AGGRESSIVE FILTERING EXAMPLES:
 

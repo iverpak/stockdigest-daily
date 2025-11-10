@@ -103,35 +103,32 @@ Input: Phase 1 paragraph (150 words)
 Output format:
 ## BOTTOM LINE
 
-[Thesis sentence with selective bolding - what happened and why it matters]
+[Thesis sentence - what happened and why it matters]
 
 Key Developments:
-- **Theme 1**: [40-60 word bullet with bolding]
-- **Theme 2**: [40-60 word bullet with bolding]
-- **Theme 3**: [40-60 word bullet with bolding]
-- **Theme 4**: [40-60 word bullet with bolding]
+- Theme 1: [40-60 word bullet]
+- Theme 2: [40-60 word bullet]
+- Theme 3: [40-60 word bullet]
+- Theme 4: [40-60 word bullet]
 
 [Optional 1-sentence closing context]
-
-(Date range)
 
 Rules:
 - Extract 3-5 most important themes from Phase 1 paragraph
 - Extract thesis sentence (take MOST IMPORTANT sentence from Phase 1, or combine first 1-2 sentences)
-- Remove inline attribution ("per Bloomberg", "per Oct 15 call")
-- Keep analyst names when relevant (BofA **$137**, Wedbush **$600**)
-- Consolidate date range at end (e.g., "Oct 15, Nov 3-8")
-- Bold key numbers and metrics
+- Keep ALL inline attribution as-is ("per Bloomberg (Nov 04)", "per Oct 15 call")
+- Keep analyst names when relevant (BofA $137, Wedbush $600)
 - Length: 150-200 words
+- NO bolding - output plain markdown text
 
 Extraction rules:
 ✅ Extract content directly from Phase 1 paragraph (no new writing)
-✅ Add bolding to numbers and key phrases
-✅ Consolidate date range at end
+✅ Keep all attribution and dates from Phase 1
 
 ❌ Don't create new connections Phase 1 didn't make
 ❌ Don't use phrases not in Phase 1 paragraph
 ❌ Don't force 4 bullets if only 3 themes present
+❌ Don't add bolding (downstream HTML converter will handle formatting)
 
 ───────────────────────────────────────────────────────────────────────────────
 
@@ -144,41 +141,39 @@ Input:
 Output format:
 ## UPSIDE SCENARIO
 
-[Thesis sentence - extract key claim from Phase 1 paragraph with selective bolding]
+[Thesis sentence - extract key claim from Phase 1 paragraph]
 
 Primary Drivers:
-- **Driver label**: [50-80 word bullet with bolding]
-- **Driver label**: [50-80 word bullet with bolding]
-- **Driver label**: [50-80 word bullet with bolding]
+- Driver label: [50-80 word bullet]
+- Driver label: [50-80 word bullet]
+- Driver label: [50-80 word bullet]
 
 [Optional 1-2 sentence supporting context from Phase 2 context field, if present]
 
-(Date range)
-
 Adaptive scaling:
 - Escape hatch ("No material upside..."): Keep as one sentence, no bullets, no date
-- 1-2 themes: Simple paragraph with light bolding, no bullet structure
+- 1-2 themes: Simple paragraph, no bullet structure
 - 3+ themes: Thesis + bullets format as shown above
 
 Rules:
 - DISTRIBUTE Phase 2 scenario context across bullets where relevant (do NOT append as closing paragraph)
 - Scenario context is a 50-75 word synthesis - weave portions into bullets that they support
 - If scenario context doesn't fit any bullet naturally: DISCARD it
-- Remove inline attribution from article content
+- Keep ALL inline attribution as-is from article content
 - Keep analyst names when discussing views
-- Consolidate date range at end
-- Bold key numbers and metrics
 - Same format for Downside Scenario (use "Primary Risks:" instead of "Primary Drivers:")
 - Same format for Bottom Line (extract thesis + 3-5 key developments, distribute context across bullets)
+- NO bolding - output plain markdown text
 
 Thesis construction:
 ✅ Extract primary claim from Phase 1 scenario paragraph (first sentence usually)
-✅ Add analyst target if mentioned: "BofA target **$137** represents **10%+** upside"
+✅ Add analyst target if mentioned: "BofA target $137 represents 10%+ upside"
 ✅ Use neutral framing: "Analysts cited factors" not "Catalysts converging"
 
 ❌ Don't calculate upside percentages unless explicit in Phase 1
 ❌ Don't use synthesis phrases like "validate", "converging", "tempering"
 ❌ Don't create causal connections Phase 1 didn't make
+❌ Don't add bolding (downstream HTML converter will handle formatting)
 
 Driver/Risk label guidelines:
 Use neutral, descriptive labels from Phase 1 content:
@@ -206,23 +201,23 @@ Input:
 - Phase 2 tags (impact, sentiment, reason, entity)
 
 Output format for standard sections:
-**Topic Label • Sentiment (reason tag)**
+Topic Label • Sentiment (reason tag)
 
 [Integrated paragraph: article content + filing context woven together,
-with full inline attribution and selective bolding]
+with full inline attribution preserved]
 
 Output format for competitive_industry_dynamics section only:
-**[Entity] Topic Label • Sentiment (reason tag)**
+[Entity] Topic Label • Sentiment (reason tag)
 
 [Integrated paragraph...]
 
 Integration rules:
 - Weave Phase 2 context naturally into prose (no separate "Context:" line)
-- Keep FULL inline attribution in bullets ("per Oct 15 call", "per Q3 10-Q", "per Bloomberg (Nov 4)")
-- Bold key numbers: **$900M**, **53**, **95.3%**, **19%**
+- Keep FULL inline attribution in bullets ("per Oct 15 call", "per Q3 10-Q", "per Bloomberg (Nov 04)")
 - Display sentiment/reason/entity tags as provided (no interpretation)
 - Sentiment options: Bullish / Bearish / Neutral / Mixed
 - Entity options (competitive section only): [Market] / [Competitor] / [Upstream] / [Downstream]
+- NO bolding - output plain markdown text
 
 WEAVING EXAMPLES (How to integrate context):
 
@@ -235,17 +230,17 @@ Company stated Q3 marked inflection point (Q3 leasing volume 62M sqft per Oct 15
 
 Example 2 - Natural Mid-Sentence Integration:
 ❌ WRONG (Appended):
-Acquired Amedisys for **$3.4B** per Oct 28 earnings call, adding 300K patients. Acquisition valued **$3.4B** with 300K patients across 38 states per Q3 10-Q.
+Acquired Amedisys for $3.4B per Oct 28 earnings call, adding 300K patients. Acquisition valued $3.4B with 300K patients across 38 states per Q3 10-Q.
 
 ✅ RIGHT (Woven):
-Acquired Amedisys for **$3.4B** per Oct 28 earnings call, adding 300K patients across 38 states per Q3 10-Q.
+Acquired Amedisys for $3.4B per Oct 28 earnings call, adding 300K patients across 38 states per Q3 10-Q.
 
 Example 3 - Supporting Detail Integration:
 ❌ WRONG (Appended):
-Q3 revenue reached **$2.05B**, up 8.6% YoY per ad-hoc-news.de. Q3 rental revenue **$2,054M** per Q3 10-Q vs **$1,897M** Q3 2024.
+Q3 revenue reached $2.05B, up 8.6% YoY per ad-hoc-news.de. Q3 rental revenue $2,054M per Q3 10-Q vs $1,897M Q3 2024.
 
 ✅ RIGHT (Woven):
-Q3 revenue reached **$2.05B** (rental revenue **$2,054M** vs **$1,897M** prior year per Q3 10-Q), up 8.6% YoY per ad-hoc-news.de.
+Q3 revenue reached $2.05B (rental revenue $2,054M vs $1,897M prior year per Q3 10-Q), up 8.6% YoY per ad-hoc-news.de.
 
 Example 4 - Data Point Integration:
 ❌ WRONG (Appended):
@@ -268,8 +263,8 @@ Context filtering (apply sequentially):
 
 Step 1 - Deduplication: Remove context that repeats bullet facts
 Example:
-- Bullet: "Acquired Amedisys for **$3.4B**"
-- Context: "Acquisition valued **$3.4B**"
+- Bullet: "Acquired Amedisys for $3.4B"
+- Context: "Acquisition valued $3.4B"
 → DISCARD context (duplicate)
 
 Step 2 - Relevance check: "Does this context answer a material question ABOUT what the bullet discusses?"
@@ -329,8 +324,8 @@ Context: "FedEx represents 1.7% of consolidated NER; top 10 customers account fo
 Conflict handling:
 If Phase 2 context contradicts Phase 1 bullet:
 1. Integrate context as usual (don't try to resolve)
-2. Add flag: **Note: Filing data shows [context fact], which differs from article characterization.**
-3. Keep flagging subtle (no emojis, just **Note:** prefix)
+2. Add flag: Note: Filing data shows [context fact], which differs from article characterization.
+3. Keep flagging subtle (no emojis, just "Note:" prefix)
 
 Length formula:
 Output = Bullet + Context - Duplicates - Noise + Connectors
@@ -374,8 +369,8 @@ Pass through unchanged from Phase 1 (no restructuring needed):
 
 ## KEY VARIABLES TO MONITOR
 
-▸ **Variable 1**: [Description - Timeline if provided]
-▸ **Variable 2**: [Description - Timeline if provided]
+▸ Variable 1: [Description - Timeline if provided]
+▸ Variable 2: [Description - Timeline if provided]
 
 ═══════════════════════════════════════════════════════════════════════════════
 SECTION ORDER
@@ -394,22 +389,20 @@ Output sections in this order (omit if empty):
 10. Key Variables to Monitor
 
 ═══════════════════════════════════════════════════════════════════════════════
-BOLDING STRATEGY
+NO BOLDING
 ═══════════════════════════════════════════════════════════════════════════════
 
-Target density: 5-6% of text
+Output plain markdown with NO bolding (**text**).
+Bolding will be applied by downstream HTML converter.
 
-Qualitative rules:
-- Bold all numbers with units: **$3.4B**, **28%**, **300K patients**
-- Bold 1-2 critical phrases per section: **inflection point**, **record high**
-- Bold key metrics: **Core FFO**, **mark-to-market**, **IBI**
+All text should be plain - numbers, metrics, labels, headers:
+✅ CORRECT: Q3 inflection point • Bullish (demand inflection)
+✅ CORRECT: Company reported $1.49 EPS with IBI averaging 53
+✅ CORRECT: Acquired Amedisys for $3.4B
 
-Don't bold:
-- Common words
-- Attribution phrases ("per", "according to")
-- Connector words ("with", "and", "but")
-
-Format: **$900M NOI** not $900M **NOI**
+❌ WRONG: **Q3 inflection point** • Bullish (demand inflection)
+❌ WRONG: Company reported **$1.49** EPS with IBI averaging **53**
+❌ WRONG: Acquired **Amedisys** for **$3.4B**
 
 ═══════════════════════════════════════════════════════════════════════════════
 ATTRIBUTION RULES
@@ -418,16 +411,16 @@ ATTRIBUTION RULES
 Maintain split attribution - different claims = different sources:
 
 Inline attribution (all sections):
-"Company acquired **Amedisys** for **$3.4B** per Oct 28 earnings call, adding
-**300K patients** across **38 states** per Q3 10-Q..."
+"Company acquired Amedisys for $3.4B per Oct 28 earnings call, adding
+300K patients across 38 states per Q3 10-Q..."
 
 Consolidate only when same claim from multiple sources:
 "Revenue beat consensus per Bloomberg, Reuters, and WSJ"
 
 NEVER consolidate different claims:
 ❌ WRONG: "Various metrics improved (per Q3 10-Q, earnings call, FreightWaves)"
-✅ RIGHT: "IBI **53** per FreightWaves; occupancy **95.3%** per Q3 10-Q;
-          Core FFO **$1.50** per earnings call"
+✅ RIGHT: "IBI 53 per FreightWaves; occupancy 95.3% per Q3 10-Q;
+          Core FFO $1.50 per earnings call"
 
 ═══════════════════════════════════════════════════════════════════════════════
 CRITICAL CONSTRAINTS
@@ -544,16 +537,15 @@ Before outputting, verify:
 □ No causal language ("driving", "validating", "tempering")
 □ No unsupported calculations (upside %, aggregations)
 □ Scenarios have thesis + bullets (or escape hatch if applicable)
-□ All bullets show: **Topic** • Sentiment (reason) [or **[Entity] Topic** • Sentiment (reason)]
+□ All bullets show: Topic • Sentiment (reason) [or [Entity] Topic • Sentiment (reason)]
 □ Sentiment/reason/entity tags displayed as-is from Phase 2 (no interpretation)
 □ Context integrated inline (no separate "Context:" lines)
 □ Duplicate context removed (within bullets)
 □ Empty sections omitted
-□ Date ranges consolidated in summaries (Bottom Line, Scenarios)
 □ Full attribution preserved in detailed bullets (inline, split maintained)
-□ Bolding density ~5-6%
+□ NO bolding (**text**) - plain markdown only
 □ No cross-section content removal (sections stand independently)
-□ Conflicts flagged with **Note:** (if any)
+□ Conflicts flagged with "Note:" prefix (if any)
 
 ═══════════════════════════════════════════════════════════════════════════════
 OUTPUT FORMAT

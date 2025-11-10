@@ -22,6 +22,88 @@ import requests
 LOG = logging.getLogger(__name__)
 
 
+def add_date_ranges_to_phase3_markdown(
+    markdown: str,
+    merged_json: Dict
+) -> str:
+    """
+    Add date ranges from JSON to Phase 3 markdown.
+
+    DOES NOT strip inline dates - just adds date_range from JSON.
+    This creates temporary duplication for validation purposes.
+
+    Args:
+        markdown: Phase 3 markdown (has inline dates)
+        merged_json: Phase 1+2 merged JSON (has date_range fields)
+
+    Returns:
+        Markdown with date ranges added at specified locations
+    """
+
+    # Step 1: Add date ranges for regular bullet sections
+    for section_name in ['major_developments', 'financial_performance', 'risk_factors',
+                          'wall_street_sentiment', 'competitive_industry_dynamics',
+                          'upcoming_catalysts']:
+
+        bullets = merged_json['sections'].get(section_name, [])
+
+        for bullet in bullets:
+            topic_label = bullet.get('topic_label', '')
+            date_range = bullet.get('date_range', '')
+
+            if not topic_label or not date_range:
+                continue
+
+            # Find this bullet's paragraph and add date at end
+            # Pattern: Match from bullet header to end of integrated paragraph
+            # Paragraph ends at: next bullet header, section header, or end of string
+
+            # Escape special regex characters in topic_label
+            escaped_topic = re.escape(topic_label)
+
+            # Pattern matches:
+            # - Topic Label • Sentiment (reason)
+            # - [Entity] Topic Label • Sentiment (reason) (for competitive section)
+            # Followed by blank line and paragraph content
+            pattern = rf'(?:\[.+?\] )?{escaped_topic} • .+?\n\n(.+?)(?=\n\n(?:[A-Z]|\[|##|▸)|$)'
+
+            def add_date(match):
+                paragraph = match.group(1)
+                # Add date at end of paragraph (before next section/bullet)
+                return match.group(0)[:-len(paragraph)] + paragraph + f' ({date_range})'
+
+            markdown = re.sub(pattern, add_date, markdown, flags=re.DOTALL, count=1)
+
+    # Step 2: Add date range after "Key Developments:"
+    bottom_line_date = merged_json['sections'].get('bottom_line', {}).get('date_range', '')
+    if bottom_line_date:
+        markdown = re.sub(
+            r'(Key Developments:)(\n)',
+            rf'\1 ({bottom_line_date})\2',
+            markdown
+        )
+
+    # Step 3: Add date range after "Primary Drivers:"
+    upside_date = merged_json['sections'].get('upside_scenario', {}).get('date_range', '')
+    if upside_date:
+        markdown = re.sub(
+            r'(Primary Drivers:)(\n)',
+            rf'\1 ({upside_date})\2',
+            markdown
+        )
+
+    # Step 4: Add date range after "Primary Risks:"
+    downside_date = merged_json['sections'].get('downside_scenario', {}).get('date_range', '')
+    if downside_date:
+        markdown = re.sub(
+            r'(Primary Risks:)(\n)',
+            rf'\1 ({downside_date})\2',
+            markdown
+        )
+
+    return markdown
+
+
 def generate_executive_summary_phase3(
     ticker: str,
     merged_json: Dict,
@@ -99,11 +181,14 @@ def generate_executive_summary_phase3(
             result = response.json()
             markdown = result.get("content", [{}])[0].get("text", "")
 
+            # Add date ranges from JSON to markdown
+            markdown = add_date_ranges_to_phase3_markdown(markdown, merged_json)
+
             usage = result.get("usage", {})
             prompt_tokens = usage.get("input_tokens", 0)
             completion_tokens = usage.get("output_tokens", 0)
 
-            LOG.info(f"[{ticker}] ✅ Phase 3 markdown generated ({len(markdown)} chars, "
+            LOG.info(f"[{ticker}] ✅ Phase 3 markdown generated with date ranges added ({len(markdown)} chars, "
                     f"{prompt_tokens} prompt tokens, {completion_tokens} completion tokens, {generation_time_ms}ms)")
 
             return {

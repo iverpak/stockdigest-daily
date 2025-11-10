@@ -56,6 +56,7 @@ You MUST output valid JSON with this EXACT structure:
   "sections": {
     "bottom_line": {
       "content": "string (≤150 words)",
+      "date_range": "string (consolidated date range from all inline dates in content)",
       "word_count": integer
     },
     "major_developments": [
@@ -63,6 +64,7 @@ You MUST output valid JSON with this EXACT structure:
         "bullet_id": "string (lowercase topic_label with underscores, no special chars)",
         "topic_label": "string (2-5 words)",
         "content": "string (full sentence with attribution and date at end)",
+        "date_range": "string (date or range extracted from content, e.g., 'Nov 04' or 'Nov 04-07')",
         "filing_hints": {
           "10-K": ["Section Name 1", "Section Name 2"],
           "10-Q": ["Section Name 1", "Section Name 2"],
@@ -76,6 +78,7 @@ You MUST output valid JSON with this EXACT structure:
         "bullet_id": "string",
         "topic_label": "string (2-5 words)",
         "content": "string (full sentence with attribution and date at end)",
+        "date_range": "string (date or range extracted from content)",
         "filing_hints": {
           "10-K": ["Section Name 1", "Section Name 2"],
           "10-Q": ["Section Name 1", "Section Name 2"],
@@ -84,14 +87,15 @@ You MUST output valid JSON with this EXACT structure:
         "filing_keywords": ["keyword1", "keyword2", "keyword3"]
       }
     ],
-    "risk_factors": [...same structure as above...],
-    "wall_street_sentiment": [...same structure as above...],
-    "competitive_industry_dynamics": [...same structure as above...],
+    "risk_factors": [...same structure as above with date_range...],
+    "wall_street_sentiment": [...same structure as above with date_range...],
+    "competitive_industry_dynamics": [...same structure as above with date_range...],
     "upcoming_catalysts": [
       {
         "bullet_id": "string",
         "topic_label": "string (event name)",
         "content": "string (date/timing - details with attribution and date at end)",
+        "date_range": "string (date or range extracted from content)",
         "filing_hints": {
           "10-K": ["Section Name 1", "Section Name 2"],
           "10-Q": ["Section Name 1", "Section Name 2"],
@@ -101,10 +105,12 @@ You MUST output valid JSON with this EXACT structure:
       }
     ],
     "upside_scenario": {
-      "content": "string (80-100 words, single paragraph)"
+      "content": "string (80-100 words, single paragraph)",
+      "date_range": "string (consolidated date range from all inline dates in content)"
     },
     "downside_scenario": {
-      "content": "string (single paragraph, 3-4 sentences)"
+      "content": "string (single paragraph, 3-4 sentences)",
+      "date_range": "string (consolidated date range from all inline dates in content)"
     },
     "key_variables": [
       {
@@ -120,21 +126,25 @@ SECTION STRUCTURE NOTES:
 
 Bullet sections (major_developments, financial_performance, risk_factors, wall_street_sentiment, competitive_industry_dynamics, upcoming_catalysts):
 - Array of bullet objects
-- Each bullet has: bullet_id, topic_label, content, filing_hints, filing_keywords
+- Each bullet has: bullet_id, topic_label, content, date_range, filing_hints, filing_keywords
 - filing_hints REQUIRED for all bullet sections
 - filing_keywords OPTIONAL (0-4 keywords, empty array [] if none applicable)
+- date_range REQUIRED for all bullet sections (empty string "" if no date found)
 
 Scenario sections (upside_scenario, downside_scenario):
-- Single object with content field
+- Single object with content and date_range fields
 - No bullet_id, topic_label, or filing_hints
+- date_range consolidates all dates from content into a range
 
 Key Variables section:
 - Array of bullet objects
 - Each has: bullet_id, topic_label, content
 - NO filing_hints (forward-looking monitoring variables, not enrichable from past filings)
+- NO date_range (forward-looking, not based on dated articles)
 
 Bottom Line section:
-- Single object with content and word_count fields
+- Single object with content, date_range, and word_count fields
+- date_range consolidates all dates from content into a range
 
 CRITICAL JSON REQUIREMENTS:
 1. ALL 10 sections must be present inside "sections" object (even if empty)
@@ -155,6 +165,50 @@ SECTION ORDER (must appear in this exact order):
 8. upside_scenario
 9. downside_scenario
 10. key_variables
+
+═══════════════════════════════════════════════════════════════════════════════
+DATE EXTRACTION
+═══════════════════════════════════════════════════════════════════════════════
+
+For ALL bullet sections (major_developments, financial_performance, risk_factors, wall_street_sentiment, competitive_industry_dynamics, upcoming_catalysts):
+
+- Extract dates from inline attribution in content field
+- Store in date_range field
+- Format: Natural language (e.g., "Nov 04", "Nov 04-07", "Nov 04, Nov 08")
+- If no date found: Use empty string ""
+
+Extraction patterns:
+- Single date: "per Source (Nov 04)" → date_range: "Nov 04"
+- Date range: "per Source (Nov 04-07)" → date_range: "Nov 04-07"
+- Multiple dates: "per Source1 (Nov 04) and Source2 (Nov 08)" → date_range: "Nov 04, Nov 08"
+- Consecutive days: Can consolidate as range "Nov 04-08"
+
+DO NOT remove dates from content field - just extract and record in date_range.
+
+For bottom_line, upside_scenario, downside_scenario:
+
+- Extract ALL dates from content field
+- Consolidate into a single date range
+- Store in date_range field
+- Format: "Nov 03-08" or "Oct 28, Nov 03-08" or similar
+
+Example:
+- Content has: "per Source1 (Nov 04)... per Source2 (Nov 08)..."
+- date_range: "Nov 04-08" or "Nov 04, Nov 08"
+
+CRITICAL - DUAL WRITING REQUIREMENT:
+
+You must write dates in BOTH places:
+1. Write dates in content field (as always): "per Source (Nov 04)"
+2. Extract those same dates to date_range field: "Nov 04"
+
+This is for validation purposes. Both fields should contain the same date information.
+
+Example of correct dual writing:
+{
+  "content": "Company reported Q3 earnings beat per Bloomberg (Nov 04)",
+  "date_range": "Nov 04"
+}
 
 ═══════════════════════════════════════════════════════════════════════════════
 SECTION LENGTH LIMITS

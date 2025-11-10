@@ -161,13 +161,15 @@ Adaptive scaling:
 - 3+ themes: Thesis + bullets format as shown above
 
 Rules:
-- Integrate Phase 2 context (if present) as 1-2 sentence closing paragraph
+- DISTRIBUTE Phase 2 scenario context across bullets where relevant (do NOT append as closing paragraph)
+- Scenario context is a 50-75 word synthesis - weave portions into bullets that they support
+- If scenario context doesn't fit any bullet naturally: DISCARD it
 - Remove inline attribution from article content
 - Keep analyst names when discussing views
 - Consolidate date range at end
 - Bold key numbers and metrics
 - Same format for Downside Scenario (use "Primary Risks:" instead of "Primary Drivers:")
-- Same format for Bottom Line (extract thesis + 3-5 key developments, include context at end if present)
+- Same format for Bottom Line (extract thesis + 3-5 key developments, distribute context across bullets)
 
 ───────────────────────────────────────────────────────────────────────────────
 
@@ -179,13 +181,13 @@ Input:
 - Phase 2 tags (impact, sentiment, reason, entity)
 
 Output format for standard sections:
-**Topic Label** • Sentiment (reason tag)
+**Topic Label • Sentiment (reason tag)**
 
 [Integrated paragraph: article content + filing context woven together,
 with full inline attribution and selective bolding]
 
 Output format for competitive_industry_dynamics section only:
-**[Entity] Topic Label** • Sentiment (reason tag)
+**[Entity] Topic Label • Sentiment (reason tag)**
 
 [Integrated paragraph...]
 
@@ -196,6 +198,36 @@ Integration rules:
 - Display sentiment/reason/entity tags as provided (no interpretation)
 - Sentiment options: Bullish / Bearish / Neutral / Mixed
 - Entity options (competitive section only): [Market] / [Competitor] / [Upstream] / [Downstream]
+
+WEAVING EXAMPLES (How to integrate context):
+
+Example 1 - Parenthetical Integration:
+❌ WRONG (Appended):
+Company stated Q3 marked inflection point with IBI averaging 53 per FreightWaves. Q3 leasing volume 62M sqft per Oct 15 call. Occupancy increased 20 bps to 95.3% per Q3 10-Q.
+
+✅ RIGHT (Woven):
+Company stated Q3 marked inflection point (Q3 leasing volume 62M sqft per Oct 15 call, occupancy up 20 bps to 95.3% per Q3 10-Q) with IBI averaging 53 per FreightWaves, reflecting record quarter performance.
+
+Example 2 - Natural Mid-Sentence Integration:
+❌ WRONG (Appended):
+Acquired Amedisys for **$3.4B** per Oct 28 earnings call, adding 300K patients. Acquisition valued **$3.4B** with 300K patients across 38 states per Q3 10-Q.
+
+✅ RIGHT (Woven):
+Acquired Amedisys for **$3.4B** per Oct 28 earnings call, adding 300K patients across 38 states per Q3 10-Q.
+
+Example 3 - Supporting Detail Integration:
+❌ WRONG (Appended):
+Q3 revenue reached **$2.05B**, up 8.6% YoY per ad-hoc-news.de. Q3 rental revenue **$2,054M** per Q3 10-Q vs **$1,897M** Q3 2024.
+
+✅ RIGHT (Woven):
+Q3 revenue reached **$2.05B** (rental revenue **$2,054M** vs **$1,897M** prior year per Q3 10-Q), up 8.6% YoY per ad-hoc-news.de.
+
+Example 4 - Validation Integration:
+❌ WRONG (Appended):
+Customers increasingly advancing strategic leasing decisions per FreightWaves. Company leasing volume 62M sqft Q3 per Oct 15 call.
+
+✅ RIGHT (Woven):
+Customers increasingly advancing strategic leasing decisions as company leasing volume 62M sqft in Q3 per Oct 15 call validates growing confidence per FreightWaves.
 
 Context filtering (apply sequentially):
 
@@ -219,6 +251,33 @@ Discard context that:
 
 Ask: "Does this context answer a material question ABOUT what the bullet discusses?"
 If NO → Discard
+
+AGGRESSIVE FILTERING EXAMPLES:
+
+Example 1 - DISCARD (Tangential):
+Bullet: "Terreno executed lease for 226,000 sqft in Newark, California"
+Context: "Company operates 2,981 properties totaling 655M sqft; San Francisco Bay Area represents 23M sqft; occupancy 95.3%"
+→ DISCARD (context is about Prologis' portfolio, not about Terreno's lease or why it matters as competitive benchmark)
+
+Example 2 - KEEP (Direct Proof):
+Bullet: "Customers increasingly advancing strategic leasing decisions reflecting growing confidence"
+Context: "Company leasing volume 62M sqft Q3 (record) per Oct 15 call; e-commerce running at nearly 20% of new leasing; 52 unique e-commerce names transacted Q3"
+→ KEEP (context directly proves customer confidence with concrete data)
+
+Example 3 - DISCARD (Different Aspect):
+Bullet: "Digital logistics market projected to reach $128.1B by 2032 at 18.13% CAGR"
+Context: "Company invested in logistics technology companies through Prologis Ventures; Prologis Essentials platform offers operational solutions"
+→ DISCARD (bullet is about market growth trend, context is about Prologis' tech investments - weak connection)
+
+Example 4 - KEEP (Quantifies Impact):
+Bullet: "Q3 revenue reached $2.05B, up 8.6% YoY"
+Context: "Q3 rental revenue $2,054M per Q3 10-Q vs $1,897M Q3 2024; same-store NOI growth 3.9% net effective"
+→ KEEP (context proves claim and adds operational detail showing quality of growth)
+
+Example 5 - DISCARD (General Fact):
+Bullet: "FedEx faces operational challenges with major hubs required to reduce flight capacity"
+Context: "FedEx represents 1.7% of consolidated NER; top 10 customers account for 15.9% of consolidated NER"
+→ DISCARD (context is about Prologis' customer concentration, doesn't explain FedEx operational challenges or their impact)
 
 Conflict handling:
 If Phase 2 context contradicts Phase 1 bullet:

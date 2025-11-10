@@ -229,8 +229,9 @@ def _save_section_content(sections: Dict, section_map: Dict, section_name: str, 
 
 def _parse_bullet_section(content: str) -> List[str]:
     """Parse bullet section into list of bullet strings"""
-    # Pattern: **Topic** • Sentiment (reason) OR **[Entity] Topic** • Sentiment (reason)
-    bullet_pattern = r'^\*\*(\[.+?\] )?(.+?)\*\* • (.+)$'
+    # Pattern: **Topic • Sentiment (reason)** OR **[Entity] Topic • Sentiment (reason)**
+    # Matches entire bolded header (not just topic)
+    bullet_pattern = r'^\*\*(\[.+?\] )?(.+?) • (.+?)\*\*$'
 
     bullets = []
     current_bullet = []
@@ -240,16 +241,15 @@ def _parse_bullet_section(content: str) -> List[str]:
         if re.match(bullet_pattern, line):
             # Save previous bullet
             if current_bullet:
-                bullets.append('\n'.join(current_bullet).strip())
+                bullets.append('\n'.join(current_bullet))  # Don't strip - preserve formatting
             current_bullet = [line]
         else:
             # Continuation of current bullet
-            if line.strip():  # Skip empty lines
-                current_bullet.append(line)
+            current_bullet.append(line)  # Keep ALL lines including empty ones (preserves \n\n paragraph breaks)
 
     # Save last bullet
     if current_bullet:
-        bullets.append('\n'.join(current_bullet).strip())
+        bullets.append('\n'.join(current_bullet))  # Don't strip - preserve formatting
 
     return bullets
 

@@ -21336,6 +21336,7 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
         Convert markdown formatting to HTML.
         For Phase 3 editorial format: **bold** → <strong>bold</strong>
         For Phase 1/2: Strip markdown that AI adds despite instructions
+        Handles newlines: \n\n → <br><br>, \n → <br>
         """
         import re
         # Convert markdown bold to HTML strong (**text** → <strong>text</strong>)
@@ -21344,7 +21345,82 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
         # Strip markdown italic (not used in our outputs, remove if present)
         text = re.sub(r'\*([^*]+?)\*', r'\1', text)
         text = re.sub(r'_([^_]+?)_', r'\1', text)
+        # Convert newlines to HTML line breaks (Phase 3 editorial format)
+        text = text.replace('\n\n', '<br><br>')  # Paragraph breaks
+        text = text.replace('\n', '<br>')        # Single line breaks
         return text
+
+    def parse_markdown_list_section(content: str) -> str:
+        """
+        Convert markdown lists to HTML lists within Bottom Line/Upside/Downside sections.
+
+        Handles Phase 3 editorial format where sections contain:
+        - Thesis paragraph
+        - "Key Developments:" or "Primary Drivers:" header
+        - Markdown list items (- **Label**: Details)
+        - Optional closing paragraph
+
+        Input:
+            [Thesis]
+
+            Key Developments:
+            - **Theme 1**: Details
+            - **Theme 2**: Details
+
+            [Optional closing]
+
+        Output (HTML):
+            [Thesis]<br><br>
+            Key Developments:<br>
+            <ul>
+                <li><strong>Theme 1</strong>: Details</li>
+                <li><strong>Theme 2</strong>: Details</li>
+            </ul>
+            <br>[Optional closing]
+        """
+        import re
+        lines = content.split('\n')
+        result = []
+        in_list = False
+        list_items = []
+
+        for line in lines:
+            # Check if line is a markdown list item (starts with "- ")
+            if line.strip().startswith('- '):
+                if not in_list:
+                    in_list = True
+                    list_items = []
+                # Extract list item content (remove "- " prefix)
+                item_content = line.strip()[2:].strip()
+                # Convert markdown bold to HTML
+                item_content = re.sub(r'\*\*([^*]+?)\*\*', r'<strong>\1</strong>', item_content)
+                list_items.append(f'<li style="margin-bottom: 6px; font-size: 13px; line-height: 1.5; color: #374151;">{item_content}</li>')
+            else:
+                # Not a list item
+                if in_list:
+                    # Close previous list
+                    result.append('<ul style="margin: 8px 0; padding-left: 20px; list-style-type: disc;">')
+                    result.extend(list_items)
+                    result.append('</ul>')
+                    in_list = False
+                    list_items = []
+
+                # Add non-list line
+                if line.strip():
+                    # Convert markdown bold
+                    line_html = re.sub(r'\*\*([^*]+?)\*\*', r'<strong>\1</strong>', line.strip())
+                    result.append(line_html)
+                elif result:  # Only add break if we have content
+                    # Empty line = paragraph break
+                    result.append('<br>')
+
+        # Close any remaining list
+        if in_list and list_items:
+            result.append('<ul style="margin: 8px 0; padding-left: 20px; list-style-type: disc;">')
+            result.extend(list_items)
+            result.append('</ul>')
+
+        return ''.join(result)
 
     def bold_bullet_labels(text: str, context_only: bool = False) -> str:
         """
@@ -21419,22 +21495,30 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
             '''
         else:
             # Paragraph format (used by Bottom Line, Upside, Downside scenarios)
-            # Apply bold labels if requested, otherwise convert markdown to HTML
-            if bold_labels:
-                content_filtered = [bold_bullet_labels(line, context_only=context_only) for line in content if line.strip()]
+            # Check if content contains markdown lists (Phase 3 editorial format)
+            raw_content = '\n'.join(content) if isinstance(content, list) else content
+            has_markdown_list = '\n- ' in raw_content or raw_content.startswith('- ')
+
+            if has_markdown_list:
+                # Phase 3 editorial format: Parse markdown lists into HTML <ul>
+                text = parse_markdown_list_section(raw_content)
             else:
-                content_filtered = [convert_markdown_to_html(line) for line in content if line.strip()]
+                # Phase 1/2 format: Apply bold labels and convert markdown
+                if bold_labels:
+                    content_filtered = [bold_bullet_labels(line, context_only=context_only) for line in content if line.strip()]
+                else:
+                    content_filtered = [convert_markdown_to_html(line) for line in content if line.strip()]
 
-            # Preserve paragraph breaks from Phase 3 markdown (\n\n → <br><br>)
-            # Split each item on double newlines (paragraph breaks) first
-            paragraphs = []
-            for item in content_filtered:
-                # Each item might have multiple paragraphs (separated by \n\n)
-                item_paragraphs = item.split('\n\n')
-                paragraphs.extend([p.strip() for p in item_paragraphs if p.strip()])
+                # Preserve paragraph breaks from Phase 3 markdown (\n\n → <br><br>)
+                # Split each item on double newlines (paragraph breaks) first
+                paragraphs = []
+                for item in content_filtered:
+                    # Each item might have multiple paragraphs (separated by \n\n)
+                    item_paragraphs = item.split('\n\n')
+                    paragraphs.extend([p.strip() for p in item_paragraphs if p.strip()])
 
-            # Join paragraphs with <br><br> for visual spacing
-            text = "<br><br>".join(paragraphs)
+                # Join paragraphs with <br><br> for visual spacing
+                text = "<br><br>".join(paragraphs)
 
             return f'''
                 <div style="margin-bottom: 20px;">

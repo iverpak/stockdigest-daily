@@ -2192,6 +2192,50 @@ def get_latest_summary_date(ticker: str) -> date:
             raise ValueError(f"No executive summary found for {ticker}")
         return row['summary_date']
 
+@with_deadlock_retry()
+def update_executive_summary_with_phase3(
+    ticker: str,
+    phase3_merged_json: Dict,
+    summary_date: date
+) -> bool:
+    """
+    Update existing executive summary with Phase 3 integrated content.
+
+    Overwrites summary_text and summary_json with Phase 3 merged JSON (Phase 1+2+3).
+    Updates generation_phase to 'phase3' for tracking.
+
+    Args:
+        ticker: Stock ticker
+        phase3_merged_json: Complete merged JSON from Phase 1+2+3
+        summary_date: Date of the summary to update
+
+    Returns:
+        bool: True if update successful, False otherwise
+    """
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            UPDATE executive_summaries
+            SET summary_text = %s,
+                summary_json = %s,
+                generation_phase = 'phase3',
+                generated_at = NOW()
+            WHERE ticker = %s AND summary_date = %s
+        """, (
+            json.dumps(phase3_merged_json),  # summary_text (JSON string)
+            json.dumps(phase3_merged_json),  # summary_json (JSONB)
+            ticker,
+            summary_date
+        ))
+
+        rows_updated = cur.rowcount
+
+        if rows_updated > 0:
+            LOG.info(f"✅ Updated executive summary for {ticker} on {summary_date} with Phase 3 content")
+            return True
+        else:
+            LOG.warning(f"⚠️ No executive summary found for {ticker} on {summary_date} to update with Phase 3")
+            return False
+
 # ------------------------------------------------------------------------------
 # Feed Name Utilities
 # ------------------------------------------------------------------------------
@@ -22396,33 +22440,33 @@ def generate_email_html_core_editorial(
                 ytd_return_pct = f"{'+' if ytd >= 0 else ''}{ytd:.2f}%"
                 ytd_return_color = "#4ade80" if ytd >= 0 else "#ef4444"
 
-    # ========== DIFFERENT: Fetch editorial_markdown instead of summary_text ==========
     # Use provided summary_date or default to today
     if not summary_date:
         summary_date = datetime.now(timezone.utc).date()
 
-    editorial_markdown = ""
+    # Fetch executive summary from database (Phase 3 merged JSON)
+    executive_summary_text = ""
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
-            SELECT editorial_markdown FROM executive_summaries
+            SELECT summary_text FROM executive_summaries
             WHERE ticker = %s AND summary_date = %s
             ORDER BY generated_at DESC LIMIT 1
         """, (ticker, summary_date))
         result = cur.fetchone()
-        if result and result['editorial_markdown']:
-            editorial_markdown = result['editorial_markdown']
+        if result:
+            executive_summary_text = result['summary_text']
         else:
-            LOG.warning(f"No editorial markdown found for {ticker} on {summary_date}")
+            LOG.warning(f"No executive summary found for {ticker} on {summary_date}")
             return None
 
-    # ========== DIFFERENT: Parse markdown instead of JSON ==========
-    from modules.executive_summary_phase3 import parse_phase3_markdown_to_sections
+    # Parse Phase 3 JSON (same converter as Email #3)
+    from modules.executive_summary_phase1 import convert_phase1_to_sections_dict
     try:
-        sections = parse_phase3_markdown_to_sections(editorial_markdown)
-    except Exception as e:
-        LOG.error(f"[{ticker}] Failed to parse Phase 3 markdown in Email #4: {e}")
+        json_output = json.loads(executive_summary_text)
+        sections = convert_phase1_to_sections_dict(json_output)
+    except json.JSONDecodeError as e:
+        LOG.error(f"[{ticker}] Failed to parse Phase 3 JSON in Email #4: {e}")
         sections = {}  # Empty sections
-    # ========== END DIFFERENT ==========
 
     # Fetch flagged articles (already sorted by SQL) - SAME AS EMAIL #3
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -24728,6 +24772,68 @@ async def process_ticker_job(job: dict):
                     LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #3 saved to queue (status=ready)")
                 else:
                     LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Failed to save Email #3 to queue")
+
+                # ========== Phase 3 Generation + Email #4 (DAILY MODE) ==========
+                LOG.info(f"[{ticker}] 🎨 [JOB {job_id}] Generating Phase 3 context-integrated JSON...")
+
+                try:
+                    from modules.executive_summary_phase3 import generate_executive_summary_phase3
+
+                    # Fetch Phase 2 merged JSON from database
+                    with db() as conn, conn.cursor() as cur:
+                        cur.execute("""
+                            SELECT summary_text FROM executive_summaries
+                            WHERE ticker = %s AND summary_date = CURRENT_DATE
+                            ORDER BY generated_at DESC LIMIT 1
+                        """, (ticker,))
+                        result = cur.fetchone()
+
+                    if result and result['summary_text']:
+                        # Parse Phase 2 merged JSON
+                        phase2_merged_json = json.loads(result['summary_text'])
+
+                        # Generate Phase 3 (returns merged JSON with integrated content)
+                        phase3_merged_json = generate_executive_summary_phase3(
+                            ticker=ticker,
+                            phase2_merged_json=phase2_merged_json,
+                            anthropic_api_key=ANTHROPIC_API_KEY
+                        )
+
+                        if phase3_merged_json:
+                            # Update database with Phase 3 content
+                            success = update_executive_summary_with_phase3(
+                                ticker=ticker,
+                                phase3_merged_json=phase3_merged_json,
+                                summary_date=datetime.now().date()
+                            )
+
+                            if success:
+                                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 3 content saved to database")
+
+                                # Send Email #4 immediately to admin (daily mode)
+                                LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #4 (Editorial) to admin...")
+                                editorial_result = send_editorial_intelligence_report(
+                                    hours=int(minutes/60),
+                                    tickers=[ticker],
+                                    recipient_email=DIGEST_TO,
+                                    summary_date=datetime.now().date()
+                                )
+
+                                if editorial_result and editorial_result.get('status') == 'sent':
+                                    LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #4 sent successfully to admin")
+                                else:
+                                    LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Email #4 send failed (non-fatal)")
+                            else:
+                                LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Failed to update database with Phase 3")
+                        else:
+                            LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Phase 3 returned no merged JSON")
+                    else:
+                        LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No Phase 2 JSON found for Phase 3 processing")
+
+                except Exception as e:
+                    LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Phase 3 generation/send failed: {e}", exc_info=True)
+                    # Non-fatal - Email #3 already queued, continue to GitHub commit
+                # ========== END Phase 3 ==========
             else:
                 # TEST WORKFLOW: Send Email #3 immediately to admin
                 LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #3 immediately (test mode)...")
@@ -24742,16 +24848,13 @@ async def process_ticker_job(job: dict):
                     if isinstance(user_report_result, dict):
                         LOG.info(f"   Status: {user_report_result.get('status', 'unknown')}")
 
-                    # ========== NEW: Phase 3 Generation + Email #4 ==========
-                    LOG.info(f"[{ticker}] 🎨 [JOB {job_id}] Generating Phase 3 editorial format...")
+                    # ========== Phase 3 Generation + Email #4 (TEST MODE) ==========
+                    LOG.info(f"[{ticker}] 🎨 [JOB {job_id}] Generating Phase 3 context-integrated JSON...")
 
                     try:
-                        from modules.executive_summary_phase3 import (
-                            generate_executive_summary_phase3,
-                            save_editorial_summary
-                        )
+                        from modules.executive_summary_phase3 import generate_executive_summary_phase3
 
-                        # Fetch merged JSON from database
+                        # Fetch Phase 2 merged JSON from database
                         with db() as conn, conn.cursor() as cur:
                             cur.execute("""
                                 SELECT summary_text FROM executive_summaries
@@ -24761,29 +24864,28 @@ async def process_ticker_job(job: dict):
                             result = cur.fetchone()
 
                         if result and result['summary_text']:
-                            # Parse merged JSON
-                            merged_json = json.loads(result['summary_text'])
+                            # Parse Phase 2 merged JSON
+                            phase2_merged_json = json.loads(result['summary_text'])
 
-                            # Generate Phase 3 markdown
-                            phase3_result = generate_executive_summary_phase3(
+                            # Generate Phase 3 (returns merged JSON with integrated content)
+                            phase3_merged_json = generate_executive_summary_phase3(
                                 ticker=ticker,
-                                merged_json=merged_json,
+                                phase2_merged_json=phase2_merged_json,
                                 anthropic_api_key=ANTHROPIC_API_KEY
                             )
 
-                            if phase3_result and phase3_result.get('markdown'):
-                                # Save to database
-                                success = save_editorial_summary(
+                            if phase3_merged_json:
+                                # Update database with Phase 3 content
+                                success = update_executive_summary_with_phase3(
                                     ticker=ticker,
-                                    summary_date=datetime.now().date(),
-                                    editorial_markdown=phase3_result['markdown'],
-                                    metadata=phase3_result
+                                    phase3_merged_json=phase3_merged_json,
+                                    summary_date=datetime.now().date()
                                 )
 
                                 if success:
-                                    LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 3 editorial saved to database")
+                                    LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 3 content saved to database")
 
-                                    # Send Email #4 immediately (use today's date)
+                                    # Send Email #4 immediately to admin (test mode)
                                     LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #4 (Editorial)...")
                                     editorial_result = send_editorial_intelligence_report(
                                         hours=int(minutes/60),
@@ -24797,11 +24899,11 @@ async def process_ticker_job(job: dict):
                                     else:
                                         LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Email #4 send failed (non-fatal)")
                                 else:
-                                    LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Failed to save Phase 3 to database")
+                                    LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Failed to update database with Phase 3")
                             else:
-                                LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Phase 3 returned no markdown")
+                                LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Phase 3 returned no merged JSON")
                         else:
-                            LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No merged JSON found for Phase 3")
+                            LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No Phase 2 JSON found for Phase 3 processing")
 
                     except Exception as e:
                         LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Phase 3 generation/send failed: {e}", exc_info=True)
@@ -34630,15 +34732,12 @@ async def regenerate_email_api(request: Request):
             else:
                 LOG.warning(f"⚠️ [{ticker}] Failed to send preview email")
 
-        # Step 11: Generate Phase 3 editorial format and send Email #4
-        LOG.info(f"[{ticker}] 🎨 Generating Phase 3 editorial format...")
+        # Step 11: Generate Phase 3 context-integrated JSON and send Email #4
+        LOG.info(f"[{ticker}] 🎨 Generating Phase 3 context-integrated JSON...")
         try:
-            from modules.executive_summary_phase3 import (
-                generate_executive_summary_phase3,
-                save_editorial_summary
-            )
+            from modules.executive_summary_phase3 import generate_executive_summary_phase3
 
-            # Fetch merged JSON from database (just saved above)
+            # Fetch Phase 2 merged JSON from database (just saved above)
             with db() as conn, conn.cursor() as cur:
                 cur.execute("""
                     SELECT summary_text FROM executive_summaries
@@ -34648,26 +34747,26 @@ async def regenerate_email_api(request: Request):
                 result = cur.fetchone()
 
             if result and result['summary_text']:
-                merged_json = json.loads(result['summary_text'])
+                # Parse Phase 2 merged JSON
+                phase2_merged_json = json.loads(result['summary_text'])
 
-                # Generate Phase 3 markdown
-                phase3_result = generate_executive_summary_phase3(
+                # Generate Phase 3 (returns merged JSON with integrated content)
+                phase3_merged_json = generate_executive_summary_phase3(
                     ticker=ticker,
-                    merged_json=merged_json,
+                    phase2_merged_json=phase2_merged_json,
                     anthropic_api_key=ANTHROPIC_API_KEY
                 )
 
-                if phase3_result and phase3_result.get('markdown'):
-                    # Save to database
-                    success = save_editorial_summary(
+                if phase3_merged_json:
+                    # Update database with Phase 3 content
+                    success = update_executive_summary_with_phase3(
                         ticker=ticker,
-                        summary_date=target_date,
-                        editorial_markdown=phase3_result['markdown'],
-                        metadata=phase3_result
+                        phase3_merged_json=phase3_merged_json,
+                        summary_date=target_date
                     )
 
                     if success:
-                        LOG.info(f"✅ [{ticker}] Phase 3 editorial saved to database")
+                        LOG.info(f"✅ [{ticker}] Phase 3 content saved to database")
 
                         # Send Email #4 immediately (pass target_date for correct query)
                         LOG.info(f"[{ticker}] 📧 Sending Email #4 (Editorial)...")
@@ -34683,11 +34782,11 @@ async def regenerate_email_api(request: Request):
                         else:
                             LOG.warning(f"⚠️ [{ticker}] Email #4 send failed (non-fatal)")
                     else:
-                        LOG.error(f"❌ [{ticker}] Failed to save Phase 3 to database")
+                        LOG.error(f"❌ [{ticker}] Failed to update database with Phase 3")
                 else:
-                    LOG.warning(f"⚠️ [{ticker}] Phase 3 returned no markdown")
+                    LOG.warning(f"⚠️ [{ticker}] Phase 3 returned no merged JSON")
             else:
-                LOG.warning(f"⚠️ [{ticker}] No merged JSON found for Phase 3")
+                LOG.warning(f"⚠️ [{ticker}] No Phase 2 JSON found for Phase 3 processing")
 
         except Exception as e:
             LOG.error(f"❌ [{ticker}] Phase 3 generation/send failed: {e}", exc_info=True)

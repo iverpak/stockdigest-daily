@@ -21331,12 +21331,16 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
             "]+", flags=re.UNICODE)
         return emoji_pattern.sub('', text).strip()
 
-    def convert_markdown_to_html(text: str) -> str:
+    def convert_markdown_to_html(text: str, single_break: bool = False) -> str:
         """
         Convert markdown formatting to HTML.
         For Phase 3 editorial format: **bold** → <strong>bold</strong>
         For Phase 1/2: Strip markdown that AI adds despite instructions
-        Handles newlines: \n\n → <br><br>, \n → <br>
+        Handles newlines: \n\n → <br><br> (or <br> if single_break=True), \n → <br>
+
+        Args:
+            text: Text to convert
+            single_break: If True, convert \n\n to <br> instead of <br><br> (for bullets)
         """
         import re
         # Convert markdown bold to HTML strong (**text** → <strong>text</strong>)
@@ -21346,8 +21350,14 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
         text = re.sub(r'\*([^*]+?)\*', r'\1', text)
         text = re.sub(r'_([^_]+?)_', r'\1', text)
         # Convert newlines to HTML line breaks (Phase 3 editorial format)
-        text = text.replace('\n\n', '<br><br>')  # Paragraph breaks
-        text = text.replace('\n', '<br>')        # Single line breaks
+        if single_break:
+            # For bullets: use single <br> for all breaks (tighter spacing)
+            text = text.replace('\n\n', '<br>')
+            text = text.replace('\n', '<br>')
+        else:
+            # For paragraphs: preserve paragraph breaks
+            text = text.replace('\n\n', '<br><br>')  # Paragraph breaks
+            text = text.replace('\n', '<br>')        # Single line breaks
         return text
 
     def parse_markdown_list_section(content: str) -> str:
@@ -21371,20 +21381,21 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
 
         Output (HTML):
             [Thesis]<br><br>
-            Key Developments:<br>
+            <strong>Key Developments:</strong>
             <ul>
                 <li><strong>Theme 1</strong>: Details</li>
                 <li><strong>Theme 2</strong>: Details</li>
             </ul>
-            <br>[Optional closing]
+            [Optional closing]
         """
         import re
         lines = content.split('\n')
         result = []
         in_list = False
         list_items = []
+        prev_was_list_header = False
 
-        for line in lines:
+        for i, line in enumerate(lines):
             # Check if line is a markdown list item (starts with "- ")
             if line.strip().startswith('- '):
                 if not in_list:
@@ -21395,11 +21406,12 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                 # Convert markdown bold to HTML
                 item_content = re.sub(r'\*\*([^*]+?)\*\*', r'<strong>\1</strong>', item_content)
                 list_items.append(f'<li style="margin-bottom: 6px; font-size: 13px; line-height: 1.5; color: #374151;">{item_content}</li>')
+                prev_was_list_header = False
             else:
                 # Not a list item
                 if in_list:
                     # Close previous list
-                    result.append('<ul style="margin: 8px 0; padding-left: 20px; list-style-type: disc;">')
+                    result.append('<ul style="margin: 4px 0 8px 0; padding-left: 20px; list-style-type: disc;">')
                     result.extend(list_items)
                     result.append('</ul>')
                     in_list = False
@@ -21407,16 +21419,42 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
 
                 # Add non-list line
                 if line.strip():
+                    # Check if this is a list header (Key Developments:, Primary Drivers:, etc.)
+                    is_list_header = any(header in line for header in ['Key Developments:', 'Primary Drivers:', 'Primary Risks:'])
+
+                    # Check if this is a date reference (Month DD-DD) or (Month DD)
+                    is_date_ref = bool(re.match(r'^\([A-Z][a-z]{2,8}\s+\d{1,2}[-,]\s*\d{0,2}\)$', line.strip()))
+
                     # Convert markdown bold
                     line_html = re.sub(r'\*\*([^*]+?)\*\*', r'<strong>\1</strong>', line.strip())
-                    result.append(line_html)
-                elif result:  # Only add break if we have content
-                    # Empty line = paragraph break
-                    result.append('<br>')
+
+                    # Add spacing logic
+                    if is_list_header:
+                        # List header: add <br><br> before if we have content (paragraph break from thesis)
+                        if result:
+                            result.append('<br><br>')
+                        result.append(line_html)
+                        prev_was_list_header = True
+                    elif is_date_ref:
+                        # Date reference: keep close to previous content (no extra spacing)
+                        if result:
+                            result.append('<br>')
+                        result.append(line_html)
+                        prev_was_list_header = False
+                    else:
+                        # Regular paragraph: add paragraph break if we have content
+                        if result and not prev_was_list_header:
+                            result.append('<br><br>')
+                        result.append(line_html)
+                        prev_was_list_header = False
+                elif result and not prev_was_list_header:
+                    # Empty line after non-header content = potential paragraph break
+                    # But don't add if previous was list header (list will provide spacing)
+                    pass
 
         # Close any remaining list
         if in_list and list_items:
-            result.append('<ul style="margin: 8px 0; padding-left: 20px; list-style-type: disc;">')
+            result.append('<ul style="margin: 4px 0 8px 0; padding-left: 20px; list-style-type: disc;">')
             result.extend(list_items)
             result.append('</ul>')
 
@@ -21440,21 +21478,30 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
         import re
 
         # DEFENSIVE: Convert markdown formatting to HTML
-        # This handles cases where AI outputs: "**Rate cut cycle initiated**: Details"
-        # We convert markdown to HTML first, then apply additional HTML <strong> tags for labels
-        text = convert_markdown_to_html(text)
+        # For bullets, use single line breaks (tighter spacing between header and body)
+        # For paragraphs, use paragraph breaks
+        single_break = not context_only
+        text = convert_markdown_to_html(text, single_break=single_break)
 
         if context_only:
             # For paragraphs: ONLY bold "Context:" (Phase 2 enrichment marker)
             text = text.replace('Context:', '<strong>Context:</strong>')
         else:
             # For bullets: Bold all topic labels (text before colon)
-            # Match pattern: start of text followed by 2-130 chars, then colon
-            # Capture the topic label (everything before the colon, including the colon)
-            # 130-char limit prevents bolding entire sentences while capturing longer contextual labels
-            pattern = r'^([^:]{2,130}?:)(\s)'
-            replacement = r'<strong>\1</strong>\2'
-            text = re.sub(pattern, replacement, text)
+            # BUT: Skip if markdown has already been converted to <strong> tags (Phase 3)
+            # This prevents double bolding: **Label**: → <strong><strong>Label</strong>:</strong>
+
+            # Check if label is already bolded (Phase 3 format)
+            has_existing_bold = bool(re.match(r'^<strong>.+?</strong>:', text))
+
+            if not has_existing_bold:
+                # Phase 1/2 format: Apply label bolding
+                # Match pattern: start of text followed by 2-130 chars, then colon
+                # Capture the topic label (everything before the colon, including the colon)
+                # 130-char limit prevents bolding entire sentences while capturing longer contextual labels
+                pattern = r'^([^:]{2,130}?:)(\s)'
+                replacement = r'<strong>\1</strong>\2'
+                text = re.sub(pattern, replacement, text)
 
             # Also bold "Context:" when it appears (10-K enrichment lines in bullets)
             text = text.replace('Context:', '<strong>Context:</strong>')

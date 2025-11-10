@@ -24818,32 +24818,38 @@ async def process_ticker_job(job: dict):
                                 LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 3 content saved to database")
 
                                 # Send Email #4 immediately to all users (daily mode - A/B testing phase)
-                                LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #4 (Editorial) to {len(recipients)} recipients...")
+                                if not recipients:
+                                    LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No recipients for Email #4, skipping")
+                                else:
+                                    LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #4 (Editorial) to {len(recipients)} recipients...")
 
-                                sent_count = 0
-                                failed_count = 0
+                                    sent_count = 0
+                                    failed_count = 0
 
-                                for recipient in recipients:
-                                    try:
-                                        editorial_result = send_editorial_intelligence_report(
-                                            hours=int(minutes/60),
-                                            tickers=[ticker],
-                                            recipient_email=recipient,
-                                            summary_date=datetime.now().date(),
-                                            bcc=DIGEST_TO  # BCC admin for monitoring during A/B test
-                                        )
+                                    for recipient in recipients:
+                                        try:
+                                            # Only BCC admin if recipient is NOT admin (avoid duplicate)
+                                            bcc = DIGEST_TO if recipient != DIGEST_TO else None
 
-                                        if editorial_result and editorial_result.get('status') == 'sent':
-                                            sent_count += 1
-                                            LOG.info(f"[{ticker}] ✅ Email #4 sent to {recipient}")
-                                        else:
+                                            editorial_result = send_editorial_intelligence_report(
+                                                hours=int(minutes/60),
+                                                tickers=[ticker],
+                                                recipient_email=recipient,
+                                                summary_date=datetime.now().date(),
+                                                bcc=bcc  # BCC admin for monitoring (unless admin is recipient)
+                                            )
+
+                                            if editorial_result and editorial_result.get('status') == 'sent':
+                                                sent_count += 1
+                                                LOG.info(f"[{ticker}] ✅ Email #4 sent to {recipient}")
+                                            else:
+                                                failed_count += 1
+                                                LOG.warning(f"[{ticker}] ⚠️ Email #4 failed for {recipient}")
+                                        except Exception as e:
                                             failed_count += 1
-                                            LOG.warning(f"[{ticker}] ⚠️ Email #4 failed for {recipient}")
-                                    except Exception as e:
-                                        failed_count += 1
-                                        LOG.error(f"[{ticker}] ❌ Email #4 send error for {recipient}: {e}")
+                                            LOG.error(f"[{ticker}] ❌ Email #4 send error for {recipient}: {e}")
 
-                                LOG.info(f"[{ticker}] 📊 [JOB {job_id}] Email #4 delivery: {sent_count} sent, {failed_count} failed")
+                                    LOG.info(f"[{ticker}] 📊 [JOB {job_id}] Email #4 delivery: {sent_count} sent, {failed_count} failed")
                             else:
                                 LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Failed to update database with Phase 3")
                         else:

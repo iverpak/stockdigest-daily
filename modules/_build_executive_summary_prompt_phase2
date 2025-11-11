@@ -1259,23 +1259,45 @@ DECISION PROCESS (apply in order):
 
 STEP 0: TOPIC RELEVANCE CHECK (Gate - Evaluate First)
 
-Ask three questions about the bullet topic:
+DECISION: Would management mention THIS SPECIFIC DEVELOPMENT by name on next earnings call?
 
-1. BUSINESS RELEVANCE: Does this topic relate to how the company operates or makes money?
-   - If topic describes different business model than company operates → "none"
-   - If topic describes different products/assets than company owns → "none"
+Ask: Could you imagine the CEO saying "[this specific headline]" in prepared remarks or Q&A?
 
-2. OPERATIONAL IMPACT: Could this news affect company's operations, revenue, or costs?
-   - If purely promotional/marketing with no operational impact → "none"
-   - If routine corporate housekeeping with no strategic signal → "none"
+Evaluate using BOTH bullet content and filing context through three lenses:
 
-3. MATERIALITY: Is the scale significant enough to notice?
-   - If action/event is <1-5% of relevant company metric → likely "none"
-   - Exception: Strategic signal may matter regardless of size
+BUSINESS MODEL: Does company actually operate in this business?
+   - Check: Does company generate revenue from this activity per filings?
+   - Fail: Software SALES market for landlord (even if landlord uses software)
+   - Fail: Geographic market where company has zero presence per filings
+   - Fail: Customer activity in different geography/business model
 
-CRITICAL TEST: Would target company management discuss this in their next earnings call?
-→ If NO: Assign "none" and stop
-→ If YES: Proceed to Steps 1-6
+DIRECT IMPACT: Would this directly affect next quarter results?
+   - Check: Revenue, costs, or competitive position impact?
+   - Fail: Promotional campaigns; routine housekeeping; <0.1% scale actions
+   - Fail: Customer/supplier news in geographies where company doesn't operate
+
+MATERIALITY: Is scale >1% of relevant company metric?
+   - Check: Compare to company scale in filings
+   - Note: Strategic importance may override small scale
+
+MANAGEMENT TEST EXAMPLES:
+
+Would mention by name:
+✓ "Customer signed $38B infrastructure deal" 
+✓ "Market absorption 60M sqft in Q3"
+✓ "Major supplier filed bankruptcy"
+
+Would NOT mention:
+✗ "Customer announced promotional sale"
+✗ "Software market forecast $128B" (non-software company)
+✗ "Customer app launch in countries we don't operate"
+
+DECISION RULE:
+If earnings call answer is NO → Assign "none" and stop
+If earnings call answer is YES → Proceed to Steps 1-6
+
+Note: Three lenses are guidance. If earnings call test passes despite weak lens 
+(due to strategic context in filings), proceed to Steps 1-6.
 
 STEP 1: Is bullet ABOUT target company?
 - Financial results, guidance, operations, strategic actions, analyst/regulatory actions
@@ -1292,7 +1314,7 @@ Look for patterns like:
 Test: Does context contain %, $, or explicit quantified relationship?
 → If YES: "direct"
 
-STEP 3: Is bullet about competitor/supplier/customer per triage AND passed Step 0?
+STEP 3: Is bullet about competitor/supplier/customer per triage?
 → If YES: "indirect"
 
 STEP 4: Does context mention topic WITHOUT quantification?
@@ -1305,7 +1327,7 @@ STEP 5: Do BOTH bullet AND context show no connection?
 
 STEP 6: Insufficient information or contradictory signals?
 → If YES: "unclear" (rare)
-→ Otherwise: Default to "none"
+→ Otherwise: Default to "indirect"
 
 EXAMPLES OF STEP 0 LOGIC
 
@@ -1372,14 +1394,14 @@ Step 2: YES if quantified / Step 3: YES if identified → Result: "direct" or "i
 
 CRITICAL RULES
 
-1. ALWAYS run Step 0 first using the three questions + critical test
-2. Step 0 is about TOPIC relevance (not connection strength)
-3. Use management perspective: "Would they discuss this on earnings call?"
+1. ALWAYS run Step 0 first - earnings call test is the gate
+2. Step 0 asks: Would CEO mention THIS SPECIFIC DEVELOPMENT by name?
+3. Three lenses help evaluate: business model, direct impact, materiality
 4. Events ABOUT target company skip Step 0 → automatic "direct" (Step 1)
-5. Look for quantification in context (%, $) to determine direct vs indirect
+5. Look for quantification (%, $) to determine direct vs indirect
 6. When uncertain after Step 0 → Default to "indirect"
 7. "unclear" only when truly insufficient information
-8. Apply consistent logic across all 5,000 companies - same thought process
+8. Apply consistent logic across all companies - same thought process
 
 ═══════════════════════════════════════════════════════════════════════════════
 ENTITY TAG CLASSIFICATION (Competitive/Industry Dynamics Only)

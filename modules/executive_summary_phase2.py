@@ -817,8 +817,24 @@ def merge_phase1_phase2(phase1_json: Dict, phase2_result: Dict) -> Dict:
                 if not bullet_id or bullet_id not in enrichments:
                     continue
 
-                # Add Phase 2 enrichment fields
                 enrichment = enrichments[bullet_id]
+
+                # HARD FILTER: Never merge context for wall_street_sentiment
+                # Analyst opinions ARE the context - they already synthesize filing data
+                if section_name == "wall_street_sentiment":
+                    # Keep metadata (impact, sentiment, reason, relevance are valid)
+                    bullet["impact"] = enrichment.get("impact")
+                    bullet["sentiment"] = enrichment.get("sentiment")
+                    bullet["reason"] = enrichment.get("reason")
+                    bullet["relevance"] = enrichment.get("relevance")
+                    # Force context to empty string (strip any generated context)
+                    bullet["context"] = ""
+                    if enrichment.get("context"):
+                        LOG.warning(f"Stripped filing context from Wall Street bullet {bullet_id} "
+                                   f"(context length: {len(enrichment.get('context', ''))} chars)")
+                    continue  # Skip standard enrichment path
+
+                # Standard enrichment for all other sections
                 bullet["impact"] = enrichment.get("impact")
                 bullet["sentiment"] = enrichment.get("sentiment")
                 bullet["reason"] = enrichment.get("reason")

@@ -2146,15 +2146,33 @@ Rationale: Cost initiatives need baseline cost structure (10-K), recent margin t
 
 Bullet discusses: Rating changes, price targets, analyst commentary
 
+CRITICAL EXCEPTION: Set ALL filing_hints to EMPTY ARRAYS for wall_street_sentiment bullets.
+Analyst opinions ARE the context - they already synthesize filing data into their ratings and targets.
+Adding filing context creates redundant information that repeats what the analyst already considered.
+
 Select:
-→ 10-K: "STRATEGIC PRIORITIES & OUTLOOK", "FINANCIAL SNAPSHOT (Latest Year)"
-→ 10-Q: "GUIDANCE & OUTLOOK UPDATES", "QUARTERLY FINANCIAL PERFORMANCE (QoQ & YoY)"
-→ Transcript: "MANAGEMENT SENTIMENT & TONE", "Q&A HIGHLIGHTS"
+→ 10-K: []  (empty array)
+→ 10-Q: []  (empty array)
+→ Transcript: []  (empty array)
+→ filing_keywords: []  (empty array)
 
-Example bullet: "Wedbush raised price target to $600 citing AI transformation"
-→ These sections will have data supporting analyst thesis (growth, margins, strategy)
+Example bullet:
+{
+  "bullet_id": "bofa_upgrade",
+  "topic_label": "BofA upgrade",
+  "content": "BofA's Samir Khanal raised price target to $137 from $130...",
+  "date_range": "Nov 08",
+  "filing_hints": {
+    "10-K": [],
+    "10-Q": [],
+    "Transcript": []
+  },
+  "filing_keywords": []
+}
 
-Rationale: Analyst actions need strategic narrative (10-K outlook), recent results supporting thesis (10-Q), and management conviction on thesis themes (Transcript)
+Rationale: Wall Street sentiment reflects analyst synthesis of company fundamentals.
+The analyst opinion IS the enriched context - no additional filing data needed.
+Phase 2 will calculate impact/sentiment/reason from the analyst action itself.
 
 11. UPCOMING CATALYSTS
 

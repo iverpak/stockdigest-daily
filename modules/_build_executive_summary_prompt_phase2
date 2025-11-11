@@ -1207,7 +1207,10 @@ Non-operational events (assign LOW regardless of entity size):
 - Activities in geographies where company has zero operations
 - Market forecasts for products company doesn't sell
 
-Test: Does event affect company's operations, capacity needs, or costs?
+Test: Does event affect company's revenue-generating operations, capacity needs, or costs?
+- Revenue-generating operations = activities company sells/charges for
+- Investments, internal use, or support functions ≠ revenue-generating
+
 If NO → LOW impact (override entity materiality)
 If YES → Use calculated entity materiality (HIGH/MEDIUM/LOW)
 

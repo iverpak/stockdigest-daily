@@ -35131,13 +35131,30 @@ async def review_all_quality_api(request: Request):
             LOG.info(f"ℹ️ [{ticker}] No filings available - skipping Phase 2")
 
         # ============================================================
+        # PHASE 3: Context Relevance Verification
+        # ============================================================
+        from modules.quality_review_phase3 import review_context_relevance
+
+        phase3_result = review_context_relevance(
+            ticker=ticker,
+            executive_summary=executive_summary,
+            gemini_api_key=GEMINI_API_KEY
+        )
+
+        if phase3_result:
+            LOG.info(f"✅ [{ticker}] Phase 3 (context relevance) review complete")
+        else:
+            LOG.warning(f"⚠️ [{ticker}] Phase 3 review failed, continuing without it")
+
+        # ============================================================
         # Generate Combined Report
         # ============================================================
         from modules.quality_review import generate_combined_quality_review_email_html
 
         report_html = generate_combined_quality_review_email_html(
             phase1_result=phase1_result,
-            phase2_result=phase2_result
+            phase2_result=phase2_result,
+            phase3_result=phase3_result
         )
 
         # Determine subject line

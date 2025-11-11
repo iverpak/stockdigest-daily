@@ -1198,6 +1198,25 @@ CRITICAL OVERRIDE: Strategic language does NOT override financial thresholds.
 - Example: "Major customer contract" with 0.3% revenue → LOW impact
 - Apply % calculation first; ignore "strategic/critical/major" language if <1%
 
+EVENT TYPE OVERRIDE (check after calculating entity materiality):
+Material entity + Non-operational event = LOW impact
+
+Non-operational events (assign LOW regardless of entity size):
+- Promotional campaigns, marketing initiatives, seasonal sales
+- Routine corporate actions (unchanged dividends, scheduled meetings)
+- Activities in geographies where company has zero operations
+- Market forecasts for products company doesn't sell
+
+Test: Does event affect company's operations, capacity needs, or costs?
+If NO → LOW impact (override entity materiality)
+If YES → Use calculated entity materiality (HIGH/MEDIUM/LOW)
+
+Examples:
+- Top customer (6%) + promotional sale → LOW (marketing, not operational)
+- Top customer (6%) + capacity expansion → HIGH (operational impact)
+- Top customer (6%) + earnings growth → MEDIUM (health indicator)
+- Competitor + 0.02% scale action → LOW (immaterial entity already)
+
 MULTI-FACTOR RULE: Use HIGHEST level when multiple thresholds met
 Example: 2% revenue (medium) + top 3 customer (high) → high impact ✓
 

@@ -60,6 +60,12 @@ When status is UNSUPPORTED, identify the error type:
    - WRONG: Source attribution is incorrect or contradicts sources
      • Example: "per CFO" but articles only cite analyst reports
      • Example: "per Goldman" but Goldman never mentioned
+     • **CRITICAL: Validate against SOURCE DOMAIN tags ONLY**
+       - When checking "per Yahoo Finance", look for SOURCE DOMAIN: [Yahoo Finance]
+       - IGNORE parenthetical sources in summary text like "(investorplace.com)"
+       - Example: Article has [Yahoo Finance] domain but text mentions "(investorplace.com)"
+         → "per Yahoo Finance" is ✅ CORRECT (matches SOURCE DOMAIN)
+         → "per InvestorPlace" is 🔴 WRONG (nested citation, not actual source)
    - VAGUE: Attribution too generic to verify
      • Example: "per analyst" (which analyst? which firm?)
      • Example: "per reports" (which publication?)
@@ -67,7 +73,7 @@ When status is UNSUPPORTED, identify the error type:
    - SPLIT: Multiple claims from different sources with single attribution
      • Example: "Costs stabilized with drivers identified per Source A"
        (stabilization from Source B, drivers from Source A - only one shown)
-   - Check: Attribution must be specific and match sources
+   - Check: Attribution must match SOURCE DOMAIN tags, ignore nested parenthetical citations
 
 4. Directional Error
    - Opposite direction from what articles state
@@ -230,16 +236,17 @@ Return ONLY the JSON object, no other text.
 def review_executive_summary_quality(
     ticker: str,
     phase1_json: Dict,
-    article_summaries: List[str],
+    articles: List[Dict],
     gemini_api_key: str
 ) -> Optional[Dict]:
     """
-    Review executive summary quality against article summaries using Gemini.
+    Review executive summary quality against articles using Gemini.
 
     Args:
         ticker: Stock ticker
         phase1_json: Phase 1 executive summary JSON
-        article_summaries: List of ai_summary texts from articles
+        articles: List of article objects with domain metadata
+                 Each article: {"domain": str, "title": str, "ai_summary": str, "article_id": int}
         gemini_api_key: Gemini API key
 
     Returns:
@@ -271,13 +278,22 @@ def review_executive_summary_quality(
         summary_text += "═══════════════════════════════════════════\n\n"
         summary_text += json.dumps(phase1_json, indent=2)
 
-        # Format article summaries
+        # Format articles with explicit domain labels for attribution validation
         articles_text = "\n\n═══════════════════════════════════════════\n"
-        articles_text += f"ARTICLE SUMMARIES ({len(article_summaries)} articles):\n"
+        articles_text += f"ARTICLE SOURCES ({len(articles)} articles):\n"
         articles_text += "═══════════════════════════════════════════\n\n"
+        articles_text += "CRITICAL: Use SOURCE DOMAIN tags below for attribution validation.\n"
+        articles_text += "Ignore any parenthetical sources in summary text (e.g., \"(investorplace.com)\").\n\n"
 
-        for i, summary in enumerate(article_summaries, 1):
-            articles_text += f"Article {i}:\n{summary}\n\n"
+        for i, article in enumerate(articles, 1):
+            domain = article.get('domain', 'Unknown')
+            title = article.get('title', 'No title')
+            summary = article.get('ai_summary', '')
+
+            articles_text += f"Article {i}:\n"
+            articles_text += f"SOURCE DOMAIN: [{domain}]  ← USE THIS FOR ATTRIBUTION VALIDATION\n"
+            articles_text += f"Title: {title}\n"
+            articles_text += f"Summary: {summary}\n\n"
 
         # Combine into full prompt
         full_prompt = QUALITY_REVIEW_PROMPT + "\n" + summary_text + articles_text

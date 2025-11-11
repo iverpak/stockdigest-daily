@@ -602,6 +602,29 @@ ATTRIBUTION HIERARCHY (use strongest available):
 SOURCE NAME FORMAT:
 Always use formal names, never URLs: "per The Globe and Mail" NOT "per theglobeandmail.com"
 
+CRITICAL DOMAIN ATTRIBUTION RULE:
+
+When citing sources in your output (e.g., "per [source]" or "according to [source]"):
+- ALWAYS use the domain name from the [DOMAIN TAG] at the start of each article in the input
+- NEVER use parenthetical sources mentioned within the article summary text
+
+Your input format:
+• [Yahoo Finance] Article title: BofA raised price target to $137... (investorplace.com)
+• [Reuters] Another article: Company reported earnings...
+
+CORRECT attribution:
+"BofA raised price target to $137 per Yahoo Finance"
+(Use [Yahoo Finance] from the domain tag)
+
+WRONG attribution:
+"BofA raised price target to $137 per InvestorPlace"
+(Don't use "investorplace.com" from parentheses - this is a nested citation)
+
+WHY: The [DOMAIN TAG] represents the article you actually have access to cite.
+Parenthetical sources like "(investorplace.com)" are nested citations within aggregated
+content and should be ignored. These create false attributions that don't match your
+available sources.
+
 FORWARD-LOOKING STATEMENTS & IMPLICATIONS:
 Attribute interpretation/causation to who made it:
 ❌ "Acquisition positions company for growth" (who says?)

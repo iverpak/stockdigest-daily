@@ -34905,11 +34905,12 @@ async def review_quality_api(request: Request):
 
         LOG.info(f"[{ticker}] Found {len(article_ids)} article IDs for review")
 
-        # Fetch article summaries
+        # Fetch article objects (domain + summary) for attribution validation
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                SELECT ta.ai_summary
+                SELECT a.domain, a.title, ta.ai_summary, ta.article_id
                 FROM ticker_articles ta
+                JOIN articles a ON ta.article_id = a.id
                 WHERE ta.ticker = %s
                 AND ta.article_id = ANY(%s)
                 AND ta.ai_summary IS NOT NULL
@@ -34918,15 +34919,24 @@ async def review_quality_api(request: Request):
 
             rows = cur.fetchall()
 
-        article_summaries = [row['ai_summary'] for row in rows if row['ai_summary']]
+        # Build article objects with domain metadata for attribution validation
+        articles = [
+            {
+                "domain": row['domain'],
+                "title": row['title'],
+                "ai_summary": row['ai_summary'],
+                "article_id": row['article_id']
+            }
+            for row in rows if row['ai_summary']
+        ]
 
-        if not article_summaries:
+        if not articles:
             return {
                 "status": "error",
-                "message": "No article summaries found for verification"
+                "message": "No articles found for verification"
             }
 
-        LOG.info(f"[{ticker}] Found {len(article_summaries)} article summaries for verification")
+        LOG.info(f"[{ticker}] Found {len(articles)} articles for verification")
 
         # Perform quality review using Gemini
         from modules.quality_review import (
@@ -34937,7 +34947,7 @@ async def review_quality_api(request: Request):
         review_result = review_executive_summary_quality(
             ticker=ticker,
             phase1_json=phase1_json,
-            article_summaries=article_summaries,
+            articles=articles,
             gemini_api_key=GEMINI_API_KEY
         )
 
@@ -35043,11 +35053,12 @@ async def review_all_quality_api(request: Request):
 
         LOG.info(f"[{ticker}] Found {len(article_ids)} article IDs for review")
 
-        # Fetch article summaries for Phase 1
+        # Fetch article objects (domain + summary) for Phase 1 attribution validation
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                SELECT ta.ai_summary
+                SELECT a.domain, a.title, ta.ai_summary, ta.article_id
                 FROM ticker_articles ta
+                JOIN articles a ON ta.article_id = a.id
                 WHERE ta.ticker = %s
                 AND ta.article_id = ANY(%s)
                 AND ta.ai_summary IS NOT NULL
@@ -35056,15 +35067,24 @@ async def review_all_quality_api(request: Request):
 
             rows = cur.fetchall()
 
-        article_summaries = [row['ai_summary'] for row in rows if row['ai_summary']]
+        # Build article objects with domain metadata for attribution validation
+        articles = [
+            {
+                "domain": row['domain'],
+                "title": row['title'],
+                "ai_summary": row['ai_summary'],
+                "article_id": row['article_id']
+            }
+            for row in rows if row['ai_summary']
+        ]
 
-        if not article_summaries:
+        if not articles:
             return {
                 "status": "error",
-                "message": "No article summaries found for verification"
+                "message": "No articles found for verification"
             }
 
-        LOG.info(f"[{ticker}] Found {len(article_summaries)} article summaries for Phase 1 verification")
+        LOG.info(f"[{ticker}] Found {len(articles)} articles for Phase 1 verification")
 
         # ============================================================
         # PHASE 1: Article Verification
@@ -35074,7 +35094,7 @@ async def review_all_quality_api(request: Request):
         phase1_result = review_executive_summary_quality(
             ticker=ticker,
             phase1_json=executive_summary,
-            article_summaries=article_summaries,
+            articles=articles,
             gemini_api_key=GEMINI_API_KEY
         )
 

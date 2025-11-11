@@ -509,11 +509,35 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[Dict]]:
     def should_include_in_email3(bullet: Dict, section_name: str) -> bool:
         """
         Email #3 filtering:
-        - competitive_industry_dynamics: Remove bullets with relevance = "none"
-        - All other sections: Keep all bullets
+        - Remove bullets with relevance = "none"
+        - Remove bullets with relevance = "indirect" AND impact = "low impact"
+        - Don't filter if fields are missing (safety)
+        - Don't filter paragraphs (bottom_line, upside, downside)
+
+        Applies to ALL bullet sections: major_developments, financial_performance,
+        risk_factors, wall_street_sentiment, competitive_industry_dynamics, upcoming_catalysts
         """
-        if section_name == "competitive_industry_dynamics":
-            return bullet.get('relevance') != 'none'
+        # Don't filter paragraphs (they're not enriched with relevance/impact)
+        if section_name in ["bottom_line", "upside_scenario", "downside_scenario"]:
+            return True
+
+        # Get enrichment fields
+        relevance = bullet.get('relevance', '').lower()
+        impact = bullet.get('impact', '').lower()
+
+        # Safety: Don't filter if fields are missing
+        if not relevance or not impact:
+            return True
+
+        # Filter rule 1: relevance is "none"
+        if relevance == 'none':
+            return False
+
+        # Filter rule 2: relevance is "indirect" AND impact is "low impact"
+        if relevance == 'indirect' and impact == 'low impact':
+            return False
+
+        # Keep bullet
         return True
 
     # Helper function to format bullets (simple, no metadata)
@@ -551,14 +575,11 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[Dict]]:
 
     for json_key, sections_key in section_mapping.items():
         if json_key in json_sections:
-            # Apply filter for competitive_industry_dynamics
-            if json_key == "competitive_industry_dynamics":
-                filtered_bullets = [
-                    b for b in json_sections[json_key]
-                    if should_include_in_email3(b, json_key)
-                ]
-            else:
-                filtered_bullets = json_sections[json_key]
+            # Apply filter to ALL bullet sections
+            filtered_bullets = [
+                b for b in json_sections[json_key]
+                if should_include_in_email3(b, json_key)
+            ]
 
             sections[sections_key] = [
                 format_bullet_simple(b)

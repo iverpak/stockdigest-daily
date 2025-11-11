@@ -650,6 +650,28 @@ def convert_phase1_to_enhanced_sections(phase1_json: Dict) -> Dict[str, List[Dic
             import json
             result += f"<br>  Filing keywords: {json.dumps(keywords)}"
 
+        # Phase 2 Enrichment Metadata (QA purposes)
+        # Only show if Phase 2 fields are present (indicates bullet was enriched)
+        if any(key in bullet for key in ['impact', 'sentiment', 'reason', 'relevance']):
+            metadata_parts = []
+            # Entity (only present for competitive_industry_dynamics)
+            entity_val = bullet.get('entity', 'N/A')
+            metadata_parts.append(f"Entity: {entity_val}")
+            # Relevance
+            relevance_val = bullet.get('relevance', 'N/A')
+            metadata_parts.append(f"Relevance: {relevance_val}")
+            # Impact
+            impact_val = bullet.get('impact', 'N/A')
+            metadata_parts.append(f"Impact: {impact_val}")
+            # Sentiment
+            sentiment_val = bullet.get('sentiment', 'N/A')
+            metadata_parts.append(f"Sentiment: {sentiment_val}")
+            # Reason
+            reason_val = bullet.get('reason', 'N/A')
+            metadata_parts.append(f"Reason: {reason_val}")
+
+            result += f"<br>  Metadata: {' | '.join(metadata_parts)}"
+
         # Bullet ID
         result += f"<br>  ID: {bullet['bullet_id']}"
 

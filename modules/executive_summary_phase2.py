@@ -668,13 +668,13 @@ def validate_phase2_json(enrichments: Dict, phase1_json: Dict = None, ticker: st
         if is_competitive_industry and data.get("entity"):
             valid_entities = ["Competitor", "Market", "Upstream", "Downstream"]
             if data["entity"] not in valid_entities:
-                logger.warning(f"[{ticker}] Phase 2: {bullet_id} has invalid entity '{data['entity']}', setting to empty")
+                LOG.warning(f"[{ticker}] Phase 2: {bullet_id} has invalid entity '{data['entity']}', setting to empty")
                 data["entity"] = ""
 
         # Log what was missing for debugging
         if missing_fields:
-            logger.info(f"[{ticker}] Phase 2: {bullet_id} accepted with missing fields: {', '.join(missing_fields)}")
-            logger.debug(f"[{ticker}] Phase 2: {bullet_id} full data: {json.dumps(data, indent=2)}")
+            LOG.info(f"[{ticker}] Phase 2: {bullet_id} accepted with missing fields: {', '.join(missing_fields)}")
+            LOG.debug(f"[{ticker}] Phase 2: {bullet_id} full data: {json.dumps(data, indent=2)}")
 
         # Accept bullet with partial data (no value validation, only check if empty)
         valid_enrichments[bullet_id] = data

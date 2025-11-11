@@ -1242,96 +1242,144 @@ RELEVANCE TAG CALCULATION
 
 Relevance answers: "How directly does this connect to the target company?"
 
-CRITICAL: Articles reached Phase 2 because triage identified them as competitors, upstream suppliers, downstream customers, or fundamental driver keywords. Default assumption: Some relevance exists unless proven otherwise.
+CRITICAL: Articles reached Phase 2 because triage identified them as competitors, 
+upstream suppliers, downstream customers, or fundamental driver keywords. Default 
+assumption: Triage validated entity relationships, but verify topic relevance first.
 
 Evaluate using BOTH bullet content (article topic) AND context (filing connections).
-Calculate relevance AFTER generating context field. Use filing quantification as primary signal.
+Calculate relevance AFTER generating context field.
 
 FOUR LEVELS:
 - direct: Target company materially affected (bullet about target OR filings quantify connection)
-- indirect: Market/industry context (competitor/supplier/customer OR filings mention without quantification)
-- none: Not relevant (BOTH bullet AND context show wrong company or unrelated topic)
-- unclear: Cannot determine (rare; use when insufficient information or contradictory signals)
-
-Default to indirect when uncertain between indirect/none or direct/indirect.
-
-DIRECT (assign if ANY true):
-
-RULE 1: Bullet is ABOUT target company
-- Financial results, guidance, operations, strategic actions
-- Analyst/regulatory actions ON target company
-
-RULE 2: Context contains QUANTIFIED connection
-Look for these patterns in context:
-✓ Concentration: "X% of revenue/COGS", "Top X customer/supplier", "represents X%"
-✓ Comparison: "Competitor X units vs target Y units per filing"
-✓ Validation: "Competitor result validates target's X% metric per filing"
-✓ Exposure: "Target X% revenue from [market] per filing" (market trend → target exposure)
-✓ Connection: "Survey/policy explains target's $X guidance per filing" (trend → target metric)
-✓ Relationship: "Target acquiring [X] for $Y" or "Target $X support outstanding per filing"
-✓ Strategy: "Management highlighted/emphasized [X] as strategy/mitigation/response per filing"
-
-RULE 3: Context shows HEAD-TO-HEAD overlap
-- "Competes for target's customers/market per filing"
-- "Critical to target's product representing X% per filing"
-
-Test: Does context contain %, $, or explicit quantified relationship? YES → direct
-
-INDIRECT (assign if ANY true):
-
-DEFAULT: Bullet about known competitor/supplier/customer per triage
-- Even if context = "No relevant filing context found"
-- Triage validated relationship exists; filings just don't quantify impact
-
-RULE 1: Filings mention WITHOUT quantification
-- "Target uses [technology] per filing; filings don't quantify TAM capture"
-- "Target sources from [supplier] per filing; no dependency % disclosed"
-
-RULE 2: General market trend
-- Industry forecasts, sector analysis affecting multiple players
-- Filings acknowledge but don't isolate target-specific impact
-
-RULE 3: Relationship exists but not quantified
-- Competitor in same market, supplier to target, customer of target
-- Filings show relationship but no concentration, dependency, or competitive impact metrics
-
-Test: Filings mention topic but no %, $, or quantified impact? YES → indirect
-
-NONE (assign ONLY if BOTH bullet AND context show no connection):
-
-- Wrong entity: Context reveals different company/segment than triage assumed
-- Unrelated topic: Filings explicitly show target not in that business/market/geography
-- Triage error: Name collision, misidentified entity during scraping
-
-Critical test: Would target management care about this development? YES → At minimum indirect; NO → none
-
-UNCLEAR (use sparingly):
-
-Assign "unclear" ONLY when:
-- Insufficient information in both bullet and context to determine connection strength
-- Contradictory signals between bullet content and filing context
-
-Default to "indirect" rather than "unclear" when uncertain.
+- indirect: Market/industry context (competitor/supplier/customer with relevant topic)
+- none: Not relevant (topic mismatch, routine noise, or no connection)
+- unclear: Cannot determine (rare; use when insufficient information)
 
 DECISION PROCESS (apply in order):
 
-1. Is bullet ABOUT target company? → direct
-2. Does context contain % or $ quantifying connection to target? → direct
-3. Is bullet about known competitor/supplier/customer per triage? → indirect
-4. Does context mention topic but not quantify target impact? → indirect
-5. Do BOTH bullet AND context show no connection? → none
-6. Insufficient information or contradictory signals? → unclear
-7. When uncertain → Default to indirect
+STEP 0: TOPIC RELEVANCE CHECK (Gate - Evaluate First)
 
-CRITICAL RULES:
+Ask three questions about the bullet topic:
 
-1. Calculate relevance AFTER generating context field
-2. Look for quantification signals in context (%, $, "represents", "validates", "competes for")
-3. Events ABOUT target company = automatic direct
-4. "No filing context found" + competitor/supplier/customer bullet = indirect (not none)
-5. Assign "none" only when BOTH bullet AND context show no connection
-6. Triage already validated relationships; respect that unless proven wrong
-7. When uncertain between levels → Default to indirect
+1. BUSINESS RELEVANCE: Does this topic relate to how the company operates or makes money?
+   - If topic describes different business model than company operates → "none"
+   - If topic describes different products/assets than company owns → "none"
+
+2. OPERATIONAL IMPACT: Could this news affect company's operations, revenue, or costs?
+   - If purely promotional/marketing with no operational impact → "none"
+   - If routine corporate housekeeping with no strategic signal → "none"
+
+3. MATERIALITY: Is the scale significant enough to notice?
+   - If action/event is <1-5% of relevant company metric → likely "none"
+   - Exception: Strategic signal may matter regardless of size
+
+CRITICAL TEST: Would target company management discuss this in their next earnings call?
+→ If NO: Assign "none" and stop
+→ If YES: Proceed to Steps 1-6
+
+STEP 1: Is bullet ABOUT target company?
+- Financial results, guidance, operations, strategic actions, analyst/regulatory actions
+→ If YES: "direct"
+
+STEP 2: Does context contain QUANTIFIED connection?
+Look for patterns like:
+✓ "X% of revenue/COGS/capacity"
+✓ "Top X customer/supplier"
+✓ "Represents X%"
+✓ "Target $X exposure to [topic]"
+✓ "Management highlighted [topic] as priority per filing"
+
+Test: Does context contain %, $, or explicit quantified relationship?
+→ If YES: "direct"
+
+STEP 3: Is bullet about competitor/supplier/customer per triage AND passed Step 0?
+→ If YES: "indirect"
+
+STEP 4: Does context mention topic WITHOUT quantification?
+Test: Filings mention topic but no %, $, or quantified impact?
+→ If YES: "indirect"
+
+STEP 5: Do BOTH bullet AND context show no connection?
+- Wrong entity, triage error, filings show target not in that market
+→ If YES: "none"
+
+STEP 6: Insufficient information or contradictory signals?
+→ If YES: "unclear" (rare)
+→ Otherwise: Default to "indirect"
+
+EXAMPLES OF STEP 0 LOGIC
+
+Example 1: Different Business Model
+Bullet: "Software market forecast $128B by 2032"
+Company: Physical asset operator (landlord, manufacturer)
+Business Relevance: ❌ Software sales ≠ physical assets
+Management Test: Would landlord CEO discuss software market sizing? NO
+Result: "none"
+
+Example 2: Different Asset Class
+Bullet: "Cold storage market forecast $932B"
+Company: Operates dry warehouses per filings
+Business Relevance: ❌ Cold storage ≠ dry warehouse operations
+Management Test: Would dry warehouse CEO discuss cold storage market? NO
+Result: "none"
+
+Example 3: No Operational Impact
+Bullet: "Customer announced Black Friday promotional sale"
+Company: Warehouse landlord
+Operational Impact: ❌ Promotional sales don't affect warehouse leasing
+Management Test: Would landlord CEO discuss tenant's marketing campaigns? NO
+Result: "none"
+
+Example 4: Routine Housekeeping
+Bullet: "Competitor declared quarterly dividend (unchanged)"
+Company: Same sector REIT
+Operational Impact: ❌ Unchanged routine action, no strategic signal
+Management Test: Would CEO discuss competitor's routine dividend? NO
+Result: "none"
+
+Example 5: Immaterial Scale
+Bullet: "Competitor leased 200K sqft facility"
+Company: Operates 1,000M sqft portfolio per filings
+Materiality: ❌ 200K = 0.02% of company scale
+Management Test: Would CEO discuss competitor's 0.02% action? NO
+Result: "none"
+
+Example 6: Relevant Customer News (PASS Step 0)
+Bullet: "Customer expanding warehouse capacity $2B investment"
+Company: Industrial landlord
+Business Relevance: ✅ Capacity expansion affects leasing demand
+Operational Impact: ✅ Could drive new leases
+Management Test: Would CEO discuss major customer capacity plans? YES
+→ Proceed to Steps 1-6
+Step 2: YES (customer quantified at 6% revenue) → Result: "direct"
+
+Example 7: Relevant Market Trend (PASS Step 0)
+Bullet: "Industry absorption reached record levels in Q3"
+Company: Same industry operator
+Business Relevance: ✅ Absorption measures market demand
+Management Test: Would CEO discuss industry demand trends? YES
+→ Proceed to Steps 1-6
+Step 4: YES (filings mention without quantification) → Result: "indirect"
+
+Example 8: Relevant Risk Event (PASS Step 0)
+Bullet: "Supplier filed bankruptcy"
+Company: Active development pipeline
+Business Relevance: ✅ Supplier disruption affects operations
+Operational Impact: ✅ Could delay projects, increase costs
+Management Test: Would CEO discuss supplier bankruptcy? YES
+→ Proceed to Steps 1-6
+Step 2: YES if quantified / Step 3: YES if identified → Result: "direct" or "indirect"
+
+CRITICAL RULES
+
+1. ALWAYS run Step 0 first using the three questions + critical test
+2. Step 0 is about TOPIC relevance (not connection strength)
+3. Use management perspective: "Would they discuss this on earnings call?"
+4. Events ABOUT target company skip Step 0 → automatic "direct" (Step 1)
+5. Look for quantification in context (%, $) to determine direct vs indirect
+6. When uncertain after Step 0 → Default to "indirect"
+7. "unclear" only when truly insufficient information
+8. Apply consistent logic across all 5,000 companies - same thought process
 
 ═══════════════════════════════════════════════════════════════════════════════
 ENTITY TAG CLASSIFICATION (Competitive/Industry Dynamics Only)

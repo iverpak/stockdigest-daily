@@ -1305,7 +1305,7 @@ STEP 5: Do BOTH bullet AND context show no connection?
 
 STEP 6: Insufficient information or contradictory signals?
 → If YES: "unclear" (rare)
-→ Otherwise: Default to "indirect"
+→ Otherwise: Default to "none"
 
 EXAMPLES OF STEP 0 LOGIC
 

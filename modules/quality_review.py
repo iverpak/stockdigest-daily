@@ -666,6 +666,32 @@ def generate_combined_quality_review_email_html(
         phase2_pass = True  # No Phase 2 = auto-pass
         p2_contexts_by_key = {}
 
+    # Phase 3 stats (if available)
+    phase3_skipped = phase3_result is None
+    if not phase3_skipped:
+        p3_summary = phase3_result["summary"]
+        p3_evaluations_list = phase3_result["evaluations"]
+
+        p3_items = p3_summary["items_evaluated"]
+        p3_sentences = p3_summary["sentences_evaluated"]
+        p3_keep = p3_summary["sentences_keep"]
+        p3_remove = p3_summary["sentences_remove"]
+        p3_issues = p3_summary["items_with_issues"]
+
+        # Calculate Phase 3 percentages
+        p3_keep_pct = (p3_keep / p3_sentences * 100) if p3_sentences > 0 else 0
+        p3_remove_pct = (p3_remove / p3_sentences * 100) if p3_sentences > 0 else 0
+
+        # Create lookup for evaluations by section + bullet_id
+        phase3_evaluations_by_key = {}
+        for evaluation in p3_evaluations_list:
+            section = evaluation.get("section", "")
+            bullet_id = evaluation.get("bullet_id", "")
+            key = f"{section}|{bullet_id}" if bullet_id else section
+            phase3_evaluations_by_key[key] = evaluation
+    else:
+        phase3_evaluations_by_key = {}
+
     # Overall verdict
     overall_pass = phase1_pass and phase2_pass
     overall_verdict = "✅ PASS" if overall_pass else "❌ FAIL"
@@ -809,6 +835,45 @@ def generate_combined_quality_review_email_html(
                     <span class="badge critical">🔴 CRITICAL: {p2_critical} (Target: 0%) {'❌ EXCEEDS' if not p2_critical_pass else '✅'}</span>
                     <span class="badge serious">🟠 SERIOUS: {p2_serious} (Target: &lt;1%) {'❌ EXCEEDS' if not p2_serious_pass else '✅'}</span>
                     <span class="badge minor">🟡 MINOR: {p2_minor} (Target: &lt;5%) {'❌ EXCEEDS' if not p2_minor_pass else '✅'}</span>
+                </div>
+            </div>
+        </div>
+'''
+
+    # Phase 3 summary box
+    if phase3_skipped:
+        html += '''
+        <div class="phase-summary skipped">
+            <h3>🔗 PHASE 3: CONTEXT RELEVANCE VERIFICATION <span class="badge" style="background: #6b7280; color: white;">SKIPPED</span></h3>
+            <p style="color: #6b7280; margin: 10px 0 0 0; font-size: 14px;">No Phase 3 evaluation performed.</p>
+        </div>
+'''
+    else:
+        html += f'''
+        <div class="phase-summary">
+            <h3>🔗 PHASE 3: CONTEXT RELEVANCE VERIFICATION <span class="badge" style="background: #6f42c1; color: white;">ℹ️ INFORMATIONAL</span></h3>
+            <div class="stats">
+                <div class="stat">
+                    <div class="stat-label">Items Evaluated</div>
+                    <div class="stat-value">{p3_items}</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">Sentences Evaluated</div>
+                    <div class="stat-value">{p3_sentences}</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">✅ KEEP</div>
+                    <div class="stat-value" style="color: #10b981;">{p3_keep} ({p3_keep_pct:.1f}%)</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">🔴 REMOVE</div>
+                    <div class="stat-value" style="color: #ef4444;">{p3_remove} ({p3_remove_pct:.1f}%)</div>
+                </div>
+            </div>
+            <div class="error-summary">
+                <div class="stat-label">Items with Issues</div>
+                <div style="margin-top: 10px;">
+                    <span style="font-size: 16px; font-weight: bold; color: #6f42c1;">{p3_issues} items require context cleanup</span>
                 </div>
             </div>
         </div>
@@ -965,6 +1030,74 @@ def generate_combined_quality_review_email_html(
                     </div>
                     '''
 
+            # Phase 3: Context Relevance Verification (if available and context exists)
+            if not phase3_skipped and bullet_id:
+                # For paragraphs, use section_name as key (no bullet_id in Phase 3 key)
+                phase3_key = section_name
+                p3_eval = phase3_evaluations_by_key.get(phase3_key)
+
+                if p3_eval:
+                    html += '<div class="divider"></div>'
+                    html += '<div class="phase-label">🔗 Context Relevance Verification (Phase 3)</div>'
+
+                    sentences = p3_eval.get("sentences", [])
+                    total_sentences = len(sentences)
+                    keep_count = sum(1 for s in sentences if s.get("decision") == "KEEP")
+                    remove_count = sum(1 for s in sentences if s.get("decision") == "REMOVE")
+
+                    # Summary line
+                    if remove_count == 0:
+                        summary_text = f'✅ ALL RELEVANT ({total_sentences} sentences, 100% relevant)'
+                    else:
+                        summary_text = f'⚠️ {keep_count} KEEP, {remove_count} REMOVE ({total_sentences} sentences, {keep_count*100//total_sentences if total_sentences > 0 else 0}% relevant)'
+
+                    html += f'<div style="margin: 10px 0; font-weight: 600; color: #6f42c1;">{summary_text}</div>'
+
+                    # Show all sentences with test details
+                    for sentence in sentences:
+                        sentence_num = sentence.get("sentence_num", "")
+                        text = sentence.get("text", "")
+                        decision = sentence.get("decision", "")
+                        confidence = sentence.get("confidence", "")
+                        confidence_score = sentence.get("confidence_score", "")
+                        test1_result = sentence.get("test1_result", "")
+                        test1_reason = sentence.get("test1_reason", "")
+                        test2_result = sentence.get("test2_result", "")
+                        test2_reason = sentence.get("test2_reason", "")
+                        test3_result = sentence.get("test3_result", "")
+                        test3_reason = sentence.get("test3_reason", "")
+
+                        # Decision badge
+                        if decision == "KEEP":
+                            decision_badge = f'<span class="badge supported">✅ KEEP ({confidence} {confidence_score})</span>'
+                            item_class = "supported"
+                        else:
+                            decision_badge = f'<span class="badge unsupported">🔴 REMOVE ({confidence} {confidence_score})</span>'
+                            item_class = "unsupported"
+
+                        html += f'''
+                        <div class="review-item {item_class}" style="margin-left: 20px;">
+                            <div class="review-meta">{decision_badge}</div>
+                            <div class="review-text"><strong>Sentence {sentence_num}:</strong> {text}</div>
+                            <div style="margin-top: 8px; margin-left: 20px; font-size: 13px; color: #6b7280;">
+                                └─ Test 1 (Connection): {test1_result} - {test1_reason}<br>
+                                └─ Test 2 (Specificity): {test2_result} - {test2_reason}<br>
+                                └─ Test 3 (Connector): {test3_result} - {test3_reason}
+                            </div>
+                        </div>
+                        '''
+
+                    # Show recommended cleaned context if removals exist
+                    if remove_count > 0:
+                        cleaned_context = p3_eval.get("cleaned_context", "")
+                        if cleaned_context:
+                            html += f'''
+                            <div style="margin: 15px 0 0 20px; padding: 10px; background: #f0f0f0; border-left: 3px solid #6f42c1;">
+                                <strong>💡 Recommended Cleaned Context:</strong><br>
+                                <span style="font-style: italic;">{cleaned_context}</span>
+                            </div>
+                            '''
+
             html += '</div>'  # End bullet-group
 
         else:
@@ -1118,134 +1251,79 @@ def generate_combined_quality_review_email_html(
                             </div>
                             '''
 
+                # Phase 3: Context Relevance Verification (if available and context exists)
+                if not phase3_skipped and bullet_id:
+                    # For bullets, use section_name|bullet_id as key
+                    phase3_key = f"{section_name}|{bullet_id}"
+                    p3_eval = phase3_evaluations_by_key.get(phase3_key)
+
+                    if p3_eval:
+                        html += '<div class="divider"></div>'
+                        html += '<div class="phase-label">🔗 Context Relevance Verification (Phase 3)</div>'
+
+                        sentences = p3_eval.get("sentences", [])
+                        total_sentences = len(sentences)
+                        keep_count = sum(1 for s in sentences if s.get("decision") == "KEEP")
+                        remove_count = sum(1 for s in sentences if s.get("decision") == "REMOVE")
+
+                        # Summary line
+                        if remove_count == 0:
+                            summary_text = f'✅ ALL RELEVANT ({total_sentences} sentences, 100% relevant)'
+                        else:
+                            summary_text = f'⚠️ {keep_count} KEEP, {remove_count} REMOVE ({total_sentences} sentences, {keep_count*100//total_sentences if total_sentences > 0 else 0}% relevant)'
+
+                        html += f'<div style="margin: 10px 0; font-weight: 600; color: #6f42c1;">{summary_text}</div>'
+
+                        # Show all sentences with test details
+                        for sentence in sentences:
+                            sentence_num = sentence.get("sentence_num", "")
+                            text = sentence.get("text", "")
+                            decision = sentence.get("decision", "")
+                            confidence = sentence.get("confidence", "")
+                            confidence_score = sentence.get("confidence_score", "")
+                            test1_result = sentence.get("test1_result", "")
+                            test1_reason = sentence.get("test1_reason", "")
+                            test2_result = sentence.get("test2_result", "")
+                            test2_reason = sentence.get("test2_reason", "")
+                            test3_result = sentence.get("test3_result", "")
+                            test3_reason = sentence.get("test3_reason", "")
+
+                            # Decision badge
+                            if decision == "KEEP":
+                                decision_badge = f'<span class="badge supported">✅ KEEP ({confidence} {confidence_score})</span>'
+                                item_class = "supported"
+                            else:
+                                decision_badge = f'<span class="badge unsupported">🔴 REMOVE ({confidence} {confidence_score})</span>'
+                                item_class = "unsupported"
+
+                            html += f'''
+                            <div class="review-item {item_class}" style="margin-left: 20px;">
+                                <div class="review-meta">{decision_badge}</div>
+                                <div class="review-text"><strong>Sentence {sentence_num}:</strong> {text}</div>
+                                <div style="margin-top: 8px; margin-left: 20px; font-size: 13px; color: #6b7280;">
+                                    └─ Test 1 (Connection): {test1_result} - {test1_reason}<br>
+                                    └─ Test 2 (Specificity): {test2_result} - {test2_reason}<br>
+                                    └─ Test 3 (Connector): {test3_result} - {test3_reason}
+                                </div>
+                            </div>
+                            '''
+
+                        # Show recommended cleaned context if removals exist
+                        if remove_count > 0:
+                            cleaned_context = p3_eval.get("cleaned_context", "")
+                            if cleaned_context:
+                                html += f'''
+                                <div style="margin: 15px 0 0 20px; padding: 10px; background: #f0f0f0; border-left: 3px solid #6f42c1;">
+                                    <strong>💡 Recommended Cleaned Context:</strong><br>
+                                    <span style="font-style: italic;">{cleaned_context}</span>
+                                </div>
+                                '''
+
                 html += '</div>'  # End bullet-group
 
         html += '</div>'  # End section
 
-    # ============================================================
-    # PHASE 3: Context Relevance Verification
-    # ============================================================
-    phase3_skipped = phase3_result is None
-
-    if not phase3_skipped:
-        p3_summary = phase3_result["summary"]
-        p3_evaluations = phase3_result["evaluations"]
-
-        p3_items_evaluated = p3_summary["items_evaluated"]
-        p3_sentences_evaluated = p3_summary["sentences_evaluated"]
-        p3_sentences_keep = p3_summary["sentences_keep"]
-        p3_sentences_remove = p3_summary["sentences_remove"]
-        p3_items_with_issues = p3_summary["items_with_issues"]
-
-        # Calculate percentages
-        p3_keep_pct = (p3_sentences_keep / p3_sentences_evaluated * 100) if p3_sentences_evaluated > 0 else 0
-        p3_remove_pct = (p3_sentences_remove / p3_sentences_evaluated * 100) if p3_sentences_evaluated > 0 else 0
-
-        html += '''
-        <div class="section-divider"></div>
-        <h2>🔗 Context Relevance Verification (Phase 3)</h2>
-        '''
-
-        # Phase 3 summary card
-        html += f'''
-        <div class="summary-card" style="border-left: 4px solid #6f42c1;">
-            <h3>Summary</h3>
-            <div class="stat-row">
-                <div class="stat-label">Items Evaluated:</div>
-                <div class="stat-value">{p3_items_evaluated}</div>
-            </div>
-            <div class="stat-row">
-                <div class="stat-label">Sentences Evaluated:</div>
-                <div class="stat-value">{p3_sentences_evaluated}</div>
-            </div>
-            <div class="stat-row">
-                <div class="stat-label">✅ KEEP (HIGH/MEDIUM):</div>
-                <div class="stat-value">{p3_sentences_keep} ({p3_keep_pct:.0f}%)</div>
-            </div>
-            <div class="stat-row">
-                <div class="stat-label">🔴 REMOVE (LOW/NONE):</div>
-                <div class="stat-value">{p3_sentences_remove} ({p3_remove_pct:.0f}%)</div>
-            </div>
-            <div class="stat-row">
-                <div class="stat-label">Items with Issues:</div>
-                <div class="stat-value">{p3_items_with_issues}</div>
-            </div>
-        </div>
-        '''
-
-        # Show items with issues
-        if p3_items_with_issues > 0:
-            html += '<h3>Issues Found</h3>'
-
-            for evaluation in p3_evaluations:
-                removal_count = evaluation.get("removal_count", 0)
-                if removal_count == 0:
-                    continue  # Skip clean items
-
-                section = evaluation.get("section")
-                bullet_id = evaluation.get("bullet_id")
-                content = evaluation.get("content", "")
-                context_original = evaluation.get("context_original", "")
-                sentences = evaluation.get("sentences", [])
-                cleaned_context = evaluation.get("cleaned_context", "")
-
-                # Section header
-                item_id = f"{section}.{bullet_id}" if bullet_id else section
-                html += f'<div class="section-header">{item_id}</div>'
-                html += '<div class="bullet-group" style="border-left: 3px solid #6f42c1;">'
-
-                html += f'<div style="margin-bottom: 10px;"><strong>Content:</strong> {content}</div>'
-                html += f'<div style="margin-bottom: 10px;"><strong>Context ({len(sentences)} sentences):</strong> {len([s for s in sentences if s.get("decision") == "KEEP"])} KEEP, {removal_count} REMOVE</div>'
-
-                # Show each sentence evaluation
-                for sentence in sentences:
-                    sentence_num = sentence.get("sentence_num")
-                    text = sentence.get("text", "")
-                    test1_result = sentence.get("test1_result")
-                    test1_reason = sentence.get("test1_reason", "")
-                    test2_result = sentence.get("test2_result")
-                    test2_reason = sentence.get("test2_reason", "")
-                    test3_result = sentence.get("test3_result")
-                    test3_reason = sentence.get("test3_reason", "")
-                    confidence = sentence.get("confidence")
-                    confidence_score = sentence.get("confidence_score", "")
-                    decision = sentence.get("decision")
-
-                    # Only show REMOVE sentences (skip KEEP for brevity)
-                    if decision != "REMOVE":
-                        continue
-
-                    # Decision badge
-                    if decision == "KEEP":
-                        decision_badge = f'<span class="badge supported">✅ KEEP ({confidence} {confidence_score})</span>'
-                    else:
-                        decision_badge = f'<span class="badge unsupported">🔴 REMOVE ({confidence} {confidence_score})</span>'
-
-                    html += f'''
-                    <div class="review-item {decision.lower()}" style="margin-left: 20px;">
-                        <div class="review-meta">{decision_badge}</div>
-                        <div class="review-text"><strong>Sentence {sentence_num}:</strong> {text}</div>
-                        <div style="margin-top: 8px; margin-left: 20px; font-size: 13px; color: #6b7280;">
-                            Test 1 (Connection): {test1_result} - {test1_reason}<br>
-                            Test 2 (Specificity): {test2_result} - {test2_reason}<br>
-                            Test 3 (Connector): {test3_result} - {test3_reason}
-                        </div>
-                    </div>
-                    '''
-
-                # Show recommended cleaned context
-                html += f'''
-                <div style="margin-top: 15px; padding: 10px; background: #f0f0f0; border-left: 3px solid #6f42c1;">
-                    <strong>Recommended Cleaned Context:</strong><br>
-                    <span style="font-style: italic;">{cleaned_context}</span>
-                </div>
-                '''
-
-                html += '</div>'  # End bullet-group
-
-        else:
-            html += '<p style="color: #16a34a; font-weight: 600;">✅ All items passed - no irrelevant context detected</p>'
-
+    # Footer
     html += '''
         <div class="footer">
             <p>Generated by StockDigest Quality Review System</p>

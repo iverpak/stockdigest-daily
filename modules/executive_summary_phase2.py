@@ -908,21 +908,17 @@ def merge_phase3_with_phase2(phase2_json: Dict, phase3_json: Dict) -> Dict:
         for bullet in phase2_bullets:
             bullet_id = bullet['bullet_id']
             if bullet_id in phase3_map:
-                # Overlay integrated content (keep all Phase 2 metadata)
-                bullet['content'] = phase3_map[bullet_id]['content']
-                # Remove context field since it's now integrated into content
-                if 'context' in bullet:
-                    del bullet['context']
+                # Add integrated content as new field (preserve Phase 1 content and Phase 2 context for Quality Review)
+                bullet['content_integrated'] = phase3_map[bullet_id]['content']
+                # Don't delete content or context - needed for Quality Review verification
 
     # Scenarios (bottom_line, upside_scenario, downside_scenario)
     for section_name in ["bottom_line", "upside_scenario", "downside_scenario"]:
         if section_name in merged.get("sections", {}):
             phase3_section = phase3_json.get("sections", {}).get(section_name, {})
             if phase3_section and phase3_section.get("content"):
-                # Overlay integrated content (keep date_range from Phase 2)
-                merged["sections"][section_name]["content"] = phase3_section["content"]
-                # Remove context field since it's now integrated into content
-                if 'context' in merged["sections"][section_name]:
-                    del merged["sections"][section_name]['context']
+                # Add integrated content as new field (preserve Phase 1 content and Phase 2 context for Quality Review)
+                merged["sections"][section_name]["content_integrated"] = phase3_section["content"]
+                # Don't delete content or context - needed for Quality Review verification
 
     return merged

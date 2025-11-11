@@ -495,10 +495,14 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[Dict]]:
 
     # Bottom Line (simple list, no bullet_id)
     if "bottom_line" in json_sections:
-        content = json_sections["bottom_line"].get("content", "")
-        context = json_sections["bottom_line"].get("context", "")
-        if context:
-            content += f" Context: {context}"
+        # Use integrated content if available (Phase 3), fall back to Phase 1 + Phase 2 separately
+        if json_sections["bottom_line"].get("content_integrated"):
+            content = json_sections["bottom_line"]["content_integrated"]
+        else:
+            content = json_sections["bottom_line"].get("content", "")
+            context = json_sections["bottom_line"].get("context", "")
+            if context:
+                content += f" Context: {context}"
         sections["bottom_line"] = [content]
 
     # Helper function to filter bullets for Email #3
@@ -518,13 +522,16 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[Dict]]:
         # Use shared utility for header
         header = format_bullet_header(bullet)
 
-        # Content (Phase 1 content)
-        content = bullet['content']
-
-        # Add Phase 2 context if present (regex will bold "Context:" label)
-        context = bullet.get('context', '')
-        if context:
-            content += f" Context: {context}"
+        # Use integrated content if available (Phase 3), fall back to Phase 1 + Phase 2 separately
+        if bullet.get('content_integrated'):
+            # Phase 3 has run - use integrated content
+            content = bullet['content_integrated']
+        else:
+            # Phase 3 has not run - combine Phase 1 content with Phase 2 context
+            content = bullet['content']
+            context = bullet.get('context', '')
+            if context:
+                content += f" Context: {context}"
 
         return {
             'bullet_id': bullet['bullet_id'],
@@ -564,10 +571,14 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[Dict]]:
         ("downside_scenario", "downside_scenario")
     ]:
         if json_key in json_sections:
-            content = json_sections[json_key].get("content", "")
-            context = json_sections[json_key].get("context", "")
-            if context:
-                content += f" Context: {context}"
+            # Use integrated content if available (Phase 3), fall back to Phase 1 + Phase 2 separately
+            if json_sections[json_key].get("content_integrated"):
+                content = json_sections[json_key]["content_integrated"]
+            else:
+                content = json_sections[json_key].get("content", "")
+                context = json_sections[json_key].get("context", "")
+                if context:
+                    content += f" Context: {context}"
             sections[sections_key] = [content]
 
     # Add dates to all sections using bullet_id matching

@@ -83,17 +83,62 @@ def generate_executive_summary_phase3(
             ]
         }
 
-        start_time = time.time()
+        # Retry logic for transient errors (529, 503, 429, 500)
+        max_retries = 2
+        response = None
+        generation_time_ms = 0
 
-        # Make request with timeout
-        response = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers=headers,
-            json=data,
-            timeout=180
-        )
+        for attempt in range(max_retries + 1):
+            try:
+                api_start_time = time.time()
+                response = requests.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers=headers,
+                    json=data,
+                    timeout=180  # 3 minutes
+                )
+                generation_time_ms = int((time.time() - api_start_time) * 1000)
 
-        generation_time_ms = int((time.time() - start_time) * 1000)
+                # Success - break retry loop
+                if response.status_code == 200:
+                    break
+
+                # Transient errors - retry with exponential backoff
+                if response.status_code in [429, 500, 503, 529] and attempt < max_retries:
+                    wait_time = 2 ** attempt  # 1s, 2s, 4s
+                    error_preview = response.text[:200] if response.text else "No details"
+                    LOG.warning(f"[{ticker}] ⚠️ Phase 3 API error {response.status_code} (attempt {attempt + 1}/{max_retries + 1}): {error_preview}")
+                    LOG.warning(f"[{ticker}] 🔄 Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+
+                # Non-retryable error or max retries reached - break
+                break
+
+            except requests.exceptions.Timeout as e:
+                if attempt < max_retries:
+                    wait_time = 2 ** attempt
+                    LOG.warning(f"[{ticker}] ⏱️ Phase 3 timeout (attempt {attempt + 1}/{max_retries + 1}), retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    LOG.error(f"[{ticker}] ❌ Phase 3 timeout after {max_retries + 1} attempts")
+                    return None
+
+            except requests.exceptions.RequestException as e:
+                if attempt < max_retries:
+                    wait_time = 2 ** attempt
+                    LOG.warning(f"[{ticker}] 🔌 Phase 3 network error (attempt {attempt + 1}/{max_retries + 1}): {e}, retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    LOG.error(f"[{ticker}] ❌ Phase 3 network error after {max_retries + 1} attempts: {e}")
+                    return None
+
+        # Check if we got a response
+        if response is None:
+            LOG.error(f"[{ticker}] ❌ Phase 3: No response after {max_retries + 1} attempts")
+            return None
 
         # Parse response
         if response.status_code == 200:
@@ -123,8 +168,8 @@ def generate_executive_summary_phase3(
             return final_merged
 
         else:
-            error_text = response.text[:500]
-            LOG.error(f"[{ticker}] Phase 3 API error {response.status_code}: {error_text}")
+            error_text = response.text[:500] if response.text else "No error details"
+            LOG.error(f"[{ticker}] Phase 3 API error {response.status_code} after {max_retries + 1} attempts: {error_text}")
             return None
 
     except Exception as e:

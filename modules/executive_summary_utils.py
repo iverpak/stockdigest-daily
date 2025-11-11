@@ -4,6 +4,7 @@ Shared utilities for executive summary email generation.
 Functions:
 - format_bullet_header(): Universal bullet header formatter
 - add_dates_to_email_sections(): Add dates using bullet_id matching
+- filter_bullets_for_email3(): Apply Email #3 filter to remove low-quality bullets
 """
 
 import re
@@ -136,3 +137,83 @@ def add_dates_to_email_sections(
                 sections[section_key][0] = f"{sections[section_key][0]} ({date_range})"
 
     return sections
+
+
+def filter_bullets_for_email3(phase2_json: Dict) -> Dict:
+    """
+    Apply Email #3 filter to Phase 2 JSON: Remove low-quality bullets.
+
+    Filtering rules:
+    - Remove bullets with relevance = 'none'
+    - Remove bullets with relevance = 'indirect' AND impact = 'low impact'
+    - Scenarios (bottom_line, upside_scenario, downside_scenario) pass through unchanged
+
+    This function applies the same logic as should_include_in_email3() from
+    executive_summary_phase1.py, but operates on full JSON structure.
+
+    Args:
+        phase2_json: Phase 1+2 merged JSON with enrichment metadata
+
+    Returns:
+        New JSON dict with filtered bullets (deep copy, original unchanged)
+
+    Used by:
+    - Phase 3 generation (filter before context integration)
+    - Email #3 display (filter before showing to users)
+    - Email #4 display (filter before showing to users)
+    """
+    import copy
+
+    # Deep copy to avoid mutating original
+    filtered_json = copy.deepcopy(phase2_json)
+
+    def should_include_bullet(bullet: Dict) -> bool:
+        """
+        Returns True if bullet should be included in Email #3.
+
+        Same logic as executive_summary_phase1.py:should_include_in_email3()
+        """
+        # Get enrichment fields
+        relevance = bullet.get('relevance', '').lower()
+        impact = bullet.get('impact', '').lower()
+
+        # Safety: Don't filter if fields are missing
+        if not relevance or not impact:
+            return True
+
+        # Filter rule 1: relevance is "none"
+        if relevance == 'none':
+            return False
+
+        # Filter rule 2: relevance is "indirect" AND impact is "low impact"
+        if relevance == 'indirect' and impact == 'low impact':
+            return False
+
+        # Keep bullet
+        return True
+
+    # Filter all bullet sections
+    bullet_sections = [
+        "major_developments",
+        "financial_performance",
+        "risk_factors",
+        "wall_street_sentiment",
+        "competitive_industry_dynamics",
+        "upcoming_catalysts",
+        "key_variables"
+    ]
+
+    sections = filtered_json.get('sections', {})
+
+    for section_name in bullet_sections:
+        if section_name in sections:
+            # Filter bullets in place
+            sections[section_name] = [
+                b for b in sections[section_name]
+                if should_include_bullet(b)
+            ]
+
+    # Scenarios pass through unchanged (no filtering)
+    # bottom_line, upside_scenario, downside_scenario are dicts, not arrays
+
+    return filtered_json

@@ -24785,6 +24785,7 @@ async def process_ticker_job(job: dict):
 
                 try:
                     from modules.executive_summary_phase3 import generate_executive_summary_phase3
+                    from modules.executive_summary_utils import filter_bullets_for_email3
 
                     # Fetch Phase 2 merged JSON from database
                     with db() as conn, conn.cursor() as cur:
@@ -24799,10 +24800,33 @@ async def process_ticker_job(job: dict):
                         # Parse Phase 2 merged JSON
                         phase2_merged_json = json.loads(result['summary_text'])
 
-                        # Generate Phase 3 (returns merged JSON with integrated content)
+                        # FILTER bullets before Phase 3 (remove relevance='none' or low impact + indirect)
+                        LOG.info(f"[{ticker}] 🔍 [JOB {job_id}] Filtering bullets before Phase 3...")
+                        filtered_json_for_phase3 = filter_bullets_for_email3(phase2_merged_json)
+
+                        # Count removed bullets for logging
+                        def count_bullets(json_dict):
+                            count = 0
+                            sections = json_dict.get('sections', {})
+                            for section_name in ['major_developments', 'financial_performance', 'risk_factors',
+                                               'wall_street_sentiment', 'competitive_industry_dynamics',
+                                               'upcoming_catalysts', 'key_variables']:
+                                count += len(sections.get(section_name, []))
+                            return count
+
+                        original_count = count_bullets(phase2_merged_json)
+                        filtered_count = count_bullets(filtered_json_for_phase3)
+                        removed_count = original_count - filtered_count
+
+                        if removed_count > 0:
+                            LOG.info(f"[{ticker}] 🗑️ [JOB {job_id}] Filtered {removed_count} low-quality bullets ({filtered_count}/{original_count} remaining)")
+                        else:
+                            LOG.info(f"[{ticker}] ✅ [JOB {job_id}] No bullets filtered (all {original_count} are high quality)")
+
+                        # Generate Phase 3 with FILTERED JSON (returns merged JSON with integrated content)
                         phase3_merged_json = generate_executive_summary_phase3(
                             ticker=ticker,
-                            phase2_merged_json=phase2_merged_json,
+                            phase2_merged_json=filtered_json_for_phase3,
                             anthropic_api_key=ANTHROPIC_API_KEY
                         )
 
@@ -24880,6 +24904,7 @@ async def process_ticker_job(job: dict):
 
                     try:
                         from modules.executive_summary_phase3 import generate_executive_summary_phase3
+                        from modules.executive_summary_utils import filter_bullets_for_email3
 
                         # Fetch Phase 2 merged JSON from database
                         with db() as conn, conn.cursor() as cur:
@@ -24894,10 +24919,14 @@ async def process_ticker_job(job: dict):
                             # Parse Phase 2 merged JSON
                             phase2_merged_json = json.loads(result['summary_text'])
 
-                            # Generate Phase 3 (returns merged JSON with integrated content)
+                            # FILTER bullets before Phase 3 (remove relevance='none' or low impact + indirect)
+                            LOG.info(f"[{ticker}] 🔍 [JOB {job_id}] Filtering bullets before Phase 3...")
+                            filtered_json_for_phase3 = filter_bullets_for_email3(phase2_merged_json)
+
+                            # Generate Phase 3 with FILTERED JSON (returns merged JSON with integrated content)
                             phase3_merged_json = generate_executive_summary_phase3(
                                 ticker=ticker,
-                                phase2_merged_json=phase2_merged_json,
+                                phase2_merged_json=filtered_json_for_phase3,
                                 anthropic_api_key=ANTHROPIC_API_KEY
                             )
 
@@ -34763,6 +34792,7 @@ async def regenerate_email_api(request: Request):
         LOG.info(f"[{ticker}] 🎨 Generating Phase 3 context-integrated JSON...")
         try:
             from modules.executive_summary_phase3 import generate_executive_summary_phase3
+            from modules.executive_summary_utils import filter_bullets_for_email3
 
             # Fetch Phase 2 merged JSON from database (just saved above)
             with db() as conn, conn.cursor() as cur:
@@ -34777,10 +34807,14 @@ async def regenerate_email_api(request: Request):
                 # Parse Phase 2 merged JSON
                 phase2_merged_json = json.loads(result['summary_text'])
 
-                # Generate Phase 3 (returns merged JSON with integrated content)
+                # FILTER bullets before Phase 3 (remove relevance='none' or low impact + indirect)
+                LOG.info(f"[{ticker}] 🔍 Filtering bullets before Phase 3...")
+                filtered_json_for_phase3 = filter_bullets_for_email3(phase2_merged_json)
+
+                # Generate Phase 3 with FILTERED JSON (returns merged JSON with integrated content)
                 phase3_merged_json = generate_executive_summary_phase3(
                     ticker=ticker,
-                    phase2_merged_json=phase2_merged_json,
+                    phase2_merged_json=filtered_json_for_phase3,
                     anthropic_api_key=ANTHROPIC_API_KEY
                 )
 

@@ -876,33 +876,6 @@ Examples of what to exclude:
 UPSIDE/DOWNSIDE SCENARIOS - LOGIC & CONSISTENCY CHECKS
 ═══════════════════════════════════════════════════════════════════════════════
 
-SCENARIO-BULLET COVERAGE REQUIREMENT:
-
-GENERATION ORDER:
-1. Create all 6 bullet sections first (Major Developments, Financial/Operational Performance, Risk Factors, Wall Street Sentiment, Competitive/Industry Dynamics, Upcoming Catalysts)
-2. Write Bottom Line (synthesize from bullets)
-3. Write Upside Scenario (synthesize bullish bullets)
-4. Write Downside Scenario (synthesize bearish bullets)
-
-TWO-WAY COVERAGE RULE:
-
-FORWARD CHECK (bullets → scenarios):
-□ Do scenarios synthesize ALL material bullets?
-□ Are high-impact bullets from Major Developments reflected in Bottom Line?
-□ Are bullish bullets reflected in Upside Scenario?
-□ Are bearish bullets (especially Risk Factors) reflected in Downside Scenario?
-
-REVERSE CHECK (scenarios → bullets):
-□ Can I trace every scenario claim to a specific bullet?
-□ If scenario discusses theme without bullet → CREATE THE BULLET FIRST, then synthesize
-
-Example - Missing Coverage:
-- Upside Scenario mentions "construction pipeline decline creates pricing power"
-- But no bullet in Competitive/Industry Dynamics about construction pipeline
-- SOLUTION: Add bullet in Competitive section, THEN synthesize into Upside
-
-CRITICAL: If theme is material for scenarios, it deserves a bullet. Create it.
-
 CONTENT SUFFICIENCY CHECK - Run this before writing scenarios:
 
 Count directional signals:

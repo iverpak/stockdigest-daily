@@ -2195,8 +2195,7 @@ def get_latest_summary_date(ticker: str) -> date:
 @with_deadlock_retry()
 def update_executive_summary_with_phase3(
     ticker: str,
-    phase3_merged_json: Dict,
-    summary_date: date
+    phase3_merged_json: Dict
 ) -> bool:
     """
     Update existing executive summary with Phase 3 integrated content.
@@ -2207,7 +2206,6 @@ def update_executive_summary_with_phase3(
     Args:
         ticker: Stock ticker
         phase3_merged_json: Complete merged JSON from Phase 1+2+3
-        summary_date: Date of the summary to update
 
     Returns:
         bool: True if update successful, False otherwise
@@ -2219,21 +2217,20 @@ def update_executive_summary_with_phase3(
                 summary_json = %s,
                 generation_phase = 'phase3',
                 generated_at = NOW()
-            WHERE ticker = %s AND summary_date = %s
+            WHERE ticker = %s AND summary_date = CURRENT_DATE
         """, (
             json.dumps(phase3_merged_json),  # summary_text (JSON string)
             json.dumps(phase3_merged_json),  # summary_json (JSONB)
-            ticker,
-            summary_date
+            ticker
         ))
 
         rows_updated = cur.rowcount
 
         if rows_updated > 0:
-            LOG.info(f"✅ Updated executive summary for {ticker} on {summary_date} with Phase 3 content")
+            LOG.info(f"✅ Updated executive summary for {ticker} on CURRENT_DATE with Phase 3 content")
             return True
         else:
-            LOG.warning(f"⚠️ No executive summary found for {ticker} on {summary_date} to update with Phase 3")
+            LOG.warning(f"⚠️ No executive summary found for {ticker} on CURRENT_DATE to update with Phase 3")
             return False
 
 # ------------------------------------------------------------------------------
@@ -22344,8 +22341,7 @@ def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
 def generate_email_html_core_editorial(
     ticker: str,
     hours: int = 24,
-    recipient_email: str = None,
-    summary_date: date = None
+    recipient_email: str = None
 ) -> Dict[str, any]:
     """
     Email #4 generation - SAME AS generate_email_html_core but uses editorial_markdown.
@@ -22358,7 +22354,6 @@ def generate_email_html_core_editorial(
         recipient_email:
             - If provided: Generate real unsubscribe token (for test/immediate send)
             - If None: Use placeholder {{UNSUBSCRIBE_TOKEN}} (for production multi-recipient)
-        summary_date: Date of summary (defaults to today if not specified)
 
     Returns:
         {
@@ -22368,7 +22363,7 @@ def generate_email_html_core_editorial(
             "article_count": Number of articles analyzed
         }
     """
-    LOG.info(f"Generating Email #4 (Editorial) for {ticker} (recipient: {recipient_email or 'placeholder'}, date: {summary_date or 'today'})")
+    LOG.info(f"Generating Email #4 (Editorial) for {ticker} (recipient: {recipient_email or 'placeholder'})")
 
     # Fetch ticker config
     config = get_ticker_config(ticker)
@@ -22410,23 +22405,19 @@ def generate_email_html_core_editorial(
                 ytd_return_pct = f"{'+' if ytd >= 0 else ''}{ytd:.2f}%"
                 ytd_return_color = "#4ade80" if ytd >= 0 else "#ef4444"
 
-    # Use provided summary_date or default to today
-    if not summary_date:
-        summary_date = datetime.now(timezone.utc).date()
-
     # Fetch executive summary from database (Phase 3 merged JSON)
     executive_summary_text = ""
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
             SELECT summary_text FROM executive_summaries
-            WHERE ticker = %s AND summary_date = %s
+            WHERE ticker = %s AND summary_date = CURRENT_DATE
             ORDER BY generated_at DESC LIMIT 1
-        """, (ticker, summary_date))
+        """, (ticker,))
         result = cur.fetchone()
         if result:
             executive_summary_text = result['summary_text']
         else:
-            LOG.warning(f"No executive summary found for {ticker} on {summary_date}")
+            LOG.warning(f"No executive summary found for {ticker} on CURRENT_DATE")
             return None
 
     # Parse Phase 3 JSON (same converter as Email #3)
@@ -22443,14 +22434,14 @@ def generate_email_html_core_editorial(
     articles_by_category = {"company": [], "industry": [], "competitor": [], "value_chain": []}
 
     # Note: Email #4 uses same flagged articles as Email #3 (from Phase 1/2)
-    # We fetch from executive_summaries metadata using same summary_date
+    # We fetch from executive_summaries metadata using CURRENT_DATE
     flagged_article_ids = []
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
             SELECT article_ids FROM executive_summaries
-            WHERE ticker = %s AND summary_date = %s
+            WHERE ticker = %s AND summary_date = CURRENT_DATE
             ORDER BY generated_at DESC LIMIT 1
-        """, (ticker, summary_date))
+        """, (ticker,))
         result = cur.fetchone()
         if result and result['article_ids']:
             # Parse JSON string to Python list for SQL query
@@ -22657,7 +22648,6 @@ def send_editorial_intelligence_report(
     hours: int = 24,
     tickers: List[str] = None,
     recipient_email: str = None,
-    summary_date: date = None,
     bcc: str = None
 ) -> Dict:
     """
@@ -22667,7 +22657,6 @@ def send_editorial_intelligence_report(
         hours: Lookback window
         tickers: List with one ticker
         recipient_email: Email recipient
-        summary_date: Date of summary (defaults to today if not specified)
         bcc: Optional BCC recipient (for admin monitoring during A/B testing)
 
     Returns: {"status": "sent" | "failed", "articles_analyzed": X, ...}
@@ -22685,8 +22674,7 @@ def send_editorial_intelligence_report(
     email_data = generate_email_html_core_editorial(
         ticker=ticker,
         hours=hours,
-        recipient_email=recipient_email or DIGEST_TO,
-        summary_date=summary_date
+        recipient_email=recipient_email or DIGEST_TO
     )
 
     if not email_data:
@@ -24804,8 +24792,7 @@ async def process_ticker_job(job: dict):
                             # Update database with Phase 3 content
                             success = update_executive_summary_with_phase3(
                                 ticker=ticker,
-                                phase3_merged_json=phase3_merged_json,
-                                summary_date=datetime.now().date()
+                                phase3_merged_json=phase3_merged_json
                             )
 
                             if success:
@@ -24829,7 +24816,6 @@ async def process_ticker_job(job: dict):
                                                 hours=int(minutes/60),
                                                 tickers=[ticker],
                                                 recipient_email=recipient,
-                                                summary_date=datetime.now().date(),
                                                 bcc=bcc  # BCC admin for monitoring (unless admin is recipient)
                                             )
 
@@ -24904,8 +24890,7 @@ async def process_ticker_job(job: dict):
                                 # Update database with Phase 3 content
                                 success = update_executive_summary_with_phase3(
                                     ticker=ticker,
-                                    phase3_merged_json=phase3_merged_json,
-                                    summary_date=datetime.now().date()
+                                    phase3_merged_json=phase3_merged_json
                                 )
 
                                 if success:
@@ -34421,16 +34406,7 @@ async def regenerate_email_api(request: Request):
         return {"status": "error", "message": "Ticker required"}
 
     try:
-        # Determine target date: explicit parameter or latest from database
-        if date_str:
-            target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-            LOG.info(f"🔄 [{ticker}] Using explicit date parameter: {target_date}")
-        else:
-            # Query for most recent summary date (no time-of-day dependency)
-            target_date = get_latest_summary_date(ticker)
-            LOG.info(f"🔄 [{ticker}] Using latest summary date from database: {target_date}")
-
-        LOG.info(f"🔄 [{ticker}] Regenerating Email #3 for {target_date}")
+        LOG.info(f"🔄 [{ticker}] Regenerating Email #3 for CURRENT_DATE (UTC)")
 
         # Step 1: Fetch ticker config
         config = get_ticker_config(ticker)
@@ -34443,16 +34419,16 @@ async def regenerate_email_api(request: Request):
             cur.execute("""
                 SELECT article_ids
                 FROM executive_summaries
-                WHERE ticker = %s AND summary_date = %s
+                WHERE ticker = %s AND summary_date = CURRENT_DATE
                 ORDER BY generated_at DESC LIMIT 1
-            """, (ticker, target_date))
+            """, (ticker,))
 
             summary_row = cur.fetchone()
 
         if not summary_row or not summary_row['article_ids']:
             return {
                 "status": "error",
-                "message": f"No original article IDs found for {ticker} on {target_date}. Run full processing first."
+                "message": f"No original article IDs found for {ticker} on CURRENT_DATE. Run full processing first."
             }
 
         # Parse JSON to get list of article IDs
@@ -34638,7 +34614,7 @@ async def regenerate_email_api(request: Request):
                     completion_tokens = %s,
                     generation_time_ms = %s,
                     generated_at = NOW()
-                WHERE ticker = %s AND summary_date = %s
+                WHERE ticker = %s AND summary_date = CURRENT_DATE
             """, (
                 summary_text,
                 json.dumps(final_json) if final_json else None,
@@ -34650,8 +34626,7 @@ async def regenerate_email_api(request: Request):
                 prompt_tokens,
                 completion_tokens,
                 generation_time_ms,
-                ticker,
-                target_date
+                ticker
             ))
             conn.commit()
 
@@ -34768,9 +34743,9 @@ async def regenerate_email_api(request: Request):
             with db() as conn, conn.cursor() as cur:
                 cur.execute("""
                     SELECT summary_text FROM executive_summaries
-                    WHERE ticker = %s AND summary_date = %s
+                    WHERE ticker = %s AND summary_date = CURRENT_DATE
                     ORDER BY generated_at DESC LIMIT 1
-                """, (ticker, target_date))
+                """, (ticker,))
                 result = cur.fetchone()
 
             if result and result['summary_text']:
@@ -34792,20 +34767,18 @@ async def regenerate_email_api(request: Request):
                     # Update database with Phase 3 content
                     success = update_executive_summary_with_phase3(
                         ticker=ticker,
-                        phase3_merged_json=phase3_merged_json,
-                        summary_date=target_date
+                        phase3_merged_json=phase3_merged_json
                     )
 
                     if success:
                         LOG.info(f"✅ [{ticker}] Phase 3 content saved to database")
 
-                        # Send Email #4 immediately (pass target_date for correct query)
+                        # Send Email #4 immediately
                         LOG.info(f"[{ticker}] 📧 Sending Email #4 (Editorial)...")
                         editorial_result = send_editorial_intelligence_report(
                             hours=hours,
                             tickers=[ticker],
-                            recipient_email=admin_email,
-                            summary_date=target_date
+                            recipient_email=admin_email
                         )
 
                         if editorial_result and editorial_result.get('status') == 'sent':
@@ -34829,7 +34802,6 @@ async def regenerate_email_api(request: Request):
             "ticker": ticker,
             "article_count": email_data['article_count'],
             "preview_sent": bool(admin_email),
-            "date": str(target_date),
             "phase": generation_phase
         }
 

@@ -1347,7 +1347,7 @@ def generate_bullet_centric_review_email_html(
                         html += '''
                         </div>'''
 
-            # Phase 3: Context Relevance for paragraph
+            # Phase 3: Context Relevance for paragraph (FULL DISPLAY)
             if not phase3_skipped and bullet_id:
                 phase3_key = section_name
                 p3_eval = phase3_evaluations_by_key.get(phase3_key)
@@ -1360,6 +1360,7 @@ def generate_bullet_centric_review_email_html(
                     total_sentences_eval = len(sentences_eval)
                     keep_count = sum(1 for s in sentences_eval if s.get("decision") == "KEEP")
                     remove_count = sum(1 for s in sentences_eval if s.get("decision") == "REMOVE")
+                    cleaned_context = p3_eval.get("cleaned_context", "")
 
                     # Summary line
                     if remove_count == 0:
@@ -1369,15 +1370,10 @@ def generate_bullet_centric_review_email_html(
 
                     html += f'<div style="margin: 10px 0; font-weight: 600; color: #6f42c1;">{summary_text}</div>'
 
-                    # Show sentences with issues only (skip ones marked KEEP with HIGH confidence)
+                    # Show ALL sentences with full test results
                     for sentence_eval in sentences_eval:
                         decision = sentence_eval.get("decision", "")
                         confidence = sentence_eval.get("confidence", "")
-
-                        # Skip KEEP sentences with HIGH confidence (no issues)
-                        if decision == "KEEP" and confidence == "HIGH":
-                            continue
-
                         sentence_num = sentence_eval.get("sentence_num", "")
                         text_eval = sentence_eval.get("text", "")
                         confidence_score = sentence_eval.get("confidence_score", "")
@@ -1408,24 +1404,31 @@ def generate_bullet_centric_review_email_html(
                         </div>
                         '''
 
-            # Phase 4: Metadata & Structure for paragraph
+                    # Show recommended cleaned context
+                    if cleaned_context:
+                        if remove_count == 0:
+                            recommendation_html = '<div style="background-color: #d1fae5; border-left: 4px solid #10b981; padding: 12px; margin-top: 15px; border-radius: 4px;"><strong>📝 Recommended Context:</strong><br><div style="margin-top: 8px; font-style: italic;">✅ Original context is optimal - no changes needed</div></div>'
+                        else:
+                            recommendation_html = f'<div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 12px; margin-top: 15px; border-radius: 4px;"><strong>📝 Recommended Context (after removing {remove_count} irrelevant sentence{"s" if remove_count > 1 else ""}):</strong><br><div style="margin-top: 8px; font-style: italic;">{cleaned_context}</div></div>'
+
+                        html += recommendation_html
+
+            # Phase 4: Metadata & Structure for paragraph (ALWAYS SHOW)
             if not phase4_skipped and bullet_id:
+                html += '<div class="divider"></div>'
+                html += '<div class="phase-label">🏗️ Metadata & Structure Validation (Phase 4)</div>'
+
                 metadata_issues = p4_metadata_issues_by_id.get(bullet_id, {}).get("issues", [])
                 placement_issue = p4_placement_issues_by_id.get(bullet_id)
 
                 if metadata_issues or placement_issue:
-                    html += '<div class="divider"></div>'
-                    html += '<div class="phase-label">🏗️ Metadata & Structure Validation (Phase 4)</div>'
-
                     issue_count = len(metadata_issues) + (1 if placement_issue else 0)
                     html += f'<div style="margin: 10px 0; font-weight: 600; color: #8b5cf6;">⚠️ {issue_count} ISSUE{"S" if issue_count > 1 else ""} FOUND</div>'
 
-                    # Metadata issues
+                    # Metadata issues (handle all 3 formats)
                     for idx, meta_issue in enumerate(metadata_issues, 1):
                         field = meta_issue.get("field", "unknown")
                         current_value = meta_issue.get("current_value", "")
-                        recommended_value = meta_issue.get("recommended_value", "")
-                        reason = meta_issue.get("reason", "")
                         severity = meta_issue.get("severity", "MINOR")
 
                         severity_badge = ""
@@ -1436,13 +1439,49 @@ def generate_bullet_centric_review_email_html(
                         elif severity == "MINOR":
                             severity_badge = '<span class="badge minor">🟡 MINOR</span>'
 
+                        # Format detection: Handle all 3 output structures
+                        if "recommended_value" in meta_issue:
+                            # Format B/C: Standard format with recommended_value
+                            recommended_value = meta_issue.get("recommended_value", "")
+
+                            if "quantification" in meta_issue:
+                                # Format B: Quantified impact issue
+                                quantification = meta_issue.get("quantification", "")
+                                threshold = meta_issue.get("threshold", "")
+                                detail_html = f'''
+                                <strong>Current:</strong> {current_value}<br>
+                                <strong>Recommended:</strong> {recommended_value}<br>
+                                <strong>Quantification:</strong> {quantification}<br>
+                                <strong>Threshold:</strong> {threshold}'''
+                            else:
+                                # Format C: Standard format (sentiment, relevance, reason)
+                                reason = meta_issue.get("reason", "")
+                                text_evidence = meta_issue.get("text_evidence", "")
+                                detail_html = f'''
+                                <strong>Current:</strong> {current_value}<br>
+                                <strong>Recommended:</strong> {recommended_value}<br>
+                                <strong>Reason:</strong> {reason}'''
+                                if text_evidence:
+                                    detail_html += f'<br><strong>Evidence:</strong> {text_evidence}'
+
+                        elif "issue" in meta_issue:
+                            # Format A: No quantification found
+                            issue_desc = meta_issue.get("issue", "")
+                            recommendation = meta_issue.get("recommendation", "")
+                            detail_html = f'''
+                            <strong>Current:</strong> {current_value}<br>
+                            <strong>Issue:</strong> {issue_desc}<br>
+                            <strong>Recommendation:</strong> {recommendation}'''
+
+                        else:
+                            # Fallback: Unknown format
+                            detail_html = f'<strong>Current:</strong> {current_value}<br><strong>Issue:</strong> Unknown format'
+
                         html += f'''
                         <div class="phase4-issue">
                             <div style="font-weight: bold; margin-bottom: 5px;">Issue {idx}: Metadata - {field.title()} {severity_badge}</div>
                             <div style="font-size: 13px;">
-                                <strong>Current:</strong> {current_value}<br>
-                                <strong>Recommended:</strong> {recommended_value}<br>
-                                <strong>Reason:</strong> {reason}
+                                {detail_html}
                             </div>
                         </div>'''
 
@@ -1471,6 +1510,9 @@ def generate_bullet_centric_review_email_html(
                                 <strong>Reason:</strong> {rule_violated}
                             </div>
                         </div>'''
+                else:
+                    # No issues found - show small checkmark
+                    html += '<div style="margin: 10px 0; font-size: 14px; color: #10b981;">✅ <em>Metadata verified (sentiment, impact, reason, relevance tags correct) • Section placement correct</em></div>'
 
             html += '</div>'  # Close bullet-group
 
@@ -1632,7 +1674,7 @@ def generate_bullet_centric_review_email_html(
                             html += '''
                             </div>'''
 
-                # Phase 3: Context Relevance Verification
+                # Phase 3: Context Relevance Verification (FULL DISPLAY)
                 if not phase3_skipped and bullet_id:
                     context_key = f"{section_name}|{bullet_id}"
                     p3_eval = phase3_evaluations_by_key.get(context_key)
@@ -1645,6 +1687,7 @@ def generate_bullet_centric_review_email_html(
                         total_sentences_eval = len(sentences_eval)
                         keep_count = sum(1 for s in sentences_eval if s.get("decision") == "KEEP")
                         remove_count = sum(1 for s in sentences_eval if s.get("decision") == "REMOVE")
+                        cleaned_context = p3_eval.get("cleaned_context", "")
 
                         # Summary line
                         if remove_count == 0:
@@ -1654,15 +1697,10 @@ def generate_bullet_centric_review_email_html(
 
                         html += f'<div style="margin: 10px 0; font-weight: 600; color: #6f42c1;">{summary_text}</div>'
 
-                        # Show sentences with issues only
+                        # Show ALL sentences with full test results
                         for sentence_eval in sentences_eval:
                             decision = sentence_eval.get("decision", "")
                             confidence = sentence_eval.get("confidence", "")
-
-                            # Skip KEEP sentences with HIGH confidence
-                            if decision == "KEEP" and confidence == "HIGH":
-                                continue
-
                             sentence_num = sentence_eval.get("sentence_num", "")
                             text_eval = sentence_eval.get("text", "")
                             confidence_score = sentence_eval.get("confidence_score", "")
@@ -1693,24 +1731,31 @@ def generate_bullet_centric_review_email_html(
                             </div>
                             '''
 
-                # Phase 4: Metadata & Structure Validation (NEW)
+                        # Show recommended cleaned context
+                        if cleaned_context:
+                            if remove_count == 0:
+                                recommendation_html = '<div style="background-color: #d1fae5; border-left: 4px solid #10b981; padding: 12px; margin-top: 15px; border-radius: 4px;"><strong>📝 Recommended Context:</strong><br><div style="margin-top: 8px; font-style: italic;">✅ Original context is optimal - no changes needed</div></div>'
+                            else:
+                                recommendation_html = f'<div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 12px; margin-top: 15px; border-radius: 4px;"><strong>📝 Recommended Context (after removing {remove_count} irrelevant sentence{"s" if remove_count > 1 else ""}):</strong><br><div style="margin-top: 8px; font-style: italic;">{cleaned_context}</div></div>'
+
+                            html += recommendation_html
+
+                # Phase 4: Metadata & Structure Validation (ALWAYS SHOW)
                 if not phase4_skipped and bullet_id:
+                    html += '<div class="divider"></div>'
+                    html += '<div class="phase-label">🏗️ Metadata & Structure Validation (Phase 4)</div>'
+
                     metadata_issues = p4_metadata_issues_by_id.get(bullet_id, {}).get("issues", [])
                     placement_issue = p4_placement_issues_by_id.get(bullet_id)
 
                     if metadata_issues or placement_issue:
-                        html += '<div class="divider"></div>'
-                        html += '<div class="phase-label">🏗️ Metadata & Structure Validation (Phase 4)</div>'
-
                         issue_count = len(metadata_issues) + (1 if placement_issue else 0)
                         html += f'<div style="margin: 10px 0; font-weight: 600; color: #8b5cf6;">⚠️ {issue_count} ISSUE{"S" if issue_count > 1 else ""} FOUND</div>'
 
-                        # Metadata issues
+                        # Metadata issues (handle all 3 formats)
                         for idx, meta_issue in enumerate(metadata_issues, 1):
                             field = meta_issue.get("field", "unknown")
                             current_value = meta_issue.get("current_value", "")
-                            recommended_value = meta_issue.get("recommended_value", "")
-                            reason = meta_issue.get("reason", "")
                             severity = meta_issue.get("severity", "MINOR")
 
                             severity_badge = ""
@@ -1721,13 +1766,49 @@ def generate_bullet_centric_review_email_html(
                             elif severity == "MINOR":
                                 severity_badge = '<span class="badge minor">🟡 MINOR</span>'
 
+                            # Format detection: Handle all 3 output structures
+                            if "recommended_value" in meta_issue:
+                                # Format B/C: Standard format with recommended_value
+                                recommended_value = meta_issue.get("recommended_value", "")
+
+                                if "quantification" in meta_issue:
+                                    # Format B: Quantified impact issue
+                                    quantification = meta_issue.get("quantification", "")
+                                    threshold = meta_issue.get("threshold", "")
+                                    detail_html = f'''
+                                    <strong>Current:</strong> {current_value}<br>
+                                    <strong>Recommended:</strong> {recommended_value}<br>
+                                    <strong>Quantification:</strong> {quantification}<br>
+                                    <strong>Threshold:</strong> {threshold}'''
+                                else:
+                                    # Format C: Standard format (sentiment, relevance, reason)
+                                    reason = meta_issue.get("reason", "")
+                                    text_evidence = meta_issue.get("text_evidence", "")
+                                    detail_html = f'''
+                                    <strong>Current:</strong> {current_value}<br>
+                                    <strong>Recommended:</strong> {recommended_value}<br>
+                                    <strong>Reason:</strong> {reason}'''
+                                    if text_evidence:
+                                        detail_html += f'<br><strong>Evidence:</strong> {text_evidence}'
+
+                            elif "issue" in meta_issue:
+                                # Format A: No quantification found
+                                issue_desc = meta_issue.get("issue", "")
+                                recommendation = meta_issue.get("recommendation", "")
+                                detail_html = f'''
+                                <strong>Current:</strong> {current_value}<br>
+                                <strong>Issue:</strong> {issue_desc}<br>
+                                <strong>Recommendation:</strong> {recommendation}'''
+
+                            else:
+                                # Fallback: Unknown format
+                                detail_html = f'<strong>Current:</strong> {current_value}<br><strong>Issue:</strong> Unknown format'
+
                             html += f'''
                             <div class="phase4-issue">
                                 <div style="font-weight: bold; margin-bottom: 5px;">Issue {idx}: Metadata - {field.title()} {severity_badge}</div>
                                 <div style="font-size: 13px;">
-                                    <strong>Current:</strong> {current_value}<br>
-                                    <strong>Recommended:</strong> {recommended_value}<br>
-                                    <strong>Reason:</strong> {reason}
+                                    {detail_html}
                                 </div>
                             </div>'''
 
@@ -1756,6 +1837,9 @@ def generate_bullet_centric_review_email_html(
                                     <strong>Reason:</strong> {rule_violated}
                                 </div>
                             </div>'''
+                    else:
+                        # No issues found - show small checkmark
+                        html += '<div style="margin: 10px 0; font-size: 14px; color: #10b981;">✅ <em>Metadata verified (sentiment, impact, reason, relevance tags correct) • Section placement correct</em></div>'
 
                 html += '</div>'  # Close bullet-group
 

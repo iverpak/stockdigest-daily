@@ -313,6 +313,22 @@ If no filing data: Still output bullet with context: "No relevant filing context
 FIELD GENERATION & CRITICAL RULES
 ═══════════════════════════════════════════════════════════════════════════════
 
+CRITICAL: ALWAYS USE FRESHEST DATA
+
+Before citing ANY metric from filings, check recency:
+
+STEP 1: Does this metric exist in 10-Q? → USE 10-Q
+STEP 2: If not in 10-Q, does it exist in 10-K? → USE 10-K
+STEP 3: Only use Transcript for qualitative statements or forward guidance
+
+Example (WRONG):
+- 10-K (FY2024): "Average monthly rent $2,392"
+- 10-Q (Q3 2025): "Average monthly rent $2,445"
+→ ❌ Using $2,392 from 10-K is WRONG (stale data)
+→ ✅ MUST use $2,445 from 10-Q (fresh data)
+
+Never cite older data when fresher exists for same metric.
+
 5 FIELDS TO GENERATE FOR EACH BULLET (6 fields for competitive_industry_dynamics):
 
 1. context: 40-50 words synthesizing 1-3 most relevant filing data points
@@ -623,18 +639,28 @@ NOT ALLOWED - Causal inferences:
 ❌ "Creating sustainability concerns" (unless explicitly stated)
 
 FORBIDDEN WORDS (unless quoting management):
-❌ "suggests", "implies", "likely", "could", "may", "might"
+❌ "suggests", "implies", "likely", "could", "may", "might", "should", "would"
 ❌ "represents [assessment]", "validates", "demonstrates"
-❌ "pressures", "drives", "enables" (causal without attribution)
+❌ "pressures", "drives", "enables", "creates", "positions", "benefits" (causal without attribution)
+❌ "leads to", "results in", "causes", "contributes to" (explicit causal chains)
 
-✅ CORRECT: "Management stated X per transcript"
-❌ WRONG: "AMD partnerships represent competitive pressure"
+✅ CORRECT: "Management stated lower rates would benefit housing liquidity per Oct 30 transcript"
+❌ WRONG: "End of QT should lead to lower rates benefiting housing liquidity"
+(Transcript didn't say "QT end causes lower rates" - that's YOUR inference)
 
 ═══════════════════════════════════════════════════════════════════════════════
 RULE #8: ANTI-FABRICATION
 ═══════════════════════════════════════════════════════════════════════════════
 
 Never cite numbers that don't explicitly appear in filings with matching labels.
+
+CRITICAL: Copy numerical values EXACTLY as written in filings.
+- Match digits character-for-character (no rounding, no approximation)
+- Preserve units exactly ($2,475.0M or $2.5B, but not $2.1B if filing says $2,475.0M)
+- When converting units (M to B), verify calculation: $2,475M = $2.475B (not $2.1B)
+
+✅ Filing says "$2,475.0 million" → Write "$2.5B" or "$2,475.0M"
+❌ Filing says "$2,475.0 million" → Write "$2.1B" (WRONG NUMBER)
 
 If you find "$478M" labeled "Asset retirement obligations"
 → DO NOT cite as "$478M capacity revenues"

@@ -876,6 +876,33 @@ Examples of what to exclude:
 UPSIDE/DOWNSIDE SCENARIOS - LOGIC & CONSISTENCY CHECKS
 ═══════════════════════════════════════════════════════════════════════════════
 
+SCENARIO-BULLET COVERAGE REQUIREMENT:
+
+GENERATION ORDER:
+1. Create all 6 bullet sections first (Major Developments, Financial/Operational Performance, Risk Factors, Wall Street Sentiment, Competitive/Industry Dynamics, Upcoming Catalysts)
+2. Write Bottom Line (synthesize from bullets)
+3. Write Upside Scenario (synthesize bullish bullets)
+4. Write Downside Scenario (synthesize bearish bullets)
+
+TWO-WAY COVERAGE RULE:
+
+FORWARD CHECK (bullets → scenarios):
+□ Do scenarios synthesize ALL material bullets?
+□ Are high-impact bullets from Major Developments reflected in Bottom Line?
+□ Are bullish bullets reflected in Upside Scenario?
+□ Are bearish bullets (especially Risk Factors) reflected in Downside Scenario?
+
+REVERSE CHECK (scenarios → bullets):
+□ Can I trace every scenario claim to a specific bullet?
+□ If scenario discusses theme without bullet → CREATE THE BULLET FIRST, then synthesize
+
+Example - Missing Coverage:
+- Upside Scenario mentions "construction pipeline decline creates pricing power"
+- But no bullet in Competitive/Industry Dynamics about construction pipeline
+- SOLUTION: Add bullet in Competitive section, THEN synthesize into Upside
+
+CRITICAL: If theme is material for scenarios, it deserves a bullet. Create it.
+
 CONTENT SUFFICIENCY CHECK - Run this before writing scenarios:
 
 Count directional signals:
@@ -1057,6 +1084,8 @@ Forward themes ≥ 5 → Output: 3-5 highest-priority variables
 CRITICAL: Variables must be triggered by articles. If articles didn't discuss topic, don't create variable for it. DO NOT infer variables from competitor/industry data lacking explicit target company connection.
 
 Extract 3-5 metrics/events that articles suggest matter for future performance
+
+Balance company metrics (operations, financials, pipeline) with industry indicators (market dynamics, external factors).
 
 Format as bullet objects (NO filing_hints for this section):
 {
@@ -1469,6 +1498,18 @@ DECISION FRAMEWORK:
    → Upcoming Catalysts
 
 Apply tests in this order. First match wins.
+
+REDUNDANCY PREVENTION:
+
+If single article provides facts satisfying MULTIPLE section tests:
+→ Place in section that captures PRIMARY substance
+→ One bullet only - choose section where fact provides most value
+
+Test: "Do both bullets add NEW information, or just reframe same fact?"
+- Same underlying fact with different framing → One section only
+- Different dimensions of same event → Keep separate
+
+This applies universally: earnings data, partnerships, capacity changes, any theme.
 
 CRITICAL OVERRIDE - ANALYST ACTIONS (CHECK THIS FIRST):
 

@@ -7508,7 +7508,6 @@ Examples:
 - Scale length to article materiality: earnings releases merit more detail than routine announcements
 - Include specific numbers, dates, names, locations in every relevant sentence
 - Include direct quotes from executives, company statements, or analysts (with attribution)
-- Cite source: (domain name) - use once at end of first paragraph or when introducing quoted material
 - Present facts in logical flow: lead with most material information (earnings, guidance, major strategic actions), then supporting details, then forward-looking elements
 
 **Example Flow Patterns:**
@@ -7520,7 +7519,6 @@ Examples:
 **Critical Rules:**
 ✅ ONLY extract facts explicitly stated about the company in the article
 ✅ Every quantitative claim must include: number, units, time period, comparison basis (YoY/QoQ/vs. guidance/vs. consensus)
-✅ Always cite source domain in parentheses at appropriate point
 ✅ Include executive or analyst quotes verbatim with attribution ("CEO Name stated", "Analyst Name from Firm wrote")
 ✅ Note beat/miss context for financial metrics when article provides it
 ✅ Include specific percentage changes, not just directional language
@@ -7841,12 +7839,7 @@ Only categorize as "challenge" if article frames it that way.
 - Write 2-6 paragraphs in natural prose (no headers, no bullets)
 - Include specific numbers, dates, names, locations
 - Include direct quotes from executives or analysts (with attribution)
-- Cite source: (domain name)
 - Present facts in logical flow (financial results, then strategic actions, then outlook)
-
-**Final Sentence - Source Citation Only:**
-
-End with source citation in parentheses: (domain.com)
 
 DO NOT add competitive framing, market context, or relationship statements unless the article explicitly provided detailed competitive analysis comparing the two companies.
 
@@ -7860,7 +7853,6 @@ This summary will be labeled as [COMPETITOR] content in the executive summary sy
 **Critical Rules:**
 ✅ ONLY extract facts explicitly stated about competitor
 ✅ Every quantitative claim must include: number, units, time period, source
-✅ Always cite source domain in parentheses
 ✅ Include executive quotes verbatim with attribution
 ✅ Present competitor facts objectively without editorializing
 
@@ -8788,12 +8780,7 @@ Only categorize as "challenge" if article explicitly frames it that way.
 - Lead with most material supply/cost signal first
 - Include specific numbers, dates, names, locations, percentages
 - Include direct quotes from executives or analysts (with attribution: "CEO John Smith stated...")
-- Cite source: (domain name)
 - Present facts in logical flow (financial results, then capacity/cost actions, then outlook)
-
-**Final Sentence - Source Citation Only:**
-
-End with source citation in parentheses: (domain.com)
 
 DO NOT add supply chain framing, cost implications, or relationship statements unless the article explicitly provided detailed analysis connecting supplier to target company.
 
@@ -8802,7 +8789,6 @@ This summary will be labeled as [UPSTREAM SUPPLIER] content in the executive sum
 **Critical Rules:**
 ✅ ONLY extract facts explicitly stated about supplier
 ✅ Every quantitative claim must include: number, units, time period, source
-✅ Always cite source domain in parentheses
 ✅ Include executive quotes verbatim with attribution (name and title)
 ✅ Present supplier facts objectively without editorializing
 
@@ -9150,12 +9136,7 @@ Only categorize as "challenge" if article explicitly frames it that way.
 - Lead with most material demand/revenue signal first
 - Include specific numbers, dates, names, locations, percentages
 - Include direct quotes from executives or analysts (with attribution: "CEO Jane Doe stated...")
-- Cite source: (domain name)
 - Present facts in logical flow (financial results, then demand/expansion actions, then outlook)
-
-**Final Sentence - Source Citation Only:**
-
-End with source citation in parentheses: (domain.com)
 
 DO NOT add demand implications, revenue impact statements, or relationship statements unless the article explicitly provided detailed analysis connecting customer to target company.
 
@@ -9164,7 +9145,6 @@ This summary will be labeled as [DOWNSTREAM CUSTOMER] content in the executive s
 **Critical Rules:**
 ✅ ONLY extract facts explicitly stated about customer
 ✅ Every quantitative claim must include: number, units, time period, source
-✅ Always cite source domain in parentheses
 ✅ Include executive quotes verbatim with attribution (name and title)
 ✅ Present customer facts objectively without editorializing
 
@@ -9550,13 +9530,13 @@ Example: Article discusses "China steel demand down 12%"
 
 **Final Paragraph - Driver Facts Summary Only:**
 
-End with brief factual summary of the driver data extracted, then cite source in parentheses.
+End with brief factual summary of the driver data extracted.
 
-Format: "Article reported [commodity/metric] at [price/level] ([change]) for [time period]." (domain.com)
+Format: "Article reported [commodity/metric] at [price/level] ([change]) for [time period]."
 
 Examples:
-✅ "Article reported natural gas at $2.90/MMBtu, down 15% month-over-month due to above-average storage levels." (naturalgasintel.com)
-✅ "IEA forecast global oil demand at 103M bpd for 2025, up from 101M bpd in 2024, citing transportation sector recovery." (iea.org)
+✅ "Article reported natural gas at $2.90/MMBtu, down 15% month-over-month due to above-average storage levels."
+✅ "IEA forecast global oil demand at 103M bpd for 2025, up from 101M bpd in 2024, citing transportation sector recovery."
 ✅ "Article reported copper prices at $4.25/lb, near five-year highs on supply constraints and EV demand growth." (bloomberg.com)
 ✅ "OPEC announced production cuts of 1.2M bpd effective April 2025 to stabilize markets." (reuters.com)
 
@@ -9573,7 +9553,6 @@ This summary will be labeled as [INDUSTRY - keyword] content in the executive su
 **Critical Rules:**
 ✅ Extract ONLY explicitly stated facts with supporting data
 ✅ Every number requires: value, units, time period, comparison (YoY/QoQ/MoM/vs prior)
-✅ Always cite source domain in parentheses at end
 ✅ Focus on QUANTIFIABLE driver data
 ✅ Include qualitative developments ONLY if: policy changes with explicit rules/dates, supply disruptions with stated impacts, official forecasts from credible institutions
 ✅ State geographic context clearly when relevant
@@ -9944,7 +9923,6 @@ Examples:
 - Scale length to article materiality: earnings releases merit more detail than routine announcements
 - Include specific numbers, dates, names, locations in every relevant sentence
 - Include direct quotes from executives, company statements, or analysts (with attribution)
-- Cite source: (domain name) - use once at end of first paragraph or when introducing quoted material
 - Present facts in logical flow: lead with most material information (earnings, guidance, major strategic actions), then supporting details, then forward-looking elements
 
 **Example Flow Patterns:**
@@ -9956,7 +9934,6 @@ Examples:
 **Critical Rules:**
 ✅ ONLY extract facts explicitly stated about {company_name} in the article
 ✅ Every quantitative claim must include: number, units, time period, comparison basis (YoY/QoQ/vs. guidance/vs. consensus)
-✅ Always cite source domain in parentheses at appropriate point
 ✅ Include executive or analyst quotes verbatim with attribution ("CEO Name stated", "Analyst Name from Firm wrote")
 ✅ Note beat/miss context for financial metrics when article provides it
 ✅ Include specific percentage changes, not just directional language
@@ -10210,12 +10187,7 @@ Only categorize as "challenge" if article frames it that way.
 - Write 2-6 paragraphs in natural prose (no headers, no bullets)
 - Include specific numbers, dates, names, locations
 - Include direct quotes from executives or analysts (with attribution)
-- Cite source: (domain name)
 - Present facts in logical flow (financial results, then strategic actions, then outlook)
-
-**Final Sentence - Source Citation Only:**
-
-End with source citation in parentheses: (domain.com)
 
 DO NOT add competitive framing, market context, or relationship statements unless the article explicitly provided detailed competitive analysis comparing the two companies.
 
@@ -10229,7 +10201,6 @@ This summary will be labeled as [COMPETITOR] content in the executive summary sy
 **Critical Rules:**
 ✅ ONLY extract facts explicitly stated about competitor
 ✅ Every quantitative claim must include: number, units, time period, source
-✅ Always cite source domain in parentheses
 ✅ Include executive quotes verbatim with attribution
 ✅ Present competitor facts objectively without editorializing
 
@@ -10496,13 +10467,13 @@ If article focuses on country/region NOT in Geographic Markets above AND not a g
 
 **Final Paragraph - Driver Facts Summary Only:**
 
-End with brief factual summary of the driver data extracted, then cite source in parentheses.
+End with brief factual summary of the driver data extracted.
 
-Format: "Article reported [commodity/metric] at [price/level] ([change]) for [time period]." (domain.com)
+Format: "Article reported [commodity/metric] at [price/level] ([change]) for [time period]."
 
 Examples:
-✅ "Article reported natural gas at $2.90/MMBtu, down 15% month-over-month due to above-average storage levels." (naturalgasintel.com)
-✅ "IEA forecast global oil demand at 103M bpd for 2025, up from 101M bpd in 2024, citing transportation sector recovery." (iea.org)
+✅ "Article reported natural gas at $2.90/MMBtu, down 15% month-over-month due to above-average storage levels."
+✅ "IEA forecast global oil demand at 103M bpd for 2025, up from 101M bpd in 2024, citing transportation sector recovery."
 ✅ "Article reported copper prices at $4.25/lb, near five-year highs on supply constraints and EV demand growth." (bloomberg.com)
 ✅ "OPEC announced production cuts of 1.2M bpd effective April 2025 to stabilize markets." (reuters.com)
 
@@ -10519,7 +10490,6 @@ This summary will be labeled as [INDUSTRY - keyword] content in the executive su
 **Critical Rules:**
 ✅ Extract ONLY explicitly stated facts with supporting data
 ✅ Every number requires: value, units, time period, comparison (YoY/QoQ/MoM/vs prior)
-✅ Always cite source domain in parentheses at end
 ✅ Focus on QUANTIFIABLE driver data
 ✅ Include qualitative developments ONLY if: policy changes with explicit rules/dates, supply disruptions with stated impacts, official forecasts from credible institutions
 ✅ State geographic context clearly when relevant

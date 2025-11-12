@@ -21403,18 +21403,19 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
 
     def bold_bullet_labels(text: str, context_only: bool = False) -> str:
         """
-        Bold topic labels in bullet points.
+        Bold "Context:" labels in text.
 
         Args:
             text: Text to process
-            context_only: If True, ONLY bold "Context:" (for paragraphs).
-                         If False, bold all "Label: Detail" patterns (for bullets).
+            context_only: Unused (kept for backward compatibility)
 
         Transforms:
-            - Bullets: "Topic Label: Details" → "<strong>Topic Label:</strong> Details"
-            - Paragraphs: Only "Context:" → "<strong>Context:</strong>"
+            - "Context: Details" → "<strong>Context:</strong> Details"
 
-        Also strips markdown bold syntax (**text**) that AI sometimes adds despite instructions.
+        Also converts markdown bold syntax (**text**) to HTML (<strong>text</strong>).
+
+        Note: Headers are already bolded via format_bullet_header() which uses **...**,
+        so no additional label bolding is needed.
         """
         import re
 
@@ -21424,28 +21425,8 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
         single_break = not context_only
         text = convert_markdown_to_html(text, single_break=single_break)
 
-        if context_only:
-            # For paragraphs: ONLY bold "Context:" (Phase 2 enrichment marker)
-            text = text.replace('Context:', '<strong>Context:</strong>')
-        else:
-            # For bullets: Bold all topic labels (text before colon)
-            # BUT: Skip if markdown has already been converted to <strong> tags (Phase 3)
-            # This prevents double bolding: **Label**: → <strong><strong>Label</strong>:</strong>
-
-            # Check if label is already bolded (Phase 3 format)
-            has_existing_bold = bool(re.match(r'^<strong>.+?</strong>:', text))
-
-            if not has_existing_bold:
-                # Phase 1/2 format: Apply label bolding
-                # Match pattern: start of text followed by 2-130 chars, then colon
-                # Capture the topic label (everything before the colon, including the colon)
-                # 130-char limit prevents bolding entire sentences while capturing longer contextual labels
-                pattern = r'^([^:]{2,130}?:)(\s)'
-                replacement = r'<strong>\1</strong>\2'
-                text = re.sub(pattern, replacement, text)
-
-            # Also bold "Context:" when it appears (10-K enrichment lines in bullets)
-            text = text.replace('Context:', '<strong>Context:</strong>')
+        # Bold "Context:" labels in all formats (paragraphs and bullets)
+        text = text.replace('Context:', '<strong>Context:</strong>')
 
         return text
 
@@ -21604,27 +21585,25 @@ def build_research_summary_html(sections: Dict[str, List[str]], content_type: st
 
     def bold_bullet_labels(text: str, context_only: bool = False) -> str:
         """
-        Bold topic labels in format 'Topic Label: Details'
+        Bold "Context:" labels in text.
 
         Args:
             text: Text to process
-            context_only: If True, ONLY bold "Context:" (for paragraphs).
-                         If False, bold all "Label: Detail" patterns (for bullets).
+            context_only: Unused (kept for backward compatibility)
+
+        Transforms:
+            - "Context: Details" → "<strong>Context:</strong> Details"
+
+        Also strips markdown bold syntax (**text**).
+
+        Note: Headers are already bolded via format_bullet_header() which uses **...**,
+        so no additional label bolding is needed.
         """
         import re
         text = strip_markdown_formatting(text)
 
-        if context_only:
-            # For paragraphs: ONLY bold "Context:" (Phase 2 enrichment marker)
-            text = text.replace('Context:', '<strong>Context:</strong>')
-        else:
-            # For bullets: Bold all topic labels (text before colon)
-            pattern = r'^([^:]{2,130}?:)(\s)'
-            replacement = r'<strong>\1</strong>\2'
-            text = re.sub(pattern, replacement, text)
-
-            # Also bold "Context:" when it appears (10-K enrichment lines in bullets)
-            text = text.replace('Context:', '<strong>Context:</strong>')
+        # Bold "Context:" labels in all formats (paragraphs and bullets)
+        text = text.replace('Context:', '<strong>Context:</strong>')
 
         return text
 

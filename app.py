@@ -34832,14 +34832,13 @@ async def review_quality_api(request: Request):
         return {"status": "error", "message": "Ticker required"}
 
     try:
-        # Determine target date: explicit parameter or latest from database
+        # Determine target date: explicit parameter or current date
         if date_str:
             target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
             LOG.info(f"🔍 [{ticker}] Using explicit date parameter: {target_date}")
         else:
-            # Query for most recent summary date (no time-of-day dependency)
-            target_date = get_latest_summary_date(ticker)
-            LOG.info(f"🔍 [{ticker}] Using latest summary date from database: {target_date}")
+            target_date = datetime.now(timezone.utc).date()
+            LOG.info(f"🔍 [{ticker}] Using current date (UTC): {target_date}")
 
         LOG.info(f"🔍 [{ticker}] Starting quality review for {target_date}")
 
@@ -34980,14 +34979,13 @@ async def review_all_quality_api(request: Request):
         return {"status": "error", "message": "Ticker required"}
 
     try:
-        # Determine target date: explicit parameter or latest from database
+        # Determine target date: explicit parameter or current date
         if date_str:
             target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
             LOG.info(f"🔍 [{ticker}] Using explicit date parameter: {target_date}")
         else:
-            # Query for most recent summary date (no time-of-day dependency)
-            target_date = get_latest_summary_date(ticker)
-            LOG.info(f"🔍 [{ticker}] Using latest summary date from database: {target_date}")
+            target_date = datetime.now(timezone.utc).date()
+            LOG.info(f"🔍 [{ticker}] Using current date (UTC): {target_date}")
 
         LOG.info(f"🔍 [{ticker}] Starting comprehensive quality review (Phase 1 + Phase 2) for {target_date}")
 

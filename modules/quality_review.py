@@ -855,6 +855,7 @@ def generate_bullet_centric_review_email_html(
     phase4_skipped = phase4_result is None
     if not phase4_skipped:
         p4_summary = phase4_result.get("summary", {})
+        p4_bullets_reviewed = p4_summary.get("bullets_reviewed", 0)
         p4_issue_counts = p4_summary.get("issue_counts", {})
         p4_metadata_issues_count = p4_issue_counts.get("metadata_issues", 0)
         p4_placement_issues_count = p4_issue_counts.get("section_placement_issues", 0)
@@ -877,6 +878,7 @@ def generate_bullet_centric_review_email_html(
         p4_metadata_issues_by_id = {}
         p4_placement_issues_by_id = {}
         p4_duplicate_themes = []
+        p4_bullets_reviewed = 0
         p4_metadata_issues_count = 0
         p4_placement_issues_count = 0
 
@@ -950,8 +952,8 @@ def generate_bullet_centric_review_email_html(
         .theme-item {{ margin: 15px 0; padding: 15px; background: white; border-radius: 4px; border-left: 3px solid #6b7280; }}
         .theme-item.covered {{ border-left-color: #10b981; }}
         .theme-item.missing {{ border-left-color: #ef4444; }}
-        .missing-opp-section {{ margin-top: 10px; padding: 12px; background: #fef3c7; border-left: 3px solid #f59e0b; border-radius: 4px; }}
-        .missing-opp-item {{ margin: 8px 0; padding: 8px; background: white; border-radius: 3px; font-size: 13px; }}
+        .missing-opp-section {{ margin-top: 10px; padding: 15px; background: white; border-left: 4px solid #10b981; border-radius: 6px; }}
+        .missing-opp-item {{ margin: 10px 0; padding: 10px; background: #f9fafb; border-radius: 4px; font-size: 13px; border: 1px solid #e5e7eb; }}
         .phase4-issue {{ margin: 10px 0; padding: 12px; background: #fee2e2; border-left: 3px solid #dc2626; border-radius: 4px; }}
     </style>
 </head>
@@ -1129,6 +1131,10 @@ def generate_bullet_centric_review_email_html(
         <div class="phase-summary">
             <h3>🏗️ PHASE 4: METADATA & STRUCTURE VALIDATION <span class="badge" style="background: #8b5cf6; color: white;">ℹ️ INFORMATIONAL</span></h3>
             <div class="stats">
+                <div class="stat">
+                    <div class="stat-label">Items Evaluated</div>
+                    <div class="stat-value" style="color: #1e40af;">{p4_bullets_reviewed}</div>
+                </div>
                 <div class="stat">
                     <div class="stat-label">Metadata Issues</div>
                     <div class="stat-value" style="color: {'#ef4444' if p4_metadata_issues_count > 0 else '#10b981'};">{p4_metadata_issues_count}</div>
@@ -1403,15 +1409,6 @@ def generate_bullet_centric_review_email_html(
                             </div>
                         </div>
                         '''
-
-                    # Show recommended cleaned context
-                    if cleaned_context:
-                        if remove_count == 0:
-                            recommendation_html = '<div style="background-color: #d1fae5; border-left: 4px solid #10b981; padding: 12px; margin-top: 15px; border-radius: 4px;"><strong>📝 Recommended Context:</strong><br><div style="margin-top: 8px; font-style: italic;">✅ Original context is optimal - no changes needed</div></div>'
-                        else:
-                            recommendation_html = f'<div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 12px; margin-top: 15px; border-radius: 4px;"><strong>📝 Recommended Context (after removing {remove_count} irrelevant sentence{"s" if remove_count > 1 else ""}):</strong><br><div style="margin-top: 8px; font-style: italic;">{cleaned_context}</div></div>'
-
-                        html += recommendation_html
 
             # Phase 4: Metadata & Structure for paragraph (ALWAYS SHOW)
             if not phase4_skipped and bullet_id:
@@ -1731,15 +1728,6 @@ def generate_bullet_centric_review_email_html(
                             </div>
                             '''
 
-                        # Show recommended cleaned context
-                        if cleaned_context:
-                            if remove_count == 0:
-                                recommendation_html = '<div style="background-color: #d1fae5; border-left: 4px solid #10b981; padding: 12px; margin-top: 15px; border-radius: 4px;"><strong>📝 Recommended Context:</strong><br><div style="margin-top: 8px; font-style: italic;">✅ Original context is optimal - no changes needed</div></div>'
-                            else:
-                                recommendation_html = f'<div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 12px; margin-top: 15px; border-radius: 4px;"><strong>📝 Recommended Context (after removing {remove_count} irrelevant sentence{"s" if remove_count > 1 else ""}):</strong><br><div style="margin-top: 8px; font-style: italic;">{cleaned_context}</div></div>'
-
-                            html += recommendation_html
-
                 # Phase 4: Metadata & Structure Validation (ALWAYS SHOW)
                 if not phase4_skipped and bullet_id:
                     html += '<div class="divider"></div>'
@@ -1863,7 +1851,7 @@ def generate_bullet_centric_review_email_html(
             </div>'''
 
         if covered_themes:
-            html += '''
+            html += f'''
             <div style="margin-bottom: 20px;">
                 <h4 style="color: #10b981; margin-bottom: 10px;">✅ COVERED THEMES ({len(covered_themes)}):</h4>'''
 

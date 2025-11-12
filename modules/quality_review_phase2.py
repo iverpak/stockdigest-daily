@@ -241,7 +241,110 @@ Input bullet with empty context:
 
 Review ALL context fields in ALL 10 sections (even if some sections have no contexts).
 
-Return ONLY the JSON object, no other text.
+═══════════════════════════════════════════
+COMPLETENESS EVALUATION (12 QUESTIONS FRAMEWORK)
+═══════════════════════════════════════════
+
+After verifying context accuracy, evaluate completeness using the 12-question framework.
+
+For each NON-EMPTY context, assess which questions are answered and which opportunities were missed.
+
+THE 12 CONTEXT QUESTIONS:
+
+1. MATERIALITY - What % of revenue, profit, exposure? What $ amount? Ranking?
+2. ECONOMICS - Margins, profitability, returns (ROE/ROIC)? Cash generation?
+3. TRENDS - QoQ sequential? YoY comparison? Multi-year baseline?
+4. SEGMENT BREAKDOWN - By division, product, geography? Growth rates?
+5. DEPENDENCIES - Customer/supplier concentration? Counterparty risk?
+6. HISTORICAL BASELINE - vs 3-5 year average? vs historical peak? vs peers?
+7. MANAGEMENT EXPLANATION - Why did this happen? What's the outlook? (from transcript)
+8. TIMELINE - Specific dates? Expected duration? Milestones?
+9. BUSINESS MODEL - How this fits strategy? What entity is? Why it matters?
+10. BALANCE - Offsetting factors? Trade-offs? Risks vs opportunities?
+11. CONTEXT - Related developments? Contingencies? Regulatory/market context?
+12. ENTITY DEFINITION - What are subsidiaries/products/technologies? How big? What do they do?
+
+PRIORITY ASSIGNMENT:
+
+HIGH Priority:
+- Question 1 (MATERIALITY) - Essential for assessing scale
+- Question 2 (ECONOMICS) - Essential for assessing quality
+- Question 3 (TRENDS) - Essential for assessing trajectory
+- Question 7 (MANAGEMENT EXPLANATION) - Essential for understanding "why"
+
+MEDIUM Priority:
+- Question 4 (SEGMENT BREAKDOWN), 5 (DEPENDENCIES), 9 (BUSINESS MODEL), 12 (ENTITY DEFINITION)
+
+LOW Priority:
+- Question 6 (HISTORICAL BASELINE), 8 (TIMELINE), 10 (BALANCE), 11 (CONTEXT)
+
+EVALUATION PROCESS:
+
+For each context with content:
+1. Identify which questions are already answered
+2. Search filings for data that could answer unanswered questions
+3. For each unanswered question with available data:
+   - Extract specific finding from filings
+   - Craft recommendation for how to add it
+   - Explain value-add
+   - Assign priority
+
+OUTPUT FORMAT WITH COMPLETENESS:
+
+{
+  "contexts": [
+    {
+      "section_name": "major_developments",
+      "bullet_id": "acquisition_announced",
+      "context_text": "Amedisys operates in home health with $2.1B revenue per 10-K",
+      "status": "ACCURATE",
+      "error_type": null,
+      "severity": null,
+      "evidence": ["FY2024 10-K, Business Description section"],
+      "notes": "Context accurately sourced from 10-K",
+
+      "completeness": {
+        "questions_answered": [1, 9],
+        "questions_applicable": [1, 2, 3, 4, 9, 12],
+        "completeness_score": "2/6 applicable questions answered",
+        "questions_missed": [
+          {
+            "question_num": 2,
+            "question_name": "ECONOMICS",
+            "finding": "Target EBITDA margin -15% per Q3 2025 10-Q Segment Performance",
+            "recommendation": "Add: 'with -15% EBITDA margin per Q3 10-Q'",
+            "value_add": "Quantifies profitability risk - acquiring unprofitable business",
+            "filing_source": "Q3 2025 10-Q, Segment Performance section",
+            "priority": "HIGH"
+          },
+          {
+            "question_num": 3,
+            "question_name": "TRENDS",
+            "finding": "Revenue declined from $2.3B (FY2023) to $2.1B (FY2024) per 10-K",
+            "recommendation": "Add: 'revenue declining 9% YoY from $2.3B peak'",
+            "value_add": "Shows negative trajectory, not just snapshot",
+            "filing_source": "FY2024 10-K, Revenue Trends section",
+            "priority": "HIGH"
+          }
+        ],
+        "improvement_priority": "HIGH"
+      }
+    }
+  ]
+}
+
+For contexts with no missing opportunities:
+"completeness": {
+  "questions_answered": [1, 2, 3, 7],
+  "questions_applicable": [1, 2, 3, 7, 9],
+  "completeness_score": "4/5 applicable questions answered",
+  "questions_missed": [],
+  "improvement_priority": "NONE"
+}
+
+For empty contexts, completeness is not applicable (skip this field entirely).
+
+Return ONLY the JSON object with both accuracy verification AND completeness evaluation, no other text.
 """
 
 
@@ -358,6 +461,12 @@ def review_phase2_context_quality(
         issues = 0
         errors_by_severity = {"CRITICAL": 0, "SERIOUS": 0, "MINOR": 0}
 
+        # Completeness statistics
+        contexts_with_gaps = 0
+        high_priority_improvements = 0
+        medium_priority_improvements = 0
+        low_priority_improvements = 0
+
         for context in result_json.get("contexts", []):
             total_contexts += 1
             status = context.get("status")
@@ -371,6 +480,22 @@ def review_phase2_context_quality(
             if severity:
                 errors_by_severity[severity] = errors_by_severity.get(severity, 0) + 1
 
+            # Count completeness gaps
+            completeness = context.get("completeness", {})
+            if completeness:
+                questions_missed = completeness.get("questions_missed", [])
+                if questions_missed:
+                    contexts_with_gaps += 1
+
+                    for missed in questions_missed:
+                        priority = missed.get("priority", "LOW")
+                        if priority == "HIGH":
+                            high_priority_improvements += 1
+                        elif priority == "MEDIUM":
+                            medium_priority_improvements += 1
+                        else:
+                            low_priority_improvements += 1
+
         # Build final result
         final_result = {
             "summary": {
@@ -379,13 +504,20 @@ def review_phase2_context_quality(
                 "accurate": accurate,
                 "issues": issues,
                 "errors_by_severity": errors_by_severity,
-                "generation_time_ms": generation_time
+                "generation_time_ms": generation_time,
+                "completeness": {
+                    "contexts_with_gaps": contexts_with_gaps,
+                    "high_priority_improvements": high_priority_improvements,
+                    "medium_priority_improvements": medium_priority_improvements,
+                    "low_priority_improvements": low_priority_improvements
+                }
             },
             "contexts": result_json.get("contexts", [])
         }
 
         LOG.info(f"✅ [{ticker}] Phase 2 quality review complete: {accurate}/{total_contexts} accurate, "
-                f"{issues} issues, {errors_by_severity['CRITICAL']} critical errors")
+                f"{issues} issues, {errors_by_severity['CRITICAL']} critical errors, "
+                f"{high_priority_improvements} high-priority improvements available")
 
         return final_result
 

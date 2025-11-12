@@ -34960,12 +34960,14 @@ async def review_quality_api(request: Request):
 @APP.post("/api/review-all-quality")
 async def review_all_quality_api(request: Request):
     """
-    Comprehensive quality review: Phase 1 (articles) + Phase 2 (filings).
+    Comprehensive quality review: All 4 phases.
 
-    Phase 1: Verifies executive summary against article summaries
-    Phase 2: Verifies filing context against 10-K, 10-Q, Transcript
+    Phase 1: Verifies executive summary against article summaries + theme coverage
+    Phase 2: Verifies filing context against 10-K, 10-Q, Transcript + completeness
+    Phase 3: Verifies context relevance
+    Phase 4: Validates metadata tags and section placement (internal consistency)
 
-    Sends combined email report with both phases.
+    Sends bullet-centric email report with all phases.
     """
     body = await request.json()
     token = body.get('token')
@@ -34987,7 +34989,7 @@ async def review_all_quality_api(request: Request):
             target_date = datetime.now(timezone.utc).date()
             LOG.info(f"🔍 [{ticker}] Using current date (UTC): {target_date}")
 
-        LOG.info(f"🔍 [{ticker}] Starting comprehensive quality review (Phase 1 + Phase 2) for {target_date}")
+        LOG.info(f"🔍 [{ticker}] Starting comprehensive quality review (all 4 phases) for {target_date}")
 
         # Fetch executive summary
         with db() as conn, conn.cursor() as cur:
@@ -35121,14 +35123,31 @@ async def review_all_quality_api(request: Request):
             LOG.warning(f"⚠️ [{ticker}] Phase 3 review failed, continuing without it")
 
         # ============================================================
-        # Generate Combined Report
+        # PHASE 4: Metadata & Structure Validation
         # ============================================================
-        from modules.quality_review import generate_combined_quality_review_email_html
+        from modules.quality_review_phase4 import review_phase4_metadata_and_structure
 
-        report_html = generate_combined_quality_review_email_html(
+        phase4_result = review_phase4_metadata_and_structure(
+            ticker=ticker,
+            executive_summary=executive_summary,
+            gemini_api_key=GEMINI_API_KEY
+        )
+
+        if phase4_result:
+            LOG.info(f"✅ [{ticker}] Phase 4 (metadata & structure) review complete")
+        else:
+            LOG.warning(f"⚠️ [{ticker}] Phase 4 review failed, continuing without it")
+
+        # ============================================================
+        # Generate Bullet-Centric Report
+        # ============================================================
+        from modules.quality_review import generate_bullet_centric_review_email_html
+
+        report_html = generate_bullet_centric_review_email_html(
             phase1_result=phase1_result,
             phase2_result=phase2_result,
-            phase3_result=phase3_result
+            phase3_result=phase3_result,
+            phase4_result=phase4_result
         )
 
         # Determine subject line
@@ -35153,14 +35172,15 @@ async def review_all_quality_api(request: Request):
         # Send email
         send_email(subject, report_html)
 
-        LOG.info(f"✅ [{ticker}] Combined quality review email sent successfully")
+        LOG.info(f"✅ [{ticker}] Bullet-centric quality review email sent successfully (all 4 phases)")
 
         return {
             "status": "success",
-            "message": f"Quality review complete. Email sent to admin.",
+            "message": f"Quality review complete (4 phases). Email sent to admin.",
             "phase1_summary": p1_summary,
             "phase2_summary": phase2_result["summary"] if phase2_result else None,
-            "phase2_skipped": phase2_result is None
+            "phase3_summary": phase3_result["summary"] if phase3_result else None,
+            "phase4_summary": phase4_result["summary"] if phase4_result else None
         }
 
     except Exception as e:

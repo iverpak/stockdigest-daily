@@ -56,6 +56,27 @@ Common issues:
 - Positive development with major caveat tagged bullish (should be mixed)
 - Operational improvement tagged bearish (should be bullish)
 
+CRITICAL PATTERN: Bullish + Negative Economics
+
+Quick sanity check for obvious contradictions:
+- Does context contain negative economics indicators?
+- Pattern match: "unprofitable", "lost $", "negative margin", "-X% margin", "declining", "missed", "compression"
+- If YES + sentiment = "bullish" → FLAG IT
+
+Example:
+Context: "Segment lost $5.1B FY2024, -131% EBITDA margin per 10-K"
+Sentiment: "bullish"
+→ 🚨 CRITICAL: Bullish tag on negative economics
+
+Output if pattern found:
+{
+  "field": "sentiment",
+  "current_value": "bullish",
+  "issue": "Bullish tag on negative economics (critical contradiction)",
+  "text_evidence": "Context contains: [quote negative phrase from context]",
+  "severity": "CRITICAL"
+}
+
 Output if issue found:
 {
   "field": "sentiment",
@@ -84,6 +105,30 @@ Internal consistency check:
 ✅ Bullet+Context: "Customer renewal, 0.3% of revenue" → low impact (CONSISTENT)
 ❌ Bullet+Context: "$50M contract, company revenue $25B = 0.2%" → high impact (INCONSISTENT - should be low)
 ❌ Bullet+Context: "Acquisition $3.4B, company market cap $40B = 8.5%" → low impact (INCONSISTENT - should be high)
+
+CRITICAL PATTERN: High Impact + Low %
+
+Quick sanity check for mathematical contradictions:
+- Does context contain % < 1%?
+- Pattern match: "0.X% of revenue", "0.X% of costs", "0.X% of exposure", "<1%", "0.0X%"
+- If YES + impact = "high impact" → FLAG IT
+
+Example:
+Context: "Customer represents 0.3% of revenue per 10-Q"
+Impact: "high impact"
+→ 🚨 CRITICAL: High impact on 0.3% (should be low)
+
+Exception: Categorical events (FDA approval, M&A, CEO fraud) can be high impact despite low %
+
+Output if pattern found:
+{
+  "field": "impact",
+  "current_value": "high impact",
+  "issue": "High impact tag on <1% quantification (mathematical contradiction)",
+  "text_evidence": "Context shows: [quote low % from context]",
+  "recommended_value": "low impact",
+  "severity": "CRITICAL"
+}
 
 If no quantification found in bullet+context:
 {
@@ -139,6 +184,31 @@ Internal consistency check:
 ✅ Bullet: "Industry adopts new regulation" + Context: "Company 15% exposed" → direct (CONSISTENT)
 ❌ Bullet: "Competitor launches product" + Context: "No company mention" → direct (INCONSISTENT - should be indirect)
 ❌ Bullet: "Industry trend accelerates" + Context: "No company data" → direct (INCONSISTENT - should be indirect/none)
+
+CRITICAL PATTERN: Direct + No Company Mention
+
+Quick sanity check for logic errors:
+- Is company name or ticker mentioned in bullet content? Check for [TICKER] or [COMPANY_NAME]
+- Is company name or ticker mentioned in context? Check for [TICKER] or [COMPANY_NAME]
+- If BOTH NO + relevance = "direct" → FLAG IT
+
+Example:
+Bullet: "Competitor announced capacity expansion plans"
+Context: "Competitor operates 15 GW fleet in same market segment"
+Relevance: "direct"
+→ 🚨 CRITICAL: Direct relevance with no company mention (should be indirect)
+
+Note: If context contains quantified company exposure (%, ranking) even without explicit name, relevance can be direct
+
+Output if pattern found:
+{
+  "field": "relevance",
+  "current_value": "direct",
+  "issue": "Direct relevance with no company mention in bullet or context (logic error)",
+  "text_evidence": "Neither bullet nor context mentions company/ticker",
+  "recommended_value": "indirect",
+  "severity": "CRITICAL"
+}
 
 Output if issue found:
 {

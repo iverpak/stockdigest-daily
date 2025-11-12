@@ -6283,14 +6283,26 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
         "blocked_insider_trading": stats["blocked_insider_trading"]  # ADD THIS LINE
     }
 
-def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
-    """Basic feed ingestion with FIXED deduplication count tracking"""
+def ingest_feed_basic_only(feed: Dict, mode: str = 'production', quota: int = None) -> Dict[str, int]:
+    """Basic feed ingestion with FIXED deduplication count tracking
+
+    Args:
+        feed: Feed configuration dict
+        mode: 'production' or 'hourly' - controls Google title filtering
+        quota: Max articles to insert from this feed (after spam filtering). None = unlimited.
+
+    Returns:
+        Stats dict with processed, inserted, duplicates, blocked counts
+    """
     stats = {
-        "processed": 0, "inserted": 0, "duplicates": 0, "blocked_spam": 0, 
+        "processed": 0, "inserted": 0, "duplicates": 0, "blocked_spam": 0,
         "blocked_non_latin": 0, "limit_reached": 0, "blocked_insider_trading": 0,
         "yahoo_rejected": 0
     }
-    
+
+    # Track successful insertions for quota enforcement (counts AFTER spam filtering)
+    articles_inserted_this_feed = 0
+
     category = feed.get("category", "company")
     
     # Use competitor_ticker for competitor feeds, search_keyword for others - FIXED: Consistent logic
@@ -6350,16 +6362,30 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                     stats["blocked_insider_trading"] += 1
                     LOG.debug(f"INSIDER TRADING BLOCKED: {title[:50]}...")
                     continue
-                
+
+                # HOURLY ALERTS: Google articles MUST have company name in title
+                # EXCEPTION: Skip filter for industry feeds (keywords like "5G deployment", not company names)
+                # Determine feed type early for filter check
+                feed_url = feed.get("url", "")
+                is_yahoo_feed = "finance.yahoo.com" in feed_url
+                is_google_feed = "news.google.com" in feed_url
+
+                if mode == 'hourly' and is_google_feed and category != 'industry':
+                    search_keyword = feed.get('search_keyword', '')  # Stripped company name (no Inc., Corp., etc.)
+
+                    # Check if company name in title (case-insensitive)
+                    title_lower = title.lower()
+                    keyword_lower = search_keyword.lower() if search_keyword else ''
+
+                    if not (keyword_lower and keyword_lower in title_lower):
+                        stats["blocked_spam"] += 1
+                        LOG.info(f"HOURLY GOOGLE FILTER BLOCKED ({category}): '{title[:60]}' (no '{search_keyword}' in title)")
+                        continue
+
                 # FEED-TYPE-AWARE URL RESOLUTION (same as main ingestion)
                 final_resolved_url = None
                 final_domain = None
                 final_source_url = None
-
-                # Determine feed type
-                feed_url = feed.get("url", "")
-                is_yahoo_feed = "finance.yahoo.com" in feed_url
-                is_google_feed = "news.google.com" in feed_url
 
                 if is_yahoo_feed:
                     # YAHOO FEED: Resolve immediately
@@ -6557,6 +6583,16 @@ def ingest_feed_basic_only(feed: Dict) -> Dict[str, int]:
                                 feed["id"], clean_search_keyword, clean_competitor_ticker, value_chain_type
                             )
                             stats["inserted"] += 1
+
+                            # Increment quota counter (only after successful insert, post-spam filtering)
+                            articles_inserted_this_feed += 1
+
+                            # Check quota limit (enforced per feed, after all spam/duplicate filtering)
+                            if quota is not None and articles_inserted_this_feed >= quota:
+                                stats["limit_reached"] += 1
+                                LOG.info(f"✅ QUOTA REACHED: {articles_inserted_this_feed}/{quota} clean articles for {feed.get('name')} [{category}]")
+                                break  # Exit entry loop, stop processing this feed
+
                             # Get current count after insertion
                             limit_key = 'company' if category == 'company' else f'{category}_per_keyword'
                             current_limit = ingestion_stats['limits'][limit_key]
@@ -27307,10 +27343,19 @@ async def admin_init(request: Request, body: InitRequest):
             "successful": len([r for r in results if r["feeds_created"] > 0])
         }
 
-def process_feeds_sequentially(feeds: List[Dict]) -> Dict[str, int]:
+def process_feeds_sequentially(feeds: List[Dict], mode: str = 'production', yahoo_quota: int = None, google_quota: int = None) -> Dict[str, int]:
     """
-    Process a list of feeds sequentially (used for Google→Yahoo pairs).
+    Process a list of feeds sequentially (used for Yahoo→Google pairs).
     Returns aggregated stats from all feeds.
+
+    Args:
+        feeds: List of feed configuration dicts (typically [Yahoo feed, Google feed])
+        mode: 'production' or 'hourly' - controls Google title filtering
+        yahoo_quota: Max articles for Yahoo feeds. None = unlimited.
+        google_quota: Max articles for Google feeds. None = unlimited.
+
+    Returns:
+        Aggregated stats dict
     """
     aggregated_stats = {
         "processed": 0,
@@ -27324,7 +27369,17 @@ def process_feeds_sequentially(feeds: List[Dict]) -> Dict[str, int]:
 
     for feed in feeds:
         try:
-            stats = ingest_feed_basic_only(feed)
+            # Determine quota based on feed type
+            is_yahoo = 'yahoo' in feed['url'].lower()
+            is_google = 'google' in feed['url'].lower()
+
+            quota = None
+            if is_yahoo and yahoo_quota is not None:
+                quota = yahoo_quota
+            elif is_google and google_quota is not None:
+                quota = google_quota
+
+            stats = ingest_feed_basic_only(feed, mode=mode, quota=quota)
             aggregated_stats["processed"] += stats["processed"]
             aggregated_stats["inserted"] += stats["inserted"]
             aggregated_stats["duplicates"] += stats["duplicates"]
@@ -27489,9 +27544,9 @@ async def cron_ingest(
                 company_by_ticker[ticker] = []
             company_by_ticker[ticker].append(feed)
 
-        # Sort each ticker's feeds: Google first, then Yahoo
+        # Sort each ticker's feeds: Yahoo first, then Google (Yahoo is cleaner, gets priority)
         for ticker in company_by_ticker:
-            company_by_ticker[ticker].sort(key=lambda f: 0 if 'google' in f['url'].lower() else 1)
+            company_by_ticker[ticker].sort(key=lambda f: 0 if 'yahoo' in f['url'].lower() else 1)
 
         # Group competitor feeds by (ticker, competitor_ticker) for sequential processing
         competitor_by_key = {}  # {(ticker, competitor_ticker): [google_feed, yahoo_feed]}
@@ -27503,9 +27558,9 @@ async def cron_ingest(
                 competitor_by_key[key] = []
             competitor_by_key[key].append(feed)
 
-        # Sort each competitor's feeds: Google first, then Yahoo
+        # Sort each competitor's feeds: Yahoo first, then Google (Yahoo is cleaner, gets priority)
         for key in competitor_by_key:
-            competitor_by_key[key].sort(key=lambda f: 0 if 'google' in f['url'].lower() else 1)
+            competitor_by_key[key].sort(key=lambda f: 0 if 'yahoo' in f['url'].lower() else 1)
 
         # Group value chain feeds by (ticker, competitor_ticker, value_chain_type) for sequential processing
         value_chain_by_key = {}  # {(ticker, vc_ticker, vc_type): [google_feed, yahoo_feed]}
@@ -27518,9 +27573,9 @@ async def cron_ingest(
                 value_chain_by_key[key] = []
             value_chain_by_key[key].append(feed)
 
-        # Sort each value chain company's feeds: Google first, then Yahoo
+        # Sort each value chain company's feeds: Yahoo first, then Google (Yahoo is cleaner, gets priority)
         for key in value_chain_by_key:
-            value_chain_by_key[key].sort(key=lambda f: 0 if 'google' in f['url'].lower() else 1)
+            value_chain_by_key[key].sort(key=lambda f: 0 if 'yahoo' in f['url'].lower() else 1)
 
         # Process all groups in parallel using ThreadPoolExecutor
         # REDUCED: max_workers=8 (was 15) to reduce DB connection contention
@@ -27531,29 +27586,29 @@ async def cron_ingest(
         with ThreadPoolExecutor(max_workers=8) as executor:
             futures = []
 
-            # Submit company feed groups (sequential Google→Yahoo within each ticker)
+            # Submit company feed groups (sequential Yahoo→Google within each ticker)
             for ticker, ticker_feeds in company_by_ticker.items():
-                future = executor.submit(process_feeds_sequentially, ticker_feeds)
+                future = executor.submit(process_feeds_sequentially, ticker_feeds, mode='production', yahoo_quota=None, google_quota=20)
                 futures.append(("company", ticker, future))
-                LOG.info(f"Submitted company feeds for {ticker}: {len(ticker_feeds)} feeds (Google→Yahoo sequential)")
+                LOG.info(f"Submitted company feeds for {ticker}: {len(ticker_feeds)} feeds (Yahoo→Google sequential, Google quota=20)")
 
-            # Submit industry feeds (all parallel, Google only)
+            # Submit industry feeds (all parallel, Google only, no quotas)
             for feed in industry_feeds:
-                future = executor.submit(ingest_feed_basic_only, feed)
+                future = executor.submit(ingest_feed_basic_only, feed, mode='production', quota=None)
                 futures.append(("industry", feed.get('search_keyword', 'unknown'), future))
-            LOG.info(f"Submitted {len(industry_feeds)} industry feeds (all parallel)")
+            LOG.info(f"Submitted {len(industry_feeds)} industry feeds (all parallel, production mode)")
 
-            # Submit competitor feed groups (sequential Google→Yahoo within each competitor)
+            # Submit competitor feed groups (sequential Yahoo→Google within each competitor)
             for (ticker, comp_ticker), comp_feeds in competitor_by_key.items():
-                future = executor.submit(process_feeds_sequentially, comp_feeds)
+                future = executor.submit(process_feeds_sequentially, comp_feeds, mode='production', yahoo_quota=None, google_quota=10)
                 futures.append(("competitor", f"{ticker}/{comp_ticker}", future))
-                LOG.info(f"Submitted competitor feeds for {ticker}/{comp_ticker}: {len(comp_feeds)} feeds (Google→Yahoo sequential)")
+                LOG.info(f"Submitted competitor feeds for {ticker}/{comp_ticker}: {len(comp_feeds)} feeds (Yahoo→Google sequential, Google quota=10)")
 
-            # Submit value chain feed groups (sequential Google→Yahoo within each value chain company)
+            # Submit value chain feed groups (sequential Yahoo→Google within each value chain company)
             for (ticker, vc_ticker, vc_type), vc_feeds in value_chain_by_key.items():
-                future = executor.submit(process_feeds_sequentially, vc_feeds)
+                future = executor.submit(process_feeds_sequentially, vc_feeds, mode='production', yahoo_quota=None, google_quota=10)
                 futures.append(("value_chain", f"{ticker}/{vc_ticker}/{vc_type}", future))
-                LOG.info(f"Submitted value chain feeds for {ticker}/{vc_ticker} ({vc_type}): {len(vc_feeds)} feeds (Google→Yahoo sequential)")
+                LOG.info(f"Submitted value chain feeds for {ticker}/{vc_ticker} ({vc_type}): {len(vc_feeds)} feeds (Yahoo→Google sequential, Google quota=10)")
 
             # Collect results as they complete
             completed_count = 0
@@ -36724,10 +36779,10 @@ def process_ticker_feeds_hourly(ticker: str) -> Dict[str, int]:
 
         LOG.info(f"[{ticker}] Feed groups - Company: {len(company_feeds)}, Industry: {len(industry_feeds)}, Competitor: {len(competitor_feeds)}")
 
-        # Group company feeds: Google first, then Yahoo (for sequential processing)
-        company_feeds.sort(key=lambda f: 0 if 'google' in f['url'].lower() else 1)
+        # Group company feeds: Yahoo first, then Google (Yahoo is cleaner, gets priority)
+        company_feeds.sort(key=lambda f: 0 if 'yahoo' in f['url'].lower() else 1)
 
-        # Group competitor feeds by competitor_ticker: Google first, then Yahoo
+        # Group competitor feeds by competitor_ticker: Yahoo first, then Google
         competitor_by_key = {}
         for feed in competitor_feeds:
             comp_ticker = feed.get('competitor_ticker', 'unknown')
@@ -36735,9 +36790,9 @@ def process_ticker_feeds_hourly(ticker: str) -> Dict[str, int]:
                 competitor_by_key[comp_ticker] = []
             competitor_by_key[comp_ticker].append(feed)
 
-        # Sort each competitor's feeds: Google first, then Yahoo
+        # Sort each competitor's feeds: Yahoo first, then Google (Yahoo is cleaner, gets priority)
         for key in competitor_by_key:
-            competitor_by_key[key].sort(key=lambda f: 0 if 'google' in f['url'].lower() else 1)
+            competitor_by_key[key].sort(key=lambda f: 0 if 'yahoo' in f['url'].lower() else 1)
 
         # Process all feed groups concurrently using ThreadPoolExecutor
         # max_workers=8 (same as production)
@@ -36747,24 +36802,24 @@ def process_ticker_feeds_hourly(ticker: str) -> Dict[str, int]:
         with ThreadPoolExecutor(max_workers=8) as executor:
             futures = []
 
-            # Submit company feeds (Google→Yahoo sequential)
+            # Submit company feeds (Yahoo→Google sequential, with hourly Google title filter)
             if company_feeds:
-                future = executor.submit(process_feeds_sequentially, company_feeds)
+                future = executor.submit(process_feeds_sequentially, company_feeds, mode='hourly', yahoo_quota=None, google_quota=None)
                 futures.append(("company", future))
-                LOG.info(f"[{ticker}]   → Submitted company feeds: {len(company_feeds)} feeds (Google→Yahoo sequential)")
+                LOG.info(f"[{ticker}]   → Submitted company feeds: {len(company_feeds)} feeds (Yahoo→Google sequential, hourly mode with Google filter)")
 
-            # Submit industry feeds (all parallel)
+            # Submit industry feeds (all parallel, hourly mode, no filter for industry)
             for feed in industry_feeds:
-                future = executor.submit(ingest_feed_basic_only, feed)
+                future = executor.submit(ingest_feed_basic_only, feed, mode='hourly', quota=None)
                 futures.append(("industry", future))
             if industry_feeds:
-                LOG.info(f"[{ticker}]   → Submitted {len(industry_feeds)} industry feeds (all parallel)")
+                LOG.info(f"[{ticker}]   → Submitted {len(industry_feeds)} industry feeds (all parallel, hourly mode)")
 
-            # Submit competitor feeds (Google→Yahoo sequential per competitor)
+            # Submit competitor feeds (Yahoo→Google sequential per competitor, with hourly Google title filter)
             for comp_ticker, comp_feeds in competitor_by_key.items():
-                future = executor.submit(process_feeds_sequentially, comp_feeds)
+                future = executor.submit(process_feeds_sequentially, comp_feeds, mode='hourly', yahoo_quota=None, google_quota=None)
                 futures.append(("competitor", future))
-                LOG.info(f"[{ticker}]   → Submitted competitor {comp_ticker}: {len(comp_feeds)} feeds (Google→Yahoo sequential)")
+                LOG.info(f"[{ticker}]   → Submitted competitor {comp_ticker}: {len(comp_feeds)} feeds (Yahoo→Google sequential, hourly mode with Google filter)")
 
             # Collect results as they complete
             completed_count = 0

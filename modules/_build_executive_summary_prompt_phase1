@@ -1984,14 +1984,15 @@ For each catalyst:
 ✓ What will be disclosed/decided: Specific outcomes or metrics expected
 
 Format:
-"Event name: Date/timing - What will be disclosed/decided per source"
+"Date/timing - What will be disclosed/decided per source"
 
+Note: topic_label already contains event name, so content should start directly with timing.
 Note: Article dates stored in date_range field (post-processing appends at end)
 
 Examples:
-✓ "Q3 2025 Earnings: October 22 (Wednesday) after market close - Q3 results including revenue, EPS, gross margins, Q4 guidance, and robotaxi/FSD progress per multiple sources"
-✓ "737 Production Increase: Q4 2025 start - Ramp from 38 to 42 aircraft/month following FAA approval per earnings call"
-✓ "Spirit Acquisition Close: Pending U.S. approval - $4.7B transaction completion following EU approval October 13 per earnings call"
+✓ "October 22 (Wednesday) after market close - Q3 results including revenue, EPS, gross margins, Q4 guidance, and robotaxi/FSD progress per multiple sources"
+✓ "Q4 2025 start - Ramp from 38 to 42 aircraft/month following FAA approval per earnings call"
+✓ "Pending U.S. approval - $4.7B transaction completion following EU approval October 13 per earnings call"
 
 WHAT TO EXCLUDE:
 Do not include:

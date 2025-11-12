@@ -218,5 +218,5 @@ def _parse_phase3_json_response(response_text: str, ticker: str) -> Optional[Dic
             pass
 
     LOG.error(f"[{ticker}] Could not parse Phase 3 JSON from response (length: {len(response_text)})")
-    LOG.debug(f"[{ticker}] Response preview: {response_text[:500]}")
+    LOG.error(f"[{ticker}] Full response:\n{response_text}")
     return None

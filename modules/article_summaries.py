@@ -969,7 +969,7 @@ Rate this article's relevance to {company_name} ({ticker}) fundamental drivers o
             model = genai.GenerativeModel('gemini-2.5-flash')
             generation_config = {
                 "temperature": 0.0,
-                "max_output_tokens": 512,
+                "max_output_tokens": 2048,  # Increased from 512 to prevent MAX_TOKENS errors
                 "response_mime_type": "application/json"
             }
 

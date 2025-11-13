@@ -20045,7 +20045,8 @@ async def process_ticker_job(job: dict):
                             phase3_merged_json, phase3_usage = generate_executive_summary_phase3(
                                 ticker=ticker,
                                 phase2_merged_json=filtered_json_for_phase3,
-                                anthropic_api_key=ANTHROPIC_API_KEY
+                                anthropic_api_key=ANTHROPIC_API_KEY,
+                                gemini_api_key=GEMINI_API_KEY
                             )
 
                             # Track Phase 3 cost

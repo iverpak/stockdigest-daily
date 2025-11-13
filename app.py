@@ -326,10 +326,16 @@ CLAUDE_PRICING = {
     "cache_read": 0.30       # $0.30 per 1M cache read tokens (90% savings)
 }
 
-# Gemini API Pricing (per 1M tokens as of November 2024)
-GEMINI_PRICING = {
+# Gemini Flash API Pricing (per 1M tokens as of November 2024)
+GEMINI_FLASH_PRICING = {
     "input": 0.075,          # $0.075 per 1M input tokens (40x cheaper than Claude)
     "output": 0.30,          # $0.30 per 1M output tokens (50x cheaper than Claude)
+}
+
+# Gemini Pro API Pricing (per 1M tokens as of November 2024)
+GEMINI_PRO_PRICING = {
+    "input": 1.25,           # $1.25 per 1M input tokens (2.4x cheaper than Claude)
+    "output": 5.00,          # $5.00 per 1M output tokens (3x cheaper than Claude)
 }
 # NOTE: Gemini does not support prompt caching (Claude-only feature)
 
@@ -444,7 +450,7 @@ def calculate_claude_api_cost(usage: dict, function_name: str) -> dict:
     }
 
 
-def calculate_gemini_api_cost(usage: dict, function_name: str) -> dict:
+def calculate_gemini_api_cost(usage: dict, function_name: str, model: str = "flash") -> dict:
     """
     Calculate cost from Gemini API usage response and track it.
 
@@ -453,6 +459,7 @@ def calculate_gemini_api_cost(usage: dict, function_name: str) -> dict:
                - input_tokens: prompt token count
                - output_tokens: candidates token count
         function_name: Name of the function (for categorization)
+        model: "flash" or "pro" (default: "flash")
 
     Returns:
         Cost breakdown dict
@@ -460,9 +467,15 @@ def calculate_gemini_api_cost(usage: dict, function_name: str) -> dict:
     input_tokens = usage.get("input_tokens", 0)
     output_tokens = usage.get("output_tokens", 0)
 
+    # Determine pricing based on model
+    if "pro" in model.lower():
+        pricing = GEMINI_PRO_PRICING
+    else:
+        pricing = GEMINI_FLASH_PRICING
+
     # Calculate costs (divide by 1M to get actual cost)
-    input_cost = (input_tokens / 1_000_000) * GEMINI_PRICING["input"]
-    output_cost = (output_tokens / 1_000_000) * GEMINI_PRICING["output"]
+    input_cost = (input_tokens / 1_000_000) * pricing["input"]
+    output_cost = (output_tokens / 1_000_000) * pricing["output"]
 
     call_cost = input_cost + output_cost
 
@@ -544,7 +557,8 @@ def log_cost_summary(ticker: str, company_name: str = ""):
         "executive_summary_phase1": ("📊 Executive Summary - Phase 1", 13),
         "executive_summary_phase2": ("📄 Executive Summary - Phase 2", 14),
         "executive_summary_phase3": ("📝 Executive Summary - Phase 3", 15),
-        "research_summary": ("📋 Research Summary (Transcript/PR)", 16)
+        "research_summary": ("📋 Research Summary (Transcript/PR)", 16),
+        "ticker_metadata_generation": ("🏷️ Ticker Metadata Generation", 17)
     }
 
     # Sort by display order
@@ -7456,7 +7470,7 @@ async def generate_article_summary_company(company_name: str, ticker: str, title
             company_name, ticker, title, scraped_content, GEMINI_API_KEY
         )
         if provider == "Gemini" and usage:
-            calculate_gemini_api_cost(usage, "article_summary_company")
+            calculate_gemini_api_cost(usage, "article_summary_company", model="flash")
             return summary, provider
         LOG.warning(f"[{ticker}] Gemini company summary failed, falling back to Claude")
 
@@ -7482,7 +7496,7 @@ async def generate_article_summary_competitor(competitor_name: str, competitor_t
             title, scraped_content, GEMINI_API_KEY
         )
         if provider == "Gemini" and usage:
-            calculate_gemini_api_cost(usage, "article_summary_competitor")
+            calculate_gemini_api_cost(usage, "article_summary_competitor", model="flash")
             return summary, provider
         LOG.warning(f"[{target_ticker}] Gemini competitor summary failed, falling back to Claude")
 
@@ -7507,7 +7521,7 @@ async def generate_article_summary_upstream(value_chain_company: str, value_chai
             title, scraped_content, GEMINI_API_KEY
         )
         if provider == "Gemini" and usage:
-            calculate_gemini_api_cost(usage, "article_summary_upstream")
+            calculate_gemini_api_cost(usage, "article_summary_upstream", model="flash")
             return summary, provider
         LOG.warning(f"[{target_ticker}] Gemini upstream summary failed, falling back to Claude")
 
@@ -7532,7 +7546,7 @@ async def generate_article_summary_downstream(value_chain_company: str, value_ch
             title, scraped_content, GEMINI_API_KEY
         )
         if provider == "Gemini" and usage:
-            calculate_gemini_api_cost(usage, "article_summary_downstream")
+            calculate_gemini_api_cost(usage, "article_summary_downstream", model="flash")
             return summary, provider
         LOG.warning(f"[{target_ticker}] Gemini downstream summary failed, falling back to Claude")
 
@@ -7561,7 +7575,7 @@ async def generate_article_summary_industry(industry_keyword: str, target_compan
             title, scraped_content, GEMINI_API_KEY, geographic_markets
         )
         if provider == "Gemini" and usage:
-            calculate_gemini_api_cost(usage, "article_summary_industry")
+            calculate_gemini_api_cost(usage, "article_summary_industry", model="flash")
             return summary, provider
         LOG.warning(f"[{target_ticker}] Gemini industry summary failed, falling back to Claude")
 
@@ -14102,12 +14116,22 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
                         phase2_completion_tokens = phase2_result.get("completion_tokens", 0)
                         phase2_generation_time_ms = phase2_result.get("generation_time_ms", 0)
 
-                        # Track Phase 2 cost
+                        # Track Phase 2 cost based on which model was used
                         phase2_usage = {
                             "input_tokens": phase2_prompt_tokens,
                             "output_tokens": phase2_completion_tokens
                         }
-                        calculate_claude_api_cost(phase2_usage, "executive_summary_phase2")
+                        phase2_model = phase2_result.get("ai_model", "")
+
+                        if "gemini" in phase2_model.lower():
+                            # Gemini primary succeeded (uses Pro for Phase 2)
+                            calculate_gemini_api_cost(phase2_usage, "executive_summary_phase2", model="pro")
+                        elif "claude" in phase2_model.lower():
+                            # Claude fallback succeeded
+                            calculate_claude_api_cost(phase2_usage, "executive_summary_phase2")
+                        else:
+                            # Unknown or missing model (shouldn't happen, but log warning)
+                            LOG.warning(f"[{ticker}] Phase 2 cost tracking: Unknown model '{phase2_model}', skipping cost tracking")
 
                         enrichment_count = len(valid_enrichments)
                         LOG.info(f"✅ EXECUTIVE SUMMARY (Phase 2 - {model_used}) [{ticker}]: Enriched {enrichment_count} bullets ({phase2_prompt_tokens} prompt tokens, {phase2_completion_tokens} completion tokens, {phase2_generation_time_ms}ms)")
@@ -25212,6 +25236,14 @@ Return ONLY a valid JSON array with metadata for each ticker."""
                 response_text = response.text
                 LOG.info(f"Batch {batch_num + 1}: Gemini response received ({generation_time:.1f}s)")
 
+                # Track API cost (metadata generation uses Gemini Pro)
+                if hasattr(response, 'usage_metadata'):
+                    usage = {
+                        "input_tokens": response.usage_metadata.prompt_token_count,
+                        "output_tokens": response.usage_metadata.candidates_token_count
+                    }
+                    calculate_gemini_api_cost(usage, "ticker_metadata_generation", model="pro")
+
                 # Extract JSON from response
                 json_content = None
 
@@ -29734,12 +29766,22 @@ async def regenerate_email_api(request: Request):
                     phase2_completion_tokens = phase2_result.get("completion_tokens", 0)
                     phase2_generation_time_ms = phase2_result.get("generation_time_ms", 0)
 
-                    # Track Phase 2 cost
+                    # Track Phase 2 cost based on which model was used
                     phase2_usage = {
                         "input_tokens": phase2_prompt_tokens,
                         "output_tokens": phase2_completion_tokens
                     }
-                    calculate_claude_api_cost(phase2_usage, "executive_summary_phase2")
+                    phase2_model = phase2_result.get("ai_model", "")
+
+                    if "gemini" in phase2_model.lower():
+                        # Gemini primary succeeded (uses Pro for Phase 2)
+                        calculate_gemini_api_cost(phase2_usage, "executive_summary_phase2", model="pro")
+                    elif "claude" in phase2_model.lower():
+                        # Claude fallback succeeded
+                        calculate_claude_api_cost(phase2_usage, "executive_summary_phase2")
+                    else:
+                        # Unknown or missing model (shouldn't happen, but log warning)
+                        LOG.warning(f"[{ticker}] Phase 2 cost tracking: Unknown model '{phase2_model}', skipping cost tracking")
 
                     enrichment_count = len(valid_enrichments_p2)
                     LOG.info(f"✅ [{ticker}] Phase 2 enrichment: {enrichment_count} bullets enriched ({phase2_prompt_tokens} prompt tokens, {phase2_completion_tokens} completion tokens, {phase2_generation_time_ms}ms)")

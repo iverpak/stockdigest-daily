@@ -951,27 +951,30 @@ async def score_industry_relevance_gemini(
         try:
             genai.configure(api_key=gemini_api_key)
 
-            geographic_context = f"\n**GEOGRAPHIC MARKETS:** {geographic_markets}" if geographic_markets else "\n**GEOGRAPHIC MARKETS:** (not specified)"
+            # Format prompt with f-string to replace {company_name}, {ticker}, {industry_keyword}
+            formatted_prompt = RELEVANCE_GATE_PROMPT.format(
+                company_name=company_name,
+                ticker=ticker,
+                industry_keyword=industry_keyword
+            )
 
-            user_content = f"""**TARGET COMPANY:** {company_name} ({ticker})
-**FUNDAMENTAL DRIVER KEYWORD:** {industry_keyword}{geographic_context}
+            user_content = f"""**Article Title:** {title}
 
-**ARTICLE TITLE:**
-{title}
+**Industry Keyword:** {industry_keyword}
 
-**ARTICLE CONTENT:**
-{scraped_content[:15000]}
+**Article Content:**
+{scraped_content[:8000]}
 
-Rate this article's relevance to the target company on a 0-10 scale and explain why in 1-2 sentences."""
+Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Return JSON only."""
 
             model = genai.GenerativeModel('gemini-2.5-flash')
             generation_config = {
                 "temperature": 0.0,
-                "max_output_tokens": 512,
+                "max_output_tokens": 1024,
                 "response_mime_type": "application/json"
             }
 
-            full_prompt = RELEVANCE_GATE_PROMPT + "\n\n" + user_content
+            full_prompt = formatted_prompt + "\n\n" + user_content
             response = model.generate_content(full_prompt, generation_config=generation_config)
 
             result = json.loads(response.text)
@@ -1022,18 +1025,21 @@ async def score_industry_relevance_claude(
 
     for attempt in range(max_retries + 1):
         try:
-            geographic_context = f"\n**GEOGRAPHIC MARKETS:** {geographic_markets}" if geographic_markets else "\n**GEOGRAPHIC MARKETS:** (not specified)"
+            # Format prompt with f-string to replace {company_name}, {ticker}, {industry_keyword}
+            formatted_prompt = RELEVANCE_GATE_PROMPT.format(
+                company_name=company_name,
+                ticker=ticker,
+                industry_keyword=industry_keyword
+            )
 
-            user_content = f"""**TARGET COMPANY:** {company_name} ({ticker})
-**FUNDAMENTAL DRIVER KEYWORD:** {industry_keyword}{geographic_context}
+            user_content = f"""**Article Title:** {title}
 
-**ARTICLE TITLE:**
-{title}
+**Industry Keyword:** {industry_keyword}
 
-**ARTICLE CONTENT:**
-{scraped_content[:15000]}
+**Article Content:**
+{scraped_content[:8000]}
 
-Rate this article's relevance to the target company on a 0-10 scale and explain why in 1-2 sentences."""
+Rate this article's relevance to {company_name} ({ticker}) on a 0-10 scale. Return JSON only."""
 
             headers = {
                 "x-api-key": anthropic_api_key,
@@ -1043,12 +1049,12 @@ Rate this article's relevance to the target company on a 0-10 scale and explain 
 
             data = {
                 "model": anthropic_model,
-                "max_tokens": 512,
+                "max_tokens": 1024,
                 "temperature": 0.0,
                 "system": [
                     {
                         "type": "text",
-                        "text": RELEVANCE_GATE_PROMPT,
+                        "text": formatted_prompt,
                         "cache_control": {"type": "ephemeral"}
                     }
                 ],

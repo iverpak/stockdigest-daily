@@ -19589,7 +19589,8 @@ def send_editorial_intelligence_report(
     hours: int = 24,
     tickers: List[str] = None,
     recipient_email: str = None,
-    bcc: str = None
+    bcc: str = None,
+    summary_date: date = None
 ) -> Dict:
     """
     Email #4 wrapper - SAME AS send_user_intelligence_report but uses editorial version.
@@ -19599,6 +19600,7 @@ def send_editorial_intelligence_report(
         tickers: List with one ticker
         recipient_email: Email recipient
         bcc: Optional BCC recipient (for admin monitoring during A/B testing)
+        summary_date: Optional date for summary (defaults to today)
 
     Returns: {"status": "sent" | "failed", "articles_analyzed": X, ...}
     """

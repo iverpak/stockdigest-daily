@@ -21831,9 +21831,9 @@ async def process_ticker_job(job: dict):
                                 anthropic_api_key=ANTHROPIC_API_KEY
                             )
 
-                        # Track Phase 3 cost
-                        if phase3_usage:
-                            calculate_claude_api_cost(phase3_usage, "executive_summary_phase3")
+                            # Track Phase 3 cost
+                            if phase3_usage:
+                                calculate_claude_api_cost(phase3_usage, "executive_summary_phase3")
 
                             if phase3_merged_json:
                                 # Update database with Phase 3 content
@@ -31731,9 +31731,9 @@ async def regenerate_email_api(request: Request):
                     anthropic_api_key=ANTHROPIC_API_KEY
                 )
 
-                        # Track Phase 3 cost
-                        if phase3_usage:
-                            calculate_claude_api_cost(phase3_usage, "executive_summary_phase3")
+                # Track Phase 3 cost
+                if phase3_usage:
+                    calculate_claude_api_cost(phase3_usage, "executive_summary_phase3")
 
                 if phase3_merged_json:
                     # Update database with Phase 3 content

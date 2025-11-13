@@ -267,35 +267,34 @@ def extract_text_from_responses(result: dict) -> str:
         return ""
 
 def parse_json_with_fallback(text: str, ticker: str = "") -> dict:
-    """Parse JSON with fallback extraction for malformed responses"""
+    """Parse JSON with fallback extraction for malformed responses
+
+    Uses unified JSON extraction with 4-tier fallback strategy to handle
+    all Claude/Gemini response formats including markdown wrappers.
+    """
     if not text:
         return {}
-    
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        # Try to extract first JSON object from text
-        import re
-        match = re.search(r'\{.*\}', text, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(0))
-            except Exception:
-                pass
-        
-        # Return minimum defaults
-        LOG.warning(f"Failed to parse JSON for {ticker}, using defaults")
-        return {
-            "ticker": ticker,
-            "company_name": ticker,
-            "industry_keywords": [],
-            "competitors": [],
-            "sector": "",
-            "industry": "",
-            "sub_industry": "",
-            "sector_profile": {"core_inputs": [], "core_channels": [], "core_geos": [], "benchmarks": []},
-            "aliases_brands_assets": {"aliases": [], "brands": [], "assets": []}
-        }
+
+    # Use unified JSON extraction utility (handles all response formats)
+    from modules.json_utils import extract_json_from_claude_response
+    result = extract_json_from_claude_response(text, ticker)
+
+    if result:
+        return result
+
+    # All extraction strategies failed - return minimum defaults
+    LOG.warning(f"Failed to parse JSON for {ticker}, using defaults")
+    return {
+        "ticker": ticker,
+        "company_name": ticker,
+        "industry_keywords": [],
+        "competitors": [],
+        "sector": "",
+        "industry": "",
+        "sub_industry": "",
+        "sector_profile": {"core_inputs": [], "core_channels": [], "core_geos": [], "benchmarks": []},
+        "aliases_brands_assets": {"aliases": [], "brands": [], "assets": []}
+    }
 
 @contextmanager
 def timeout_handler(seconds: int):

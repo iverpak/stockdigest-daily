@@ -1100,18 +1100,17 @@ Rate this article's relevance to {company_name} ({ticker}) fundamental drivers o
                             continue
                         return None
 
-                    # Parse JSON from response (only if validation passed)
+                    # Parse JSON from response using unified parser (4-tier fallback strategy)
                     # Wrap in try/except to catch JSON errors and retry properly
                     try:
                         LOG.info(f"[{ticker}] Attempting to parse Claude response ({len(response_text)} chars): {response_text[:200]}")
 
-                        # Extract JSON from markdown code blocks (Claude often wraps JSON in ```json ... ```)
-                        json_match = re.search(r'```json\s*(\{.*?\})\s*```', response_text, re.DOTALL)
-                        if json_match:
-                            response_text = json_match.group(1)
-                            LOG.info(f"[{ticker}] Extracted JSON from markdown wrapper")
+                        # Use shared JSON extraction utility (handles all response formats)
+                        from modules.json_utils import extract_json_from_claude_response
+                        result = extract_json_from_claude_response(response_text, ticker)
 
-                        result = json.loads(response_text)
+                        if not result:
+                            raise json.JSONDecodeError("Failed to extract JSON", response_text, 0)
                     except json.JSONDecodeError as e:
                         LOG.error(f"Claude returned non-JSON response for {ticker}: {e}")
                         LOG.error(f"Response text (first 500 chars): {response_text[:500]}")

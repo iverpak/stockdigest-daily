@@ -13400,7 +13400,14 @@ def extract_entities_from_summary(ticker: str, summary_text: str, filing_type: s
 
         model = genai.GenerativeModel('gemini-2.0-flash-exp')
 
-        user_prompt = f"""FILING TYPE: {filing_type}
+        # Combine system prompt with user input
+        full_prompt = f"""{GEMINI_ENTITY_EXTRACTION_PROMPT}
+
+═══════════════════════════════════════════════════════════════════════
+FILING TO ANALYZE
+═══════════════════════════════════════════════════════════════════════
+
+FILING TYPE: {filing_type}
 TICKER: {ticker}
 FISCAL YEAR: {fiscal_year}
 FISCAL QUARTER: {fiscal_quarter if fiscal_quarter else 'N/A'}
@@ -13408,12 +13415,12 @@ FISCAL QUARTER: {fiscal_quarter if fiscal_quarter else 'N/A'}
 SUMMARY TEXT:
 {summary_text[:15000]}
 
-Extract competitors, suppliers, and customers as specified above."""
+Please extract competitors, suppliers, and customers following the rules above."""
 
         LOG.info(f"[{ticker}] Extracting entities from {filing_type} summary using Gemini...")
 
         response = model.generate_content(
-            user_prompt,
+            full_prompt,
             generation_config=genai.types.GenerationConfig(
                 temperature=0.3,
                 max_output_tokens=4000

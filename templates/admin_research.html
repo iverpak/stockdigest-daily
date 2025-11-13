@@ -1266,9 +1266,11 @@
                     '10q': 'No 10-Q profiles generated yet. (Infrastructure ready, not wired to UI)',
                     'presentations': 'No investor presentations analyzed yet.',
                     'transcripts': 'No earnings transcripts generated yet. Create one in the "Earnings Transcripts" tab!',
-                    'press_releases': 'No press releases generated yet. Create one in the "Press Releases" tab!'
+                    'press_releases': 'No press releases generated yet. Create one in the "Press Releases" tab!',
+                    'entity_logs': 'No entity logs generated yet. Go to Settings → Regenerate Entity Logs to extract entities from existing filings.'
                 };
-                const colspan = (currentResearchType === '10k' || currentResearchType === '10q') ? '5' : '10';
+                const colspan = (currentResearchType === '10k' || currentResearchType === '10q') ? '6' :
+                               currentResearchType === 'entity_logs' ? '5' : '10';
                 tbody.innerHTML = `<tr><td colspan="${colspan}" style="padding: 40px; text-align: center; color: #6b7280;">${emptyMessages[currentResearchType]}</td></tr>`;
                 return;
             }
@@ -1487,8 +1489,8 @@
                 ai_provider: doc.ai_provider         // Include ai_provider for transcript disambiguation
             }).replace(/"/g, '&quot;');
 
-            // Hide Email button for Gemini transcripts (view-only for A/B testing)
-            const showEmailButton = !(type === 'transcripts' && doc.ai_provider === 'gemini');
+            // Hide Email button for Gemini transcripts (view-only for A/B testing) and entity logs (no email endpoint)
+            const showEmailButton = !(type === 'transcripts' && doc.ai_provider === 'gemini') && type !== 'entity_logs';
 
             return `
                 <div style="display: flex; gap: 3px; justify-content: center; flex-wrap: nowrap;">
@@ -1729,10 +1731,13 @@
                 } else if (docInfo.type === '8k_filings') {
                     endpoint = '/api/admin/delete-8k-filing';
                     body = { token, ticker: docInfo.ticker, accession_number: docInfo.accession_number, exhibit_number: docInfo.exhibit_number };
+                } else if (docInfo.type === 'entity_logs') {
+                    endpoint = `/api/admin/entity-log/${docInfo.ticker}`;
+                    body = { token };
                 }
 
                 const response = await fetch(endpoint, {
-                    method: 'POST',
+                    method: docInfo.type === 'entity_logs' ? 'DELETE' : 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body)
                 });

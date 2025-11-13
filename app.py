@@ -100,6 +100,8 @@ from modules.company_profiles import (
     extract_8k_html_content,  # Simplified: Single exhibit HTML extraction
     classify_exhibit_type     # NEW: Auto-classify exhibits (earnings_release, investor_presentation, etc.)
 )
+# Article summaries module (Nov 2025 - Gemini primary, Claude fallback)
+import modules.article_summaries as article_summaries
 
 # ============================================================================
 # AIOHTTP CONNECTION MANAGEMENT - Prevents Connection Exhaustion & Deadlock
@@ -7350,6 +7352,179 @@ Full Content: {scraped_content[:10000]}
 # Content character limit for AI summarization
 CONTENT_CHAR_LIMIT = 10000
 
+
+# ============================================================================
+# ARTICLE SUMMARY WRAPPERS (Nov 2025 - Gemini primary, Claude fallback)
+# ============================================================================
+
+async def generate_article_summary_company(company_name: str, ticker: str, title: str, scraped_content: str) -> Tuple[Optional[str], str]:
+    """Generate article summary for company article
+
+    Primary: Gemini Flash 2.5
+    Fallback: Claude Sonnet 4.5
+
+    Returns:
+        Tuple[Optional[str], str]: (summary_with_quality_json, status)
+    """
+    # Try Gemini first
+    if GEMINI_API_KEY:
+        summary, status = await article_summaries.generate_gemini_article_summary_company(
+            company_name, ticker, title, scraped_content, GEMINI_API_KEY
+        )
+        if status == "success":
+            # Gemini returns clean summary (quality already extracted in module)
+            return summary, status
+        LOG.warning(f"[{ticker}] Gemini company summary failed, falling back to Claude")
+
+    # Fallback to Claude
+    if ANTHROPIC_API_KEY:
+        session = get_http_session()
+        summary, status = await article_summaries.generate_claude_article_summary_company(
+            company_name, ticker, title, scraped_content,
+            ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_API_URL, session
+        )
+        if status == "success":
+            # Claude returns summary with {"quality": X.X} on last line
+            return summary, status
+
+    return None, "failed"
+
+
+async def generate_article_summary_competitor(competitor_name: str, competitor_ticker: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Tuple[Optional[str], str]:
+    """Generate article summary for competitor article"""
+    if GEMINI_API_KEY:
+        summary, status = await article_summaries.generate_gemini_article_summary_competitor(
+            competitor_name, competitor_ticker, target_company, target_ticker,
+            title, scraped_content, GEMINI_API_KEY
+        )
+        if status == "success":
+            return summary, status
+        LOG.warning(f"[{target_ticker}] Gemini competitor summary failed, falling back to Claude")
+
+    if ANTHROPIC_API_KEY:
+        session = get_http_session()
+        summary, status = await article_summaries.generate_claude_article_summary_competitor(
+            competitor_name, competitor_ticker, target_company, target_ticker,
+            title, scraped_content, ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_API_URL, session
+        )
+        if status == "success":
+            return summary, status
+
+    return None, "failed"
+
+
+async def generate_article_summary_upstream(value_chain_company: str, value_chain_ticker: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Tuple[Optional[str], str]:
+    """Generate article summary for upstream supplier article"""
+    if GEMINI_API_KEY:
+        summary, status = await article_summaries.generate_gemini_article_summary_upstream(
+            value_chain_company, value_chain_ticker, target_company, target_ticker,
+            title, scraped_content, GEMINI_API_KEY
+        )
+        if status == "success":
+            return summary, status
+        LOG.warning(f"[{target_ticker}] Gemini upstream summary failed, falling back to Claude")
+
+    if ANTHROPIC_API_KEY:
+        session = get_http_session()
+        summary, status = await article_summaries.generate_claude_article_summary_upstream(
+            value_chain_company, value_chain_ticker, target_company, target_ticker,
+            title, scraped_content, ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_API_URL, session
+        )
+        if status == "success":
+            return summary, status
+
+    return None, "failed"
+
+
+async def generate_article_summary_downstream(value_chain_company: str, value_chain_ticker: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Tuple[Optional[str], str]:
+    """Generate article summary for downstream customer article"""
+    if GEMINI_API_KEY:
+        summary, status = await article_summaries.generate_gemini_article_summary_downstream(
+            value_chain_company, value_chain_ticker, target_company, target_ticker,
+            title, scraped_content, GEMINI_API_KEY
+        )
+        if status == "success":
+            return summary, status
+        LOG.warning(f"[{target_ticker}] Gemini downstream summary failed, falling back to Claude")
+
+    if ANTHROPIC_API_KEY:
+        session = get_http_session()
+        summary, status = await article_summaries.generate_claude_article_summary_downstream(
+            value_chain_company, value_chain_ticker, target_company, target_ticker,
+            title, scraped_content, ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_API_URL, session
+        )
+        if status == "success":
+            return summary, status
+
+    return None, "failed"
+
+
+async def generate_article_summary_industry(industry_keyword: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Tuple[Optional[str], str]:
+    """Generate article summary for industry/fundamental driver article"""
+    # Get ticker config for geographic metadata
+    config = get_ticker_config(target_ticker) or {}
+    geographic_markets = (config.get('geographic_markets') or '').strip()
+
+    if GEMINI_API_KEY:
+        summary, status = await article_summaries.generate_gemini_article_summary_industry(
+            industry_keyword, target_company, target_ticker,
+            title, scraped_content, GEMINI_API_KEY, geographic_markets
+        )
+        if status == "success":
+            return summary, status
+        LOG.warning(f"[{target_ticker}] Gemini industry summary failed, falling back to Claude")
+
+    if ANTHROPIC_API_KEY:
+        session = get_http_session()
+        summary, status = await article_summaries.generate_claude_article_summary_industry(
+            industry_keyword, target_company, target_ticker,
+            title, scraped_content, ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_API_URL, session, geographic_markets
+        )
+        if status == "success":
+            return summary, status
+
+    return None, "failed"
+
+
+async def score_industry_article_relevance(ticker: str, company_name: str, industry_keyword: str, title: str, scraped_content: str, threshold: float = 5.0) -> Dict:
+    """Score industry article relevance using Gemini (primary) with Claude (fallback)
+
+    Returns: {"score": float, "reason": str, "is_rejected": bool, "provider": str}
+    """
+    # Get ticker config for geographic metadata
+    config = get_ticker_config(ticker) or {}
+    geographic_markets = (config.get('geographic_markets') or '').strip()
+
+    # Try Gemini first
+    if GEMINI_API_KEY:
+        result = await article_summaries.score_industry_relevance_gemini(
+            ticker, company_name, industry_keyword,
+            title, scraped_content, GEMINI_API_KEY, geographic_markets
+        )
+        if result:
+            result["is_rejected"] = result["score"] <= threshold
+            return result
+        LOG.warning(f"[{ticker}] Gemini relevance gate failed, falling back to Claude")
+
+    # Fallback to Claude
+    if ANTHROPIC_API_KEY:
+        session = get_http_session()
+        result = await article_summaries.score_industry_relevance_claude(
+            ticker, company_name, industry_keyword,
+            title, scraped_content, ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_API_URL, session, geographic_markets
+        )
+        if result:
+            result["is_rejected"] = result["score"] <= threshold
+            return result
+
+    # If both failed
+    return {"score": 0.0, "reason": "Both Gemini and Claude failed", "is_rejected": True, "provider": "none"}
+
+
+# ============================================================================
+# OLD FUNCTIONS BELOW (TO BE DELETED)
+# ============================================================================
+
 async def generate_claude_article_summary(company_name: str, ticker: str, title: str, scraped_content: str) -> Tuple[Optional[str], str]:
     """Generate Claude summary for company article - POV agnostic
 
@@ -10648,32 +10823,37 @@ Extract fundamental driver facts (commodity prices, volume metrics, policy chang
 async def generate_claude_summary(scraped_content: str, title: str, ticker: str, category: str,
                                   article_metadata: dict, target_company_name: str,
                                   competitor_name_cache: dict) -> Tuple[Optional[str], str]:
-    """Route to appropriate Claude function based on category
+    """Route to appropriate summary function based on category (Gemini primary, Claude fallback)
 
     Returns:
         Tuple[Optional[str], str]: (summary, status) where status is:
             - "success": Summary generated successfully
-            - "filtered": Article intentionally skipped (retail analysis)
             - "failed": API error or processing failure
     """
     if category == "company":
-        return await generate_claude_article_summary(target_company_name, ticker, title, scraped_content)
+        return await generate_article_summary_company(target_company_name, ticker, title, scraped_content)
     elif category == "competitor":
         competitor_ticker = article_metadata.get("competitor_ticker")
         if not competitor_ticker:
             return None, "failed"
         competitor_name = competitor_name_cache.get(competitor_ticker, competitor_ticker)
-        return await generate_claude_competitor_article_summary(competitor_name, competitor_ticker, target_company_name, ticker, title, scraped_content)
+        return await generate_article_summary_competitor(competitor_name, competitor_ticker, target_company_name, ticker, title, scraped_content)
     elif category == "value_chain":
         value_chain_ticker = article_metadata.get("competitor_ticker")  # Reused field
         value_chain_type = article_metadata.get("value_chain_type")  # upstream or downstream
         if not value_chain_ticker or not value_chain_type:
             return None, "failed"
         value_chain_name = competitor_name_cache.get(value_chain_ticker, value_chain_ticker)
-        return await generate_claude_value_chain_article_summary(value_chain_name, value_chain_ticker, value_chain_type, target_company_name, ticker, title, scraped_content)
+        # Call appropriate value chain function
+        if value_chain_type == "upstream":
+            return await generate_article_summary_upstream(value_chain_name, value_chain_ticker, target_company_name, ticker, title, scraped_content)
+        elif value_chain_type == "downstream":
+            return await generate_article_summary_downstream(value_chain_name, value_chain_ticker, target_company_name, ticker, title, scraped_content)
+        else:
+            return None, "failed"
     elif category == "industry":
         industry_keyword = article_metadata.get("search_keyword", "this industry")
-        return await generate_claude_industry_article_summary(industry_keyword, target_company_name, ticker, title, scraped_content)
+        return await generate_article_summary_industry(industry_keyword, target_company_name, ticker, title, scraped_content)
     return None, "failed"
 
 

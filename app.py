@@ -7697,9 +7697,9 @@ async def generate_ai_summary_with_fallback(scraped_content: str, title: str, ti
                 article_metadata, target_company_name, competitor_name_cache
             )
 
-            if provider in ["Gemini", "Sonnet"]:
-                # Claude succeeded - return immediately
-                LOG.info(f"[{ticker}] ✅ Claude generated summary successfully")
+            if status in ["Gemini", "Sonnet"]:
+                # Gemini or Claude succeeded - return immediately
+                LOG.info(f"[{ticker}] ✅ {status} generated summary successfully")
                 return summary, "Claude"
             elif status == "filtered":
                 # Claude intentionally skipped (retail analysis) - DO NOT fallback to OpenAI
@@ -7719,7 +7719,7 @@ async def generate_ai_summary_with_fallback(scraped_content: str, title: str, ti
                 article_metadata, target_company_name, competitor_name_cache
             )
 
-            if provider in ["Gemini", "Sonnet"]:
+            if status == "success":
                 LOG.info(f"[{ticker}] ✅ OpenAI generated summary successfully")
                 return summary, "OpenAI"
             elif status == "filtered":

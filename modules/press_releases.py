@@ -14,7 +14,7 @@ LOG = logging.getLogger(__name__)
 def save_press_release_to_database(
     ticker: str,
     company_name: str,
-    report_date: str,           # YYYY-MM-DD
+    report_date: str,           # YYYY-MM-DD HH:MM:SS (full datetime)
     pr_title: str,
     summary_text: str,
     ai_provider: str,
@@ -32,7 +32,7 @@ def save_press_release_to_database(
     Args:
         ticker: Stock ticker
         company_name: Company name
-        report_date: Date only (YYYY-MM-DD)
+        report_date: Full datetime string (YYYY-MM-DD HH:MM:SS) from FMP API
         pr_title: Press release title (max 200 chars)
         summary_text: AI-generated summary
         ai_provider: 'claude' or 'gemini'
@@ -79,13 +79,13 @@ def save_press_release_to_database(
 
 def db_check_press_release_exists(ticker: str, report_date: str, pr_title: str) -> bool:
     """
-    Check if exact press release exists (by ticker + date + title).
+    Check if exact press release exists (by ticker + datetime + title).
 
     Used by cron to avoid duplicate processing.
 
     Args:
         ticker: Stock ticker
-        report_date: Date only (YYYY-MM-DD)
+        report_date: Full datetime string (YYYY-MM-DD HH:MM:SS)
         pr_title: Press release title
 
     Returns:
@@ -137,6 +137,41 @@ def db_has_any_press_releases_for_ticker(ticker: str) -> bool:
         return False
 
 
+def db_get_latest_press_release_datetime(ticker: str) -> Optional[str]:
+    """
+    Get the datetime of the most recent press release for a ticker.
+
+    Used by cron for datetime-aware filtering (only process PRs newer than this).
+
+    Args:
+        ticker: Stock ticker
+
+    Returns:
+        Full datetime string (YYYY-MM-DD HH:MM:SS) or None if no PRs exist
+    """
+    try:
+        # Import here to avoid circular dependency
+        from app import db
+
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT report_date
+                FROM press_releases
+                WHERE ticker = %s
+                ORDER BY report_date DESC
+                LIMIT 1
+            """, (ticker,))
+            result = cur.fetchone()
+
+            if result and result['report_date']:
+                # Convert datetime object to string format
+                return result['report_date'].strftime('%Y-%m-%d %H:%M:%S')
+            return None
+    except Exception as e:
+        LOG.error(f"Error getting latest press release datetime for {ticker}: {e}")
+        return None
+
+
 def db_get_all_press_releases_for_ticker(ticker: str) -> List[Dict]:
     """
     Get all press releases for a ticker (for admin UI display).
@@ -145,7 +180,7 @@ def db_get_all_press_releases_for_ticker(ticker: str) -> List[Dict]:
         ticker: Stock ticker
 
     Returns:
-        List of press release dicts (sorted by date DESC)
+        List of press release dicts (sorted by datetime DESC)
     """
     try:
         # Import here to avoid circular dependency

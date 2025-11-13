@@ -218,34 +218,45 @@ def fetch_fmp_press_release_by_date_and_title(
     fmp_api_key: str
 ) -> Optional[Dict]:
     """
-    Fetch specific press release by date AND title.
+    Fetch specific press release by full datetime AND title.
 
-    Handles multiple PRs per day (e.g., 4 MSFT PRs on 2025-10-29).
-    Used by ad-hoc generation to select exact PR when multiple exist same day.
+    Handles multiple PRs per day with same title (rare but possible).
+    Used by worker to fetch exact PR content based on datetime + title.
 
     Args:
         ticker: Stock ticker
-        target_date: Date in format 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS'
+        target_date: Full datetime 'YYYY-MM-DD HH:MM:SS' (from job config)
         target_title: Press release title (exact match)
         fmp_api_key: FMP API key
 
     Returns:
-        Exact press release matching date AND title, or None if not found
+        Exact press release matching datetime AND title, or None if not found
     """
     releases = fetch_fmp_press_releases(ticker, fmp_api_key, limit=50)
 
-    # Normalize target date to YYYY-MM-DD (strip time if present)
-    target_date_normalized = target_date.split()[0] if target_date else ''
+    # Normalize target datetime (strip microseconds if present, handle both formats)
+    # Handles: "2025-11-13 10:00:00" or "2025-11-13 10:00:00.123456"
+    target_datetime = target_date.split('.')[0] if target_date else ''
 
     for release in releases:
-        # Normalize FMP date to YYYY-MM-DD for comparison
-        release_date = release.get('date', '')
-        release_date_normalized = release_date.split()[0] if release_date else ''
+        # Get FMP datetime (already in 'YYYY-MM-DD HH:MM:SS' format)
+        release_datetime = release.get('date', '')
+        release_datetime_normalized = release_datetime.split('.')[0] if release_datetime else ''
         release_title = release.get('title', '')
 
-        # Match by BOTH date AND title (exact match)
-        if release_date_normalized == target_date_normalized and release_title == target_title:
+        # Match by BOTH full datetime AND title (exact match)
+        if release_datetime_normalized == target_datetime and release_title == target_title:
             return release  # Exact match found ✅
+
+    # Fallback: Try matching by date only (backward compatibility with old job configs)
+    target_date_only = target_datetime.split()[0] if target_datetime else ''
+    for release in releases:
+        release_date_only = release.get('date', '').split()[0] if release.get('date') else ''
+        release_title = release.get('title', '')
+
+        if release_date_only == target_date_only and release_title == target_title:
+            LOG.warning(f"Press release matched by date only (no time) for {ticker}: {target_title[:50]}...")
+            return release  # Fallback match ⚠️
 
     LOG.warning(f"Press release not found for {ticker} on {target_date} with title: {target_title[:50]}...")
     return None

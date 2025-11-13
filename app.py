@@ -19144,7 +19144,7 @@ async def process_press_release_phase(job: dict):
         # Start heartbeat thread
         start_heartbeat_thread(job_id)
 
-        pr_date = config.get('pr_date')  # String: '2024-10-25'
+        pr_date = config.get('pr_date')  # String: '2024-10-25 14:00:00' (full datetime from FMP)
         pr_title = config.get('pr_title')  # String: Full press release title
 
         # Progress: 10% - Fetching press release from FMP
@@ -28848,66 +28848,134 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
         except Exception as e:
             LOG.error(f"[{ticker}] Transcript check failed: {e}")
 
-        # === PRESS RELEASES CHECK (Silent Initialization) ===
+        # === PRESS RELEASES CHECK (Datetime-Aware Filtering) ===
         try:
             pr_response = await validate_ticker_for_research(ticker=ticker, type="press_release")
             if pr_response.get("valid"):
                 releases = pr_response.get("available_releases", [])
 
                 # Detect first check: Does this ticker have ANY press releases in DB?
-                from modules.press_releases import db_has_any_press_releases_for_ticker, db_check_press_release_exists
+                from modules.press_releases import (
+                    db_has_any_press_releases_for_ticker,
+                    db_check_press_release_exists,
+                    db_get_latest_press_release_datetime
+                )
                 is_first_check = not db_has_any_press_releases_for_ticker(ticker)
 
                 if is_first_check:
-                    LOG.info(f"[{ticker}] 🆕 First press release check - will initialize DB silently (no email)")
+                    # First check: Initialize DB with ONLY the latest (first) PR silently
+                    LOG.info(f"[{ticker}] 🆕 First press release check - will initialize DB with latest PR only (no email)")
 
-                # Always check last 4 releases (handles edge case of multiple PRs in same hour)
-                releases_to_check = releases[:4]
+                    if releases:
+                        first_pr = releases[0]
+                        pr_datetime = first_pr.get('date', '')  # Full datetime: "2025-11-13 10:00:00"
+                        pr_title = first_pr.get('title', 'Press Release')
 
-                for pr in releases_to_check:
-                    pr_date = pr.get('date', '').split()[0]  # Extract YYYY-MM-DD
-                    pr_title = pr.get('title', 'Press Release')
+                        if pr_datetime and pr_title:
+                            # Check if already exists (safety check)
+                            exists = db_check_press_release_exists(ticker, pr_datetime, pr_title)
+                            if not exists:
+                                LOG.info(f"[{ticker}] 💾 Initializing DB with latest PR from {pr_datetime} (no email): {pr_title[:60]}...")
 
-                    if pr_date and pr_title:
-                        # Check by date + title (exact match)
-                        exists = db_check_press_release_exists(ticker, pr_date, pr_title)
-                        if not exists:
-                            if is_first_check:
-                                # Silent initialization - save to DB but don't send email
-                                LOG.info(f"[{ticker}] 💾 Initializing DB with PR from {pr_date} (no email): {pr_title[:60]}...")
-                                send_email_flag = False
+                                # Queue job for generation (silent)
+                                batch_id = str(uuid.uuid4())
+                                job_config = {
+                                    "ticker": ticker,
+                                    "report_type": "press_release",
+                                    "pr_date": pr_datetime,  # Store full datetime
+                                    "pr_title": pr_title,
+                                    "send_email": False  # Silent initialization
+                                }
+
+                                with db() as conn, conn.cursor() as cur:
+                                    cur.execute("""
+                                        INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
+                                        VALUES (%s, %s, 1, %s)
+                                    """, (batch_id, 'processing', json.dumps(job_config)))
+
+                                    cur.execute("""
+                                        INSERT INTO ticker_processing_jobs (
+                                            batch_id, ticker, status, phase, progress, config
+                                        )
+                                        VALUES (%s, %s, %s, %s, 0, %s)
+                                        RETURNING job_id
+                                    """, (batch_id, ticker, 'queued', 'press_release_generation', json.dumps(job_config)))
+
+                                    conn.commit()
+
+                                new_items["press_release"] += 1
                             else:
-                                # Truly new press release - send email
-                                LOG.info(f"[{ticker}] 🆕 NEW Press Release: {pr_title[:60]}... ({pr_date})")
-                                send_email_flag = True
+                                LOG.info(f"[{ticker}] ✅ Latest PR already in DB, skipping initialization")
+                else:
+                    # Subsequent checks: Process ALL PRs newer than latest in DB
+                    latest_db_datetime_str = db_get_latest_press_release_datetime(ticker)
 
-                            # Queue job for generation
-                            batch_id = str(uuid.uuid4())
-                            job_config = {
-                                "ticker": ticker,
-                                "report_type": "press_release",
-                                "pr_date": pr_date,
-                                "pr_title": pr_title,
-                                "send_email": send_email_flag  # Dynamic based on first check
-                            }
+                    if latest_db_datetime_str:
+                        LOG.info(f"[{ticker}] 🔍 Checking for PRs newer than {latest_db_datetime_str}")
 
-                            with db() as conn, conn.cursor() as cur:
-                                cur.execute("""
-                                    INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
-                                    VALUES (%s, %s, 1, %s)
-                                """, (batch_id, 'processing', json.dumps(job_config)))
+                        # Parse DB datetime string to datetime object for accurate comparison
+                        try:
+                            latest_db_datetime = datetime.strptime(latest_db_datetime_str, '%Y-%m-%d %H:%M:%S')
+                        except ValueError:
+                            LOG.error(f"[{ticker}] Invalid datetime format from DB: {latest_db_datetime_str}")
+                            latest_db_datetime = None
 
-                                cur.execute("""
-                                    INSERT INTO ticker_processing_jobs (
-                                        batch_id, ticker, status, phase, progress, config
-                                    )
-                                    VALUES (%s, %s, %s, %s, 0, %s)
-                                    RETURNING job_id
-                                """, (batch_id, ticker, 'queued', 'press_release_generation', json.dumps(job_config)))
+                        if not latest_db_datetime:
+                            LOG.warning(f"[{ticker}] Could not parse latest DB datetime, skipping check")
+                        else:
+                            # Check ALL releases from FMP (not just first 4)
+                            for pr in releases:
+                                pr_datetime_str = pr.get('date', '')  # Full datetime: "2025-11-13 14:00:00"
+                                pr_title = pr.get('title', 'Press Release')
 
-                                conn.commit()
+                                if pr_datetime_str and pr_title:
+                                    # Parse FMP datetime string to datetime object
+                                    try:
+                                        pr_datetime = datetime.strptime(pr_datetime_str, '%Y-%m-%d %H:%M:%S')
+                                    except ValueError:
+                                        LOG.warning(f"[{ticker}] Invalid datetime format from FMP: {pr_datetime_str}, skipping")
+                                        continue
 
-                            new_items["press_release"] += 1
+                                    # Only process PRs NEWER than latest in DB (datetime object comparison)
+                                    if pr_datetime > latest_db_datetime:
+                                        # Check if already exists (dedup protection)
+                                        exists = db_check_press_release_exists(ticker, pr_datetime_str, pr_title)
+                                        if not exists:
+                                            LOG.info(f"[{ticker}] 🆕 NEW Press Release: {pr_title[:60]}... ({pr_datetime_str})")
+
+                                            # Queue job for generation (with email)
+                                            batch_id = str(uuid.uuid4())
+                                            job_config = {
+                                                "ticker": ticker,
+                                                "report_type": "press_release",
+                                                "pr_date": pr_datetime_str,  # Store full datetime string
+                                                "pr_title": pr_title,
+                                                "send_email": True  # Send email for new PRs
+                                            }
+
+                                            with db() as conn, conn.cursor() as cur:
+                                                cur.execute("""
+                                                    INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
+                                                    VALUES (%s, %s, 1, %s)
+                                                """, (batch_id, 'processing', json.dumps(job_config)))
+
+                                                cur.execute("""
+                                                    INSERT INTO ticker_processing_jobs (
+                                                        batch_id, ticker, status, phase, progress, config
+                                                    )
+                                                    VALUES (%s, %s, %s, %s, 0, %s)
+                                                    RETURNING job_id
+                                                """, (batch_id, ticker, 'queued', 'press_release_generation', json.dumps(job_config)))
+
+                                                conn.commit()
+
+                                            new_items["press_release"] += 1
+                                    else:
+                                        # FMP sorted newest first, rest are ALL older - stop processing
+                                        LOG.info(f"[{ticker}] ⏭️ Reached PRs older than DB ({pr_datetime_str} <= {latest_db_datetime_str}), stopping")
+                                        break
+                    else:
+                        LOG.warning(f"[{ticker}] ⚠️ DB has PRs but couldn't get latest datetime, skipping check")
         except Exception as e:
             LOG.error(f"[{ticker}] Press release check failed: {e}")
 

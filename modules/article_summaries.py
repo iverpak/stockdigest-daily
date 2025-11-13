@@ -969,7 +969,7 @@ Rate this article's relevance to {company_name} ({ticker}) fundamental drivers o
             model = genai.GenerativeModel('gemini-2.5-flash')
             generation_config = {
                 "temperature": 0.0,
-                "max_output_tokens": 2048,  # Increased from 512 to prevent MAX_TOKENS errors
+                "max_output_tokens": 8192,  # Match article summaries (working config)
                 "response_mime_type": "application/json"
             }
 
@@ -990,6 +990,32 @@ Rate this article's relevance to {company_name} ({ticker}) fundamental drivers o
                 return None
 
         except Exception as e:
+            # DIAGNOSTIC LOGGING: Capture partial Gemini response for debugging
+            try:
+                if 'response' in locals() and hasattr(response, 'candidates'):
+                    LOG.error(f"[{ticker}] Gemini diagnostic info:")
+                    LOG.error(f"  Number of candidates: {len(response.candidates) if response.candidates else 0}")
+
+                    if response.candidates and len(response.candidates) > 0:
+                        candidate = response.candidates[0]
+                        LOG.error(f"  Finish reason: {candidate.finish_reason} (2=MAX_TOKENS, 3=SAFETY, 1=STOP)")
+
+                        if hasattr(candidate, 'content') and candidate.content and hasattr(candidate.content, 'parts'):
+                            if candidate.content.parts:
+                                partial_text = candidate.content.parts[0].text if hasattr(candidate.content.parts[0], 'text') else "No text attribute"
+                                LOG.error(f"  Partial output length: {len(partial_text)} chars")
+                                LOG.error(f"  Partial output (first 1000 chars): {partial_text[:1000]}")
+                                LOG.error(f"  Partial output (last 500 chars): {partial_text[-500:]}")
+                            else:
+                                LOG.error(f"  Content parts is empty")
+                        else:
+                            LOG.error(f"  No content.parts available")
+
+                    if hasattr(response, 'prompt_feedback'):
+                        LOG.error(f"  Prompt feedback: {response.prompt_feedback}")
+            except Exception as diag_error:
+                LOG.error(f"[{ticker}] Failed to extract diagnostic info: {diag_error}")
+
             if attempt < max_retries and should_retry(e):
                 wait_time = 2 ** attempt
                 LOG.warning(f"Gemini relevance gate retry {attempt + 1} for {ticker}: {e}")

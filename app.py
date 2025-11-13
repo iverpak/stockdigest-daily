@@ -35122,6 +35122,9 @@ async def review_all_quality_api(request: Request):
         # Fetch available filings (10-K, 10-Q, Transcript)
         filings = _fetch_available_filings(ticker, db)
 
+        # Fetch ticker metadata for validation
+        ticker_metadata = get_ticker_config(ticker)
+
         phase2_result = None
         if filings:
             LOG.info(f"[{ticker}] Found {len(filings)} filing(s) for Phase 2 verification: {list(filings.keys())}")
@@ -35130,11 +35133,12 @@ async def review_all_quality_api(request: Request):
                 ticker=ticker,
                 executive_summary=executive_summary,
                 filings=filings,
-                gemini_api_key=GEMINI_API_KEY
+                gemini_api_key=GEMINI_API_KEY,
+                ticker_metadata=ticker_metadata  # NEW: Pass ticker metadata
             )
 
             if phase2_result:
-                LOG.info(f"✅ [{ticker}] Phase 2 (filings) review complete")
+                LOG.info(f"✅ [{ticker}] Phase 2 (filings + metadata) review complete")
             else:
                 LOG.warning(f"⚠️ [{ticker}] Phase 2 review failed, continuing with Phase 1 only")
         else:

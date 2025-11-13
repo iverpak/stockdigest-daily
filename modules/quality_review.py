@@ -820,10 +820,16 @@ def generate_bullet_centric_review_email_html(
             bullet_id = ctx.get("bullet_id", "")
             key = f"{section}|{bullet_id}"
             p2_contexts_by_key[key] = ctx
+
+        # Extract metadata validation if present
+        p2_metadata_validation = phase2_result.get("metadata_validation")
+        p2_metadata_stats = p2_summary.get("metadata_stats")
     else:
         phase2_pass = True  # No Phase 2 = auto-pass
         p2_contexts_by_key = {}
         p2_completeness = {}
+        p2_metadata_validation = None
+        p2_metadata_stats = None
 
     # Phase 3 stats (if available)
     phase3_skipped = phase3_result is None
@@ -1076,6 +1082,157 @@ def generate_bullet_centric_review_email_html(
             </div>'''
 
         html += '''
+        </div>
+'''
+
+    # Metadata Validation section (if available)
+    if p2_metadata_validation and p2_metadata_stats:
+        # Calculate totals
+        comp_total = p2_metadata_stats['competitors_pass'] + p2_metadata_stats['competitors_fail']
+        up_total = p2_metadata_stats['upstream_pass'] + p2_metadata_stats['upstream_fail']
+        down_total = p2_metadata_stats['downstream_pass'] + p2_metadata_stats['downstream_fail']
+        kw_total = p2_metadata_stats['keywords_pass'] + p2_metadata_stats['keywords_fail']
+
+        # Determine overall pass/fail
+        total_fail = p2_metadata_stats['competitors_fail'] + p2_metadata_stats['upstream_fail'] + p2_metadata_stats['downstream_fail'] + p2_metadata_stats['keywords_fail']
+        metadata_pass = total_fail == 0
+        metadata_badge = f'<span class="badge {"pass" if metadata_pass else "fail"}">{"✅ PASS" if metadata_pass else "❌ FAIL"}</span>'
+
+        html += f'''
+        <div class="phase-summary">
+            <h3>🏷️ METADATA VALIDATION {metadata_badge}</h3>
+            <div class="stats">
+                <div class="stat">
+                    <div class="stat-label">Competitors</div>
+                    <div class="stat-value" style="color: {'#10b981' if p2_metadata_stats['competitors_fail'] == 0 else '#ef4444'};">{p2_metadata_stats['competitors_pass']}/{comp_total} ✅</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">Upstream</div>
+                    <div class="stat-value" style="color: {'#10b981' if p2_metadata_stats['upstream_fail'] == 0 else '#ef4444'};">{p2_metadata_stats['upstream_pass']}/{up_total} ✅</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">Downstream</div>
+                    <div class="stat-value" style="color: {'#10b981' if p2_metadata_stats['downstream_fail'] == 0 else '#ef4444'};">{p2_metadata_stats['downstream_pass']}/{down_total} ✅</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">Keywords</div>
+                    <div class="stat-value" style="color: {'#10b981' if p2_metadata_stats['keywords_fail'] == 0 else '#ef4444'};">{p2_metadata_stats['keywords_pass']}/{kw_total} ✅</div>
+                </div>
+            </div>
+
+            <!-- Detailed Results -->
+            <div style="margin-top: 20px;">'''
+
+        # Render Competitors
+        if comp_total > 0:
+            html += '''
+                <div class="stat-label" style="margin-top: 15px;">COMPETITORS</div>'''
+            for comp in p2_metadata_validation.get("competitors", []):
+                entity = comp.get("entity", "")
+                status = comp.get("status", "")
+                reason = comp.get("reason", "")
+                suggestion = comp.get("suggestion")
+
+                status_class = "accurate" if status == "pass" else "issue"
+                status_badge = f'<span class="badge {status_class}">{"✅ PASS" if status == "pass" else "❌ FAIL"}</span>'
+
+                html += f'''
+                <div class="review-item {status_class}">
+                    <div class="review-meta">{status_badge}</div>
+                    <div class="review-text"><strong>{entity}</strong>: {reason}</div>'''
+
+                if suggestion and status == "fail":
+                    html += f'''
+                    <div class="evidence">
+                        <strong>Suggestion:</strong> Replace with <strong>{suggestion}</strong>
+                    </div>'''
+
+                html += '''
+                </div>'''
+
+        # Render Upstream
+        if up_total > 0:
+            html += '''
+                <div class="stat-label" style="margin-top: 15px;">UPSTREAM</div>'''
+            for up in p2_metadata_validation.get("upstream", []):
+                entity = up.get("entity", "")
+                status = up.get("status", "")
+                reason = up.get("reason", "")
+                suggestion = up.get("suggestion")
+
+                status_class = "accurate" if status == "pass" else "issue"
+                status_badge = f'<span class="badge {status_class}">{"✅ PASS" if status == "pass" else "❌ FAIL"}</span>'
+
+                html += f'''
+                <div class="review-item {status_class}">
+                    <div class="review-meta">{status_badge}</div>
+                    <div class="review-text"><strong>{entity}</strong>: {reason}</div>'''
+
+                if suggestion and status == "fail":
+                    html += f'''
+                    <div class="evidence">
+                        <strong>Suggestion:</strong> Replace with <strong>{suggestion}</strong>
+                    </div>'''
+
+                html += '''
+                </div>'''
+
+        # Render Downstream
+        if down_total > 0:
+            html += '''
+                <div class="stat-label" style="margin-top: 15px;">DOWNSTREAM</div>'''
+            for down in p2_metadata_validation.get("downstream", []):
+                entity = down.get("entity", "")
+                status = down.get("status", "")
+                reason = down.get("reason", "")
+                suggestion = down.get("suggestion")
+
+                status_class = "accurate" if status == "pass" else "issue"
+                status_badge = f'<span class="badge {status_class}">{"✅ PASS" if status == "pass" else "❌ FAIL"}</span>'
+
+                html += f'''
+                <div class="review-item {status_class}">
+                    <div class="review-meta">{status_badge}</div>
+                    <div class="review-text"><strong>{entity}</strong>: {reason}</div>'''
+
+                if suggestion and status == "fail":
+                    html += f'''
+                    <div class="evidence">
+                        <strong>Suggestion:</strong> Replace with <strong>{suggestion}</strong>
+                    </div>'''
+
+                html += '''
+                </div>'''
+
+        # Render Industry Keywords
+        if kw_total > 0:
+            html += '''
+                <div class="stat-label" style="margin-top: 15px;">INDUSTRY KEYWORDS</div>'''
+            for kw in p2_metadata_validation.get("industry_keywords", []):
+                keyword = kw.get("keyword", "")
+                status = kw.get("status", "")
+                reason = kw.get("reason", "")
+                suggestion = kw.get("suggestion")
+
+                status_class = "accurate" if status == "pass" else "issue"
+                status_badge = f'<span class="badge {status_class}">{"✅ PASS" if status == "pass" else "❌ FAIL"}</span>'
+
+                html += f'''
+                <div class="review-item {status_class}">
+                    <div class="review-meta">{status_badge}</div>
+                    <div class="review-text"><strong>{keyword}</strong>: {reason}</div>'''
+
+                if suggestion and status == "fail":
+                    html += f'''
+                    <div class="evidence">
+                        <strong>Suggestion:</strong> Replace with <strong>{suggestion}</strong>
+                    </div>'''
+
+                html += '''
+                </div>'''
+
+        html += '''
+            </div>
         </div>
 '''
 

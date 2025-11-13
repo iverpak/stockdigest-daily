@@ -1589,7 +1589,9 @@ SECTION SCOPE: Financial and operational metrics that articles explicitly report
 
 LENGTH LIMIT: 2-4 bullets max
 
-SOURCE REQUIREMENT: [COMPANY] articles only - these must be company-reported metrics
+SOURCE REQUIREMENT: [COMPANY] articles only - TARGET COMPANY metrics exclusively
+
+CRITICAL: Financial results from [COMPETITOR], [UPSTREAM], or [DOWNSTREAM] entities belong in Competitive/Industry Dynamics, NOT here. This section is exclusively for the target company's own financial and operational performance.
 
 ARTICLE REQUIREMENT: 
 Articles must explicitly report the metrics. Unlike other sections, "announcement" framing not required—articles discussing historical results, current metrics, or guidance updates all qualify.
@@ -1631,7 +1633,9 @@ WHAT NOT TO INCLUDE:
 
 Do not include:
 - Bare numbers without context (always add direction, magnitude, or comparison)
-- Competitor financial data (→ Competitive Dynamics if relevant)
+- [COMPETITOR] financial data (→ Competitive/Industry Dynamics)
+- [UPSTREAM] financial data (→ Competitive/Industry Dynamics)
+- [DOWNSTREAM] financial data (→ Competitive/Industry Dynamics)
 - Detailed technical analysis with multiple moving averages (unless exceptional volatility)
 - Metrics articles didn't explicitly report (Phase 2 will pull from filings)
 
@@ -1925,19 +1929,19 @@ If article meets NONE of these tests → EXCLUDE entirely.
 WHAT TO INCLUDE (if relevance test passed):
 
 Include if articles reported AND relevance test passed:
+- Competitor financial results: Revenue, earnings, margins, subscriber trends, operational KPIs (provides competitive benchmark data)
 - Competitor M&A: Transaction details, amounts, strategic rationale
 - Industry regulation: New rules, effective dates, affected parties
 - Technology announcements: Product launches, specs (when compared to the target company)
 - Market data: Pricing changes, capacity additions, production figures
 - Executive commentary: Quotes from competitor earnings calls/statements
 - Industry trends: Market growth rates, adoption curves, demand patterns
-- Upstream suppliers: Supply capacity, pricing, disruptions, financial health, technology
-- Downstream customers: Order trends, demand signals, expansion plans, financial health, strategic shifts
+- Upstream suppliers: Supply capacity, pricing, disruptions, financial health, financial results, technology
+- Downstream customers: Order trends, demand signals, expansion plans, financial health, financial results, strategic shifts
 
 WHAT TO EXCLUDE:
 
 Do not include even if articles mention:
-- Routine financial results (unless articles provide comparative metrics with the target company)
 - Detailed stock price technical levels (support/resistance/moving averages)
 - Dividend dates, ex-dividend dates, routine corporate actions
 - Internal HR changes (non-C-suite personnel moves)

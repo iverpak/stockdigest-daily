@@ -181,35 +181,164 @@ def _build_phase1_user_content(
     return user_content
 
 
-def generate_executive_summary_phase1(
+def _generate_phase1_gemini(
+    ticker: str,
+    categories: Dict[str, List[Dict]],
+    config: Dict,
+    gemini_api_key: str
+) -> Optional[Dict]:
+    """
+    Generate Phase 1 executive summary using Gemini 2.5 Pro (primary).
+
+    Args:
+        ticker: Stock ticker
+        categories: Dict with keys: company, industry, competitor
+        config: Ticker configuration dict
+        gemini_api_key: Google Gemini API key
+
+    Returns:
+        dict with:
+            json_output: Full Phase 1 JSON structure
+            model_used: "gemini-2.5-pro"
+            prompt_tokens: int
+            completion_tokens: int
+            generation_time_ms: int
+        Or None if failed
+    """
+    import google.generativeai as genai
+
+    try:
+        # Configure Gemini
+        genai.configure(api_key=gemini_api_key)
+
+        # Build system prompt (static, cacheable)
+        system_prompt = get_phase1_system_prompt(ticker)
+
+        # Build user content from articles
+        user_content = _build_phase1_user_content(ticker, categories, config)
+
+        # Estimate token counts for logging
+        system_tokens_est = len(system_prompt) // 4
+        user_tokens_est = len(user_content) // 4
+        total_tokens_est = system_tokens_est + user_tokens_est
+        LOG.info(f"[{ticker}] Phase 1 Gemini prompt size: system={len(system_prompt)} chars (~{system_tokens_est} tokens), user={len(user_content)} chars (~{user_tokens_est} tokens), total=~{total_tokens_est} tokens")
+
+        # Create Gemini model with system instruction
+        model = genai.GenerativeModel(
+            'gemini-2.5-pro',
+            system_instruction=system_prompt
+        )
+
+        LOG.info(f"[{ticker}] Calling Gemini 2.5 Pro for Phase 1 executive summary")
+
+        # Retry logic for transient errors
+        max_retries = 2
+        response = None
+        generation_time_ms = 0
+
+        for attempt in range(max_retries + 1):
+            try:
+                start_time = time.time()
+                response = model.generate_content(
+                    user_content,
+                    generation_config={
+                        'temperature': 0.0,
+                        'max_output_tokens': 20000
+                    }
+                )
+                generation_time_ms = int((time.time() - start_time) * 1000)
+
+                # Success - break retry loop
+                break
+
+            except Exception as e:
+                error_str = str(e)
+
+                # Check for retryable errors (quota, rate limit, service unavailable)
+                is_retryable = (
+                    'ResourceExhausted' in error_str or
+                    'quota' in error_str.lower() or
+                    '429' in error_str or
+                    'ServiceUnavailable' in error_str or
+                    '503' in error_str or
+                    'DeadlineExceeded' in error_str or
+                    'timeout' in error_str.lower()
+                )
+
+                if is_retryable and attempt < max_retries:
+                    wait_time = 2 ** attempt  # 1s, 2s, 4s
+                    LOG.warning(f"[{ticker}] ⚠️ Gemini error (attempt {attempt + 1}/{max_retries + 1}): {error_str[:200]}")
+                    LOG.warning(f"[{ticker}] 🔄 Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    # Non-retryable error or max retries reached
+                    LOG.error(f"[{ticker}] ❌ Gemini 2.5 Pro Phase 1 failed after {attempt + 1} attempts: {error_str}")
+                    return None
+
+        # Check if we got a response
+        if response is None:
+            LOG.error(f"[{ticker}] ❌ No response from Gemini after {max_retries + 1} attempts")
+            return None
+
+        # Extract text from response
+        response_text = response.text
+
+        if not response_text or len(response_text.strip()) < 10:
+            LOG.error(f"[{ticker}] ❌ Gemini returned empty Phase 1 response")
+            return None
+
+        # Parse JSON from response using unified parser
+        from modules.json_utils import extract_json_from_claude_response
+        json_output = extract_json_from_claude_response(response_text, ticker)
+
+        if not json_output:
+            LOG.error(f"[{ticker}] ❌ Failed to extract Phase 1 JSON from Gemini response")
+            return None
+
+        # Extract token usage from Gemini response
+        prompt_tokens = response.usage_metadata.prompt_token_count if hasattr(response, 'usage_metadata') else 0
+        completion_tokens = response.usage_metadata.candidates_token_count if hasattr(response, 'usage_metadata') else 0
+
+        LOG.info(f"✅ [{ticker}] Phase 1 Gemini generated JSON ({len(response_text)} chars, {prompt_tokens} prompt tokens, {completion_tokens} completion tokens, {generation_time_ms}ms)")
+
+        return {
+            "json_output": json_output,
+            "model_used": "gemini-2.5-pro",
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "generation_time_ms": generation_time_ms
+        }
+
+    except Exception as e:
+        LOG.error(f"❌ [{ticker}] Exception in Phase 1 Gemini generation: {e}", exc_info=True)
+        return None
+
+
+def _generate_phase1_claude(
     ticker: str,
     categories: Dict[str, List[Dict]],
     config: Dict,
     anthropic_api_key: str
 ) -> Optional[Dict]:
     """
-    Generate Phase 1 executive summary (articles only, NO filings).
+    Generate Phase 1 executive summary using Claude Sonnet 4.5 (fallback).
 
     Args:
-        ticker: Stock ticker (e.g., "AAPL", "RY.TO")
+        ticker: Stock ticker
         categories: Dict with keys: company, industry, competitor
-                   Each contains list of article dicts
-        config: Ticker config dict (contains company_name, etc.)
-        anthropic_api_key: Claude API key
+        config: Ticker configuration dict
+        anthropic_api_key: Anthropic API key
 
     Returns:
-        {
-            "json_output": {...},  # Full Phase 1 JSON structure
-            "model_used": "claude",
-            "prompt_tokens": 28500,
-            "completion_tokens": 3500,
-            "generation_time_ms": 45000
-        }
-        Or None if generation fails
+        dict with:
+            json_output: Full Phase 1 JSON structure
+            model_used: "claude-sonnet-4-5-20250929"
+            prompt_tokens: int
+            completion_tokens: int
+            generation_time_ms: int
+        Or None if failed
     """
-    company_name = config.get("name", ticker)
-    start_time = time.time()
-
     try:
         # Build system prompt
         system_prompt = get_phase1_system_prompt(ticker)
@@ -352,6 +481,78 @@ def generate_executive_summary_phase1(
     except Exception as e:
         LOG.error(f"❌ [{ticker}] Exception calling Claude for Phase 1: {e}", exc_info=True)
         return None
+
+
+def generate_executive_summary_phase1(
+    ticker: str,
+    categories: Dict[str, List[Dict]],
+    config: Dict,
+    anthropic_api_key: str,
+    gemini_api_key: str = None
+) -> Optional[Dict]:
+    """
+    Generate Phase 1 executive summary with Gemini 2.5 Pro (primary) and Claude fallback.
+
+    This is the main entry point for Phase 1 generation. It attempts Gemini first
+    for cost savings (60% cheaper), then falls back to Claude if Gemini fails.
+
+    Args:
+        ticker: Stock ticker (e.g., "AAPL", "RY.TO")
+        categories: Dict with keys: company, industry, competitor
+                   Each contains list of article dicts
+        config: Ticker config dict (contains company_name, etc.)
+        anthropic_api_key: Anthropic API key for Claude fallback
+        gemini_api_key: Google Gemini API key (optional)
+
+    Returns:
+        {
+            "json_output": {...},  # Full Phase 1 JSON structure
+            "model_used": "gemini-2.5-pro" or "claude-sonnet-4-5-20250929",
+            "prompt_tokens": 28500,
+            "completion_tokens": 3500,
+            "generation_time_ms": 45000
+        }
+        Or None if both providers failed
+    """
+    # Try Gemini 2.5 Pro first (primary)
+    if gemini_api_key:
+        LOG.info(f"[{ticker}] Phase 1: Attempting Gemini 2.5 Pro (primary)")
+        gemini_result = _generate_phase1_gemini(
+            ticker=ticker,
+            categories=categories,
+            config=config,
+            gemini_api_key=gemini_api_key
+        )
+
+        if gemini_result and gemini_result.get("json_output"):
+            LOG.info(f"[{ticker}] ✅ Phase 1: Gemini 2.5 Pro succeeded")
+            return gemini_result
+        else:
+            LOG.warning(f"[{ticker}] ⚠️ Phase 1: Gemini 2.5 Pro failed, falling back to Claude Sonnet")
+    else:
+        LOG.warning(f"[{ticker}] ⚠️ No Gemini API key provided, using Claude Sonnet only")
+
+    # Fall back to Claude Sonnet 4.5
+    if anthropic_api_key:
+        LOG.info(f"[{ticker}] Phase 1: Using Claude Sonnet 4.5 (fallback)")
+        claude_result = _generate_phase1_claude(
+            ticker=ticker,
+            categories=categories,
+            config=config,
+            anthropic_api_key=anthropic_api_key
+        )
+
+        if claude_result and claude_result.get("json_output"):
+            LOG.info(f"[{ticker}] ✅ Phase 1: Claude Sonnet succeeded (fallback)")
+            return claude_result
+        else:
+            LOG.error(f"[{ticker}] ❌ Phase 1: Claude Sonnet also failed")
+    else:
+        LOG.error(f"[{ticker}] ❌ No Anthropic API key provided for fallback")
+
+    # Both failed
+    LOG.error(f"[{ticker}] ❌ Phase 1: Both Gemini and Claude failed - cannot generate executive summary")
+    return None
 
 
 def validate_phase1_json(json_output: Dict) -> Tuple[bool, str]:

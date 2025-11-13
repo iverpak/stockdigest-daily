@@ -14014,7 +14014,8 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
             ticker=ticker,
             categories=categories,
             config=config,
-            anthropic_api_key=ANTHROPIC_API_KEY
+            anthropic_api_key=ANTHROPIC_API_KEY,
+            gemini_api_key=GEMINI_API_KEY
         )
 
         ai_analysis_summary = None
@@ -19941,7 +19942,8 @@ async def process_ticker_job(job: dict):
                         phase3_merged_json, phase3_usage = generate_executive_summary_phase3(
                             ticker=ticker,
                             phase2_merged_json=filtered_json_for_phase3,
-                            anthropic_api_key=ANTHROPIC_API_KEY
+                            anthropic_api_key=ANTHROPIC_API_KEY,
+                            gemini_api_key=GEMINI_API_KEY
                         )
 
                         # Track Phase 3 cost
@@ -29744,7 +29746,8 @@ async def regenerate_email_api(request: Request):
             ticker=ticker,
             categories=categories,
             config=config,
-            anthropic_api_key=ANTHROPIC_API_KEY
+            anthropic_api_key=ANTHROPIC_API_KEY,
+            gemini_api_key=GEMINI_API_KEY
         )
 
         if not phase1_result:
@@ -30030,7 +30033,8 @@ async def regenerate_email_api(request: Request):
                 phase3_merged_json, phase3_usage = generate_executive_summary_phase3(
                     ticker=ticker,
                     phase2_merged_json=filtered_json_for_phase3,
-                    anthropic_api_key=ANTHROPIC_API_KEY
+                    anthropic_api_key=ANTHROPIC_API_KEY,
+                    gemini_api_key=GEMINI_API_KEY
                 )
 
                 # Track Phase 3 cost

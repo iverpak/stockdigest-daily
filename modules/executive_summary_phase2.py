@@ -309,7 +309,214 @@ def _build_phase2_user_content(ticker: str, phase1_json: Dict, filings: Dict) ->
     return content
 
 
-def generate_executive_summary_phase2(
+def _generate_phase2_gemini(
+    ticker: str,
+    phase1_json: Dict,
+    filings: Dict,
+    config: Dict,
+    gemini_api_key: str,
+    db_func
+) -> Optional[Dict]:
+    """
+    Generate Phase 2 enrichments using Gemini 2.5 Pro.
+
+    Args:
+        ticker: Stock ticker symbol
+        phase1_json: Complete Phase 1 JSON output
+        filings: Dict with keys '10k', '10q', 'transcript'
+        config: Ticker configuration dict
+        gemini_api_key: Google Gemini API key
+        db_func: Database connection function
+
+    Returns:
+        dict with:
+            enrichments: dict keyed by bullet_id with impact, sentiment, reason, context
+            scenario_contexts: dict with bottom_line_context, upside_scenario_context, downside_scenario_context
+            ai_model: "gemini-2.5-pro"
+            prompt_tokens: int
+            completion_tokens: int
+            generation_time_ms: int
+        Or None if failed
+    """
+    import time
+    import google.generativeai as genai
+
+    try:
+        # Configure Gemini
+        genai.configure(api_key=gemini_api_key)
+
+        # Load system prompt (static, no entity injection for caching)
+        system_prompt = get_phase2_system_prompt()
+
+        # Format entity references for user content
+        entity_refs = format_entity_references(config)
+
+        # Build user content with entity references at the TOP
+        entity_header = f"""ENTITY RELATIONSHIPS (for entity tag classification):
+
+Competitors: {entity_refs['competitors']}
+Upstream Suppliers: {entity_refs['upstream']}
+Downstream Customers: {entity_refs['downstream']}
+
+---
+
+"""
+        base_user_content = _build_phase2_user_content(ticker, phase1_json, filings)
+        user_content = entity_header + base_user_content
+
+        # Estimate token counts for logging
+        system_tokens_est = len(system_prompt) // 4
+        user_tokens_est = len(user_content) // 4
+        total_tokens_est = system_tokens_est + user_tokens_est
+        LOG.info(f"[{ticker}] Phase 2 Gemini prompt size: system={len(system_prompt)} chars (~{system_tokens_est} tokens), user={len(user_content)} chars (~{user_tokens_est} tokens), total=~{total_tokens_est} tokens")
+
+        # Create Gemini model with system instruction
+        model = genai.GenerativeModel(
+            'gemini-2.5-pro',
+            system_instruction=system_prompt
+        )
+
+        LOG.info(f"[{ticker}] Calling Gemini 2.5 Pro for Phase 2 enrichment")
+
+        # Retry logic for transient errors
+        max_retries = 2
+        response = None
+        generation_time_ms = 0
+
+        for attempt in range(max_retries + 1):
+            try:
+                start_time = time.time()
+                response = model.generate_content(
+                    user_content,
+                    generation_config={
+                        'temperature': 0.0,
+                        'max_output_tokens': 20000
+                    }
+                )
+                generation_time_ms = int((time.time() - start_time) * 1000)
+
+                # Success - break retry loop
+                break
+
+            except Exception as e:
+                error_str = str(e)
+
+                # Check for retryable errors (quota, rate limit, service unavailable)
+                is_retryable = (
+                    'ResourceExhausted' in error_str or
+                    'quota' in error_str.lower() or
+                    '429' in error_str or
+                    'ServiceUnavailable' in error_str or
+                    '503' in error_str or
+                    'DeadlineExceeded' in error_str or
+                    'timeout' in error_str.lower()
+                )
+
+                if is_retryable and attempt < max_retries:
+                    wait_time = 2 ** attempt  # 1s, 2s, 4s
+                    LOG.warning(f"[{ticker}] ⚠️ Gemini error (attempt {attempt + 1}/{max_retries + 1}): {error_str[:200]}")
+                    LOG.warning(f"[{ticker}] 🔄 Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    # Non-retryable error or max retries reached
+                    LOG.error(f"[{ticker}] ❌ Gemini 2.5 Pro Phase 2 failed after {attempt + 1} attempts: {error_str}")
+                    return None
+
+        # Check if we got a response
+        if response is None:
+            LOG.error(f"[{ticker}] ❌ No response from Gemini after {max_retries + 1} attempts")
+            return None
+
+        # Extract text from response
+        response_text = response.text
+
+        if not response_text or len(response_text.strip()) < 10:
+            LOG.error(f"[{ticker}] ❌ Gemini returned empty Phase 2 response")
+            return None
+
+        # Parse JSON from response using unified parser
+        from modules.json_utils import extract_json_from_claude_response
+        parsed_json = extract_json_from_claude_response(response_text, ticker)
+
+        if not parsed_json:
+            LOG.error(f"[{ticker}] ❌ Failed to extract Phase 2 JSON from Gemini response")
+            return None
+
+        # Extract token usage from Gemini response
+        prompt_tokens = response.usage_metadata.prompt_token_count if hasattr(response, 'usage_metadata') else 0
+        completion_tokens = response.usage_metadata.candidates_token_count if hasattr(response, 'usage_metadata') else 0
+
+        # Handle different possible structures from Gemini (same as Claude)
+        enrichments = {}
+        scenario_contexts = {}
+
+        if "enrichments" in parsed_json and isinstance(parsed_json["enrichments"], dict):
+            # Case 2: Wrapped in "enrichments" key
+            enrichments = parsed_json["enrichments"]
+            for key in ["bottom_line_context", "upside_scenario_context", "downside_scenario_context"]:
+                if key in parsed_json:
+                    scenario_contexts[key] = parsed_json[key]
+        elif "sections" in parsed_json and isinstance(parsed_json["sections"], dict):
+            # Case 1: Full section structure - flatten to bullet_id dict
+            for section_name, bullets in parsed_json["sections"].items():
+                if isinstance(bullets, list):
+                    for bullet in bullets:
+                        if isinstance(bullet, dict) and "bullet_id" in bullet:
+                            bid = bullet["bullet_id"]
+                            enrichments[bid] = {
+                                "impact": bullet.get("impact"),
+                                "sentiment": bullet.get("sentiment"),
+                                "reason": bullet.get("reason"),
+                                "relevance": bullet.get("relevance"),
+                                "context": bullet.get("context"),
+                                "entity": bullet.get("entity")  # For competitive_industry_dynamics bullets
+                            }
+            for key in ["bottom_line_context", "upside_scenario_context", "downside_scenario_context"]:
+                if key in parsed_json:
+                    scenario_contexts[key] = parsed_json[key]
+        else:
+            # Case 3: Direct enrichments dict + scenario contexts
+            for key, value in parsed_json.items():
+                if key in ["bottom_line_context", "upside_scenario_context", "downside_scenario_context"]:
+                    scenario_contexts[key] = value
+                else:
+                    enrichments[key] = value
+
+        # Debug logging
+        if enrichments:
+            sample_size = min(3, len(enrichments))
+            sample_bullets = list(enrichments.items())[:sample_size]
+            LOG.info(f"[{ticker}] 📋 Phase 2 Gemini output sample ({sample_size}/{len(enrichments)} bullets, BEFORE validation):")
+            for bullet_id, data in sample_bullets:
+                if isinstance(data, dict):
+                    present_fields = [f for f in data.keys() if data.get(f)]
+                    empty_fields = [f for f in data.keys() if not data.get(f)]
+                    LOG.info(f"  • {bullet_id}:")
+                    LOG.info(f"      ✓ Present: {', '.join(present_fields) if present_fields else 'NONE'}")
+                    if empty_fields:
+                        LOG.info(f"      ✗ Empty/None: {', '.join(empty_fields)}")
+
+        if scenario_contexts:
+            LOG.info(f"[{ticker}] 📄 Phase 2 Gemini scenario contexts: {', '.join(scenario_contexts.keys())}")
+
+        LOG.info(f"✅ [{ticker}] Phase 2 Gemini enrichment generated ({len(response_text)} chars, {len(enrichments)} bullets enriched, {prompt_tokens} prompt tokens, {completion_tokens} completion tokens, {generation_time_ms}ms)")
+
+        return {
+            "enrichments": enrichments,
+            "scenario_contexts": scenario_contexts,
+            "ai_model": "gemini-2.5-pro",
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "generation_time_ms": generation_time_ms
+        }
+
+    except Exception as e:
+        LOG.error(f"❌ [{ticker}] Exception in Phase 2 Gemini generation: {e}", exc_info=True)
+        return None
+
+
+def _generate_phase2_claude(
     ticker: str,
     phase1_json: Dict,
     filings: Dict,
@@ -318,7 +525,7 @@ def generate_executive_summary_phase2(
     db_func
 ) -> Optional[Dict]:
     """
-    Generate Phase 2 enrichments using Claude API.
+    Generate Phase 2 enrichments using Claude Sonnet 4.5 (fallback).
 
     Takes Phase 1 JSON output and filing sources, returns enrichments dict.
 
@@ -333,7 +540,8 @@ def generate_executive_summary_phase2(
     Returns:
         dict with:
             enrichments: dict keyed by bullet_id with impact, sentiment, reason, context
-            model_used: "claude"
+            scenario_contexts: dict with bottom_line_context, upside_scenario_context, downside_scenario_context
+            ai_model: "claude-sonnet-4-5-20250929"
             prompt_tokens: int
             completion_tokens: int
             generation_time_ms: int
@@ -342,24 +550,24 @@ def generate_executive_summary_phase2(
     import time
 
     try:
-        # Load system prompt (static, cached)
+        # Load system prompt (static, cacheable - no entity injection)
         system_prompt = get_phase2_system_prompt()
 
-        # Format entity references from config
+        # Format entity references for user content
         entity_refs = format_entity_references(config)
 
-        # Inject entity references into prompt template
-        # Note: Using .replace() instead of .format() to avoid conflicts with JSON examples in prompt
-        system_prompt = system_prompt.replace('{competitor_list}', entity_refs['competitors'])
-        system_prompt = system_prompt.replace('{upstream_list}', entity_refs['upstream'])
-        system_prompt = system_prompt.replace('{downstream_list}', entity_refs['downstream'])
+        # Build user content with entity references at the TOP (enables prompt caching)
+        entity_header = f"""ENTITY RELATIONSHIPS (for entity tag classification):
 
-        # Log entity references for debugging
-        LOG.debug(f"[{ticker}] Entity references: Competitors={entity_refs['competitors']}, "
-                  f"Upstream={entity_refs['upstream']}, Downstream={entity_refs['downstream']}")
+Competitors: {entity_refs['competitors']}
+Upstream Suppliers: {entity_refs['upstream']}
+Downstream Customers: {entity_refs['downstream']}
 
-        # Build user content (Phase 1 JSON + filings)
-        user_content = _build_phase2_user_content(ticker, phase1_json, filings)
+---
+
+"""
+        base_user_content = _build_phase2_user_content(ticker, phase1_json, filings)
+        user_content = entity_header + base_user_content
 
         # Estimate token counts for logging
         system_tokens_est = len(system_prompt) // 4
@@ -511,7 +719,8 @@ def generate_executive_summary_phase2(
                                         "sentiment": bullet.get("sentiment"),
                                         "reason": bullet.get("reason"),
                                         "relevance": bullet.get("relevance"),
-                                        "context": bullet.get("context")
+                                        "context": bullet.get("context"),
+                                        "entity": bullet.get("entity")  # For competitive_industry_dynamics bullets
                                     }
                     # Extract scenario contexts if present at root level
                     for key in ["bottom_line_context", "upside_scenario_context", "downside_scenario_context"]:
@@ -569,7 +778,7 @@ def generate_executive_summary_phase2(
                 return {
                     "enrichments": enrichments,
                     "scenario_contexts": scenario_contexts,
-                    "model_used": "claude",
+                    "ai_model": "claude-sonnet-4-5-20250929",
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,
                     "generation_time_ms": generation_time_ms
@@ -588,6 +797,85 @@ def generate_executive_summary_phase2(
     except Exception as e:
         LOG.error(f"❌ [{ticker}] Exception in Phase 2 generation: {e}")
         return None
+
+
+def generate_executive_summary_phase2(
+    ticker: str,
+    phase1_json: Dict,
+    filings: Dict,
+    config: Dict,
+    anthropic_api_key: str,
+    db_func,
+    gemini_api_key: str  # Required parameter
+) -> Optional[Dict]:
+    """
+    Generate Phase 2 enrichments with Gemini 2.5 Pro (primary) and Claude fallback.
+
+    This is the main entry point for Phase 2 enrichment. It attempts Gemini first
+    for cost savings (60% cheaper), then falls back to Claude if Gemini fails.
+
+    Args:
+        ticker: Stock ticker symbol
+        phase1_json: Complete Phase 1 JSON output
+        filings: Dict with keys '10k', '10q', 'transcript'
+        config: Ticker configuration dict
+        anthropic_api_key: Anthropic API key for Claude fallback
+        db_func: Database connection function
+        gemini_api_key: Google Gemini API key (required)
+
+    Returns:
+        dict with:
+            enrichments: dict keyed by bullet_id with impact, sentiment, reason, context
+            scenario_contexts: dict with bottom_line_context, upside_scenario_context, downside_scenario_context
+            ai_model: "gemini-2.5-pro" or "claude-sonnet-4-5-20250929"
+            prompt_tokens: int
+            completion_tokens: int
+            generation_time_ms: int
+        Or None if both providers failed
+    """
+    # Try Gemini 2.5 Pro first (primary)
+    if gemini_api_key:
+        LOG.info(f"[{ticker}] Phase 2: Attempting Gemini 2.5 Pro (primary)")
+        gemini_result = _generate_phase2_gemini(
+            ticker=ticker,
+            phase1_json=phase1_json,
+            filings=filings,
+            config=config,
+            gemini_api_key=gemini_api_key,
+            db_func=db_func
+        )
+
+        if gemini_result and gemini_result.get("enrichments"):
+            LOG.info(f"[{ticker}] ✅ Phase 2: Gemini 2.5 Pro succeeded")
+            return gemini_result
+        else:
+            LOG.warning(f"[{ticker}] ⚠️ Phase 2: Gemini 2.5 Pro failed, falling back to Claude Sonnet")
+    else:
+        LOG.warning(f"[{ticker}] ⚠️ No Gemini API key provided, using Claude Sonnet only")
+
+    # Fall back to Claude Sonnet 4.5
+    if anthropic_api_key:
+        LOG.info(f"[{ticker}] Phase 2: Using Claude Sonnet 4.5 (fallback)")
+        claude_result = _generate_phase2_claude(
+            ticker=ticker,
+            phase1_json=phase1_json,
+            filings=filings,
+            config=config,
+            anthropic_api_key=anthropic_api_key,
+            db_func=db_func
+        )
+
+        if claude_result and claude_result.get("enrichments"):
+            LOG.info(f"[{ticker}] ✅ Phase 2: Claude Sonnet succeeded (fallback)")
+            return claude_result
+        else:
+            LOG.error(f"[{ticker}] ❌ Phase 2: Claude Sonnet also failed")
+    else:
+        LOG.error(f"[{ticker}] ❌ No Anthropic API key provided for fallback")
+
+    # Both failed
+    LOG.error(f"[{ticker}] ❌ Phase 2: Both Gemini and Claude failed - skipping enrichment")
+    return None
 
 
 def validate_phase2_json(enrichments: Dict, phase1_json: Dict = None, ticker: str = "") -> Tuple[bool, str, Dict]:

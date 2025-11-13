@@ -335,7 +335,7 @@ def generate_executive_summary_phase1(
             elif cache_read > 0:
                 LOG.info(f"[{ticker}] ⚡ CACHE HIT: {cache_read} tokens (Phase 1) - 90% savings!")
 
-            LOG.info(f"✅ [{ticker}] Phase 1 generated JSON ({len(json_str)} chars, {prompt_tokens} prompt tokens, {completion_tokens} completion tokens, {generation_time_ms}ms)")
+            LOG.info(f"✅ [{ticker}] Phase 1 generated JSON ({len(content)} chars, {prompt_tokens} prompt tokens, {completion_tokens} completion tokens, {generation_time_ms}ms)")
 
             return {
                 "json_output": json_output,

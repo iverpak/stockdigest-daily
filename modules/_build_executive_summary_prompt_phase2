@@ -1477,11 +1477,10 @@ Entity answers: "What type of external entity or trend is this bullet about?"
 CRITICAL: This field is ONLY generated for bullets in the competitive_industry_dynamics section.
 For all other sections, OMIT the entity field entirely.
 
-ENTITY RELATIONSHIP REFERENCE (From Feed Configuration):
+ENTITY RELATIONSHIP REFERENCE:
 
-Competitors: {competitor_list}
-Upstream Suppliers: {upstream_list}
-Downstream Customers: {downstream_list}
+Entity relationships (competitors, upstream suppliers, downstream customers) are provided
+at the beginning of the user content for reference during classification.
 
 FOUR ENTITY TYPES:
 

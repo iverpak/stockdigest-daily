@@ -50,8 +50,8 @@ def generate_executive_summary_phase3(
     LOG.info(f"[{ticker}] Generating Phase 3 context-integrated JSON...")
 
     try:
-        # 1. Load Phase 3 prompt from file (NEW simplified prompt)
-        prompt_path = os.path.join(os.path.dirname(__file__), '_build_executive_summary_prompt_phase3_new')
+        # 1. Load Phase 3 prompt from file (simplified prompt: context integration only)
+        prompt_path = os.path.join(os.path.dirname(__file__), '_build_executive_summary_prompt_phase3')
         with open(prompt_path, 'r', encoding='utf-8') as f:
             system_prompt = f.read()
 

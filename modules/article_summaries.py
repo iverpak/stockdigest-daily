@@ -1060,9 +1060,20 @@ Rate this article's relevance to {company_name} ({ticker}) fundamental drivers o
             async with http_session.post(anthropic_api_url, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=60)) as response:
                 if response.status == 200:
                     result_json = await response.json()
-                    response_text = result_json.get("content", [{}])[0].get("text", "")
+                    response_text = result_json.get("content", [{}])[0].get("text", "").strip()
 
-                    # Parse JSON from response
+                    # VALIDATION: Check if response is valid before parsing
+                    if not response_text or len(response_text) < 5:
+                        LOG.error(f"Claude returned empty/invalid response for {ticker}")
+                        LOG.debug(f"Full Claude response: {result_json}")
+                        if attempt < max_retries:
+                            wait_time = 2 ** attempt
+                            LOG.warning(f"Retrying Claude relevance gate in {wait_time}s...")
+                            time.sleep(wait_time)
+                            continue
+                        return None
+
+                    # Parse JSON from response (only if validation passed)
                     result = json.loads(response_text)
                     score = result.get("score")
                     reason = result.get("reason", "")
@@ -1074,8 +1085,14 @@ Rate this article's relevance to {company_name} ({ticker}) fundamental drivers o
                             "provider": "Sonnet"
                         }
                     else:
+                        LOG.warning(f"Claude response missing 'score' field for {ticker}")
+                        if attempt < max_retries:
+                            wait_time = 2 ** attempt
+                            time.sleep(wait_time)
+                            continue
                         return None
                 else:
+                    LOG.error(f"Claude API returned status {response.status} for {ticker}")
                     if attempt < max_retries:
                         wait_time = 2 ** attempt
                         time.sleep(wait_time)
@@ -1085,9 +1102,10 @@ Rate this article's relevance to {company_name} ({ticker}) fundamental drivers o
         except Exception as e:
             if attempt < max_retries and should_retry(e):
                 wait_time = 2 ** attempt
+                LOG.warning(f"Claude relevance gate retry {attempt + 1} for {ticker}: {e}")
                 time.sleep(wait_time)
             else:
-                LOG.error(f"Claude relevance gate failed for {ticker}: {e}")
+                LOG.error(f"Claude relevance gate failed for {ticker} after {attempt + 1} attempts: {e}")
                 return None
 
     return None

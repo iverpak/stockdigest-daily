@@ -283,6 +283,52 @@
                 </div>
             </div>
         </div>
+
+        <!-- Entity Management -->
+        <div class="settings-card">
+            <h2>🏢 Entity Management</h2>
+
+            <div class="setting-group">
+                <label class="setting-label">Entity Logs (Competitors, Suppliers, Customers)</label>
+                <div class="setting-description">
+                    Extract entity mentions from existing 10-K profiles and earnings transcripts.
+                    Creates entity log files used for metadata generation.
+                </div>
+
+                <div class="button-group">
+                    <button class="btn btn-primary" onclick="regenerateEntityLogs()">
+                        🔄 Regenerate Entity Logs
+                    </button>
+                </div>
+
+                <div id="entity-logs-status" class="status-message"></div>
+
+                <div class="info-box">
+                    <strong>ℹ️ What this does:</strong> Extracts competitors, suppliers, and customers from all generated 10-K and transcript summaries. Creates JSON files in data/entities/ for each ticker.
+                </div>
+            </div>
+
+            <div class="setting-group" style="margin-top: 30px;">
+                <label class="setting-label">Metadata Generation</label>
+                <div class="setting-description">
+                    Regenerate ticker metadata (competitors, suppliers, customers) using entity logs.
+                    Updates metadata for all active tickers.
+                </div>
+
+                <div class="button-group">
+                    <button class="btn btn-secondary" onclick="regenerateAllMetadata()">
+                        🔄 Regenerate All Metadata
+                    </button>
+                </div>
+
+                <div id="metadata-status" class="status-message"></div>
+
+                <div class="warning-box">
+                    <strong>⚠️ Prerequisites:</strong> Entity logs must exist (run "Regenerate Entity Logs" first).
+                    <br><strong>⏱️ Duration:</strong> ~30 seconds per ticker (Claude API calls).
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -382,6 +428,70 @@
                 }
             } catch (error) {
                 showStatus(statusDiv, 'error', `❌ Failed to commit: ${error.message}`);
+            }
+        }
+
+        // Regenerate Entity Logs
+        async function regenerateEntityLogs() {
+            if (!confirm('🔄 Extract entities from all 10-K and transcript summaries?\n\nThis may take 2-5 minutes depending on number of filings.')) {
+                return;
+            }
+
+            const statusDiv = document.getElementById('entity-logs-status');
+            showStatus(statusDiv, 'success', '🔄 Extracting entities from filings...');
+
+            try {
+                const response = await fetch('/api/admin/regenerate-entity-logs', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        token: getToken()
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    showStatus(statusDiv, 'success', data.message);
+                } else {
+                    showStatus(statusDiv, 'error', `❌ Error: ${data.message}`);
+                }
+            } catch (error) {
+                showStatus(statusDiv, 'error', `❌ Failed to regenerate entity logs: ${error.message}`);
+            }
+        }
+
+        // Regenerate All Metadata
+        async function regenerateAllMetadata() {
+            if (!confirm('🔄 Regenerate metadata for all active tickers using entity logs?\n\nThis may take 1-2 minutes.')) {
+                return;
+            }
+
+            const statusDiv = document.getElementById('metadata-status');
+            showStatus(statusDiv, 'success', '🔄 Regenerating metadata...');
+
+            try {
+                const response = await fetch('/api/admin/regenerate-all-metadata', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        token: getToken()
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    showStatus(statusDiv, 'success', data.message);
+                } else {
+                    showStatus(statusDiv, 'error', `❌ Error: ${data.message}`);
+                }
+            } catch (error) {
+                showStatus(statusDiv, 'error', `❌ Failed to regenerate metadata: ${error.message}`);
             }
         }
 

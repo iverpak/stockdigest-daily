@@ -372,6 +372,7 @@
                     <option value="transcripts">Earnings Transcripts</option>
                     <option value="press_releases">Press Releases</option>
                     <option value="8k_filings">8-K Filings</option>
+                    <option value="entity_logs">Entity Logs</option>
                 </select>
 
                 <!-- Search Box -->
@@ -1211,6 +1212,11 @@
                         dataKey = 'filings';
                         params = `token=${token}`;
                         break;
+                    case 'entity_logs':
+                        endpoint = '/api/admin/entity-logs';
+                        dataKey = 'entity_logs';
+                        params = `token=${token}`;
+                        break;
                 }
 
                 const response = await fetch(`${endpoint}?${params}`);
@@ -1241,7 +1247,8 @@
                 'presentations': 'investor presentation',
                 'transcripts': 'transcript',
                 'press_releases': 'press release',
-                '8k_filings': '8-K filing'
+                '8k_filings': '8-K filing',
+                'entity_logs': 'entity log'
             };
             const typeLabel = typeLabels[currentResearchType] || 'document';
             document.getElementById('profiles-count').textContent = `Found ${profiles.length} ${typeLabel}${profiles.length !== 1 ? 's' : ''}`;
@@ -1334,6 +1341,13 @@
                         <th style="padding: 12px; text-align: center;">Exhibit</th>
                         <th style="padding: 12px; text-align: left;">Description</th>
                         <th style="padding: 12px; text-align: center;">Items</th>
+                        <th style="padding: 12px; text-align: center;">Actions</th>
+                    `;
+                case 'entity_logs':
+                    return common + `
+                        <th style="padding: 12px; text-align: left;">Company</th>
+                        <th style="padding: 12px; text-align: center;">Entries</th>
+                        <th onclick="sortTable('last_updated')" style="padding: 12px; text-align: left; cursor: pointer;">Last Updated</th>
                         <th style="padding: 12px; text-align: center;">Actions</th>
                     `;
             }
@@ -1442,6 +1456,18 @@
                             ${getActionButtons(doc, type)}
                         </td>
                     `;
+                case 'entity_logs':
+                    const lastUpdatedDate = doc.last_updated ? new Date(doc.last_updated).toLocaleDateString() : 'N/A';
+
+                    return `
+                        <td style="padding: 12px; font-weight: 600; color: #1e40af;">${doc.ticker}</td>
+                        <td style="padding: 12px; font-size: 13px;">${doc.company_name || doc.ticker}</td>
+                        <td style="padding: 12px; text-align: center; color: #6b7280; font-size: 13px;">${doc.entry_count || 0}</td>
+                        <td style="padding: 12px; color: #6b7280; font-size: 13px;">${lastUpdatedDate}</td>
+                        <td style="padding: 12px; text-align: center;">
+                            ${getActionButtons(doc, type)}
+                        </td>
+                    `;
             }
         }
 
@@ -1505,6 +1531,8 @@
                         return d.ticker === docInfo.ticker && d.report_date === docInfo.report_date && d.title === docInfo.pr_title;
                     } else if (docInfo.type === '8k_filings') {
                         return d.ticker === docInfo.ticker && d.accession_number === docInfo.accession_number && d.exhibit_number === docInfo.exhibit_number;
+                    } else if (docInfo.type === 'entity_logs') {
+                        return d.ticker === docInfo.ticker;
                     }
                 });
 
@@ -1524,12 +1552,24 @@
                         title = `${doc.ticker} Press Release - ${doc.report_date}`;
                     } else if (docInfo.type === '8k_filings') {
                         title = `${doc.ticker} 8-K Filing - Exhibit ${doc.exhibit_number}: ${doc.exhibit_description} (${doc.filing_date})`;
+                    } else if (docInfo.type === 'entity_logs') {
+                        title = `${doc.company_name || doc.ticker} (${doc.ticker}) - Entity Log`;
                     }
                     document.getElementById('modal-title').textContent = title;
 
                     // Get content (8-K uses raw_content which is already HTML)
                     let contentHtml;
-                    if (docInfo.type === '8k_filings') {
+                    if (docInfo.type === 'entity_logs') {
+                        // Fetch full entity log from API
+                        const response = await fetch(`/api/admin/entity-log/${doc.ticker}?token=${token}`);
+                        const data = await response.json();
+
+                        if (data.status === 'success') {
+                            contentHtml = formatEntityLogHTML(data.entity_log);
+                        } else {
+                            contentHtml = `<p style="color: red;">Error loading entity log: ${data.message}</p>`;
+                        }
+                    } else if (docInfo.type === '8k_filings') {
                         // 8-K content is already HTML, use directly
                         contentHtml = doc.raw_content || 'No content available';
                     } else {
@@ -1764,6 +1804,114 @@
             } catch (error) {
                 alert(`❌ Failed to email: ${error.message}`);
             }
+        }
+
+        // Format entity log JSON into HTML
+        function formatEntityLogHTML(entityLog) {
+            if (!entityLog || !entityLog.log_entries) {
+                return '<p>No entity log data available</p>';
+            }
+
+            const entries = entityLog.log_entries;
+            let html = `
+                <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;">
+                    <p style="color: #6b7280; margin-bottom: 20px;">
+                        Last Updated: ${new Date(entityLog.last_updated).toLocaleString()} | ${entries.length} filing${entries.length !== 1 ? 's' : ''}
+                    </p>
+            `;
+
+            entries.forEach((entry, index) => {
+                const filingIcon = entry.filing_type === '10K' ? '📄' : '🎙️';
+                const filingLabel = entry.filing_type === '10K' ? '10-K' : 'Transcript';
+                const quarter = entry.fiscal_quarter ? ` Q${entry.fiscal_quarter}` : '';
+
+                html += `
+                    <div style="margin-bottom: 30px; border-left: 4px solid #1e40af; padding-left: 16px;">
+                        <h3 style="margin: 0 0 12px 0; color: #1e40af;">
+                            ${filingIcon} ${filingLabel} ${entry.fiscal_year}${quarter}
+                        </h3>
+                        <p style="color: #6b7280; font-size: 14px; margin: 0 0 16px 0;">
+                            Filed: ${entry.filing_date}
+                        </p>
+                `;
+
+                // Competitors
+                if (entry.competitors && entry.competitors.length > 0) {
+                    html += `<h4 style="margin: 12px 0 8px 0; color: #374151;">COMPETITORS (${entry.competitors.length}):</h4>`;
+                    entry.competitors.forEach(comp => {
+                        const badge = comp.materiality === 'high' ? '<span style="background: #10b981; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">HIGH</span>' :
+                                      comp.materiality === 'medium' ? '<span style="background: #f59e0b; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">MEDIUM</span>' :
+                                      '<span style="background: #6b7280; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">LOW</span>';
+
+                        html += `
+                            <div style="margin-bottom: 12px; padding: 12px; background: #f9fafb; border-radius: 6px;">
+                                <div style="font-weight: 600; margin-bottom: 4px;">
+                                    ${comp.name}${comp.ticker ? ` (${comp.ticker})` : ''} ${badge}
+                                </div>
+                                <div style="font-size: 12px; color: #6b7280; margin-bottom: 4px;">
+                                    📍 ${comp.source_section}
+                                </div>
+                                <div style="font-size: 13px; color: #374151; font-style: italic;">
+                                    "${comp.context_snippet}"
+                                </div>
+                            </div>
+                        `;
+                    });
+                }
+
+                // Suppliers
+                if (entry.suppliers && entry.suppliers.length > 0) {
+                    html += `<h4 style="margin: 16px 0 8px 0; color: #374151;">SUPPLIERS (${entry.suppliers.length}):</h4>`;
+                    entry.suppliers.forEach(supp => {
+                        const badge = supp.materiality === 'high' ? '<span style="background: #10b981; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">HIGH</span>' :
+                                      supp.materiality === 'medium' ? '<span style="background: #f59e0b; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">MEDIUM</span>' :
+                                      '<span style="background: #6b7280; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">LOW</span>';
+
+                        html += `
+                            <div style="margin-bottom: 12px; padding: 12px; background: #f9fafb; border-radius: 6px;">
+                                <div style="font-weight: 600; margin-bottom: 4px;">
+                                    ${supp.name}${supp.ticker ? ` (${supp.ticker})` : ''} ${badge}
+                                </div>
+                                <div style="font-size: 12px; color: #6b7280; margin-bottom: 4px;">
+                                    📍 ${supp.source_section}
+                                </div>
+                                <div style="font-size: 13px; color: #374151; font-style: italic;">
+                                    "${supp.context_snippet}"
+                                </div>
+                            </div>
+                        `;
+                    });
+                }
+
+                // Customers
+                if (entry.customers && entry.customers.length > 0) {
+                    html += `<h4 style="margin: 16px 0 8px 0; color: #374151;">CUSTOMERS (${entry.customers.length}):</h4>`;
+                    entry.customers.forEach(cust => {
+                        const badge = cust.materiality === 'high' ? '<span style="background: #10b981; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">HIGH</span>' :
+                                      cust.materiality === 'medium' ? '<span style="background: #f59e0b; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">MEDIUM</span>' :
+                                      '<span style="background: #6b7280; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">LOW</span>';
+
+                        html += `
+                            <div style="margin-bottom: 12px; padding: 12px; background: #f9fafb; border-radius: 6px;">
+                                <div style="font-weight: 600; margin-bottom: 4px;">
+                                    ${cust.name}${cust.ticker ? ` (${cust.ticker})` : ''} ${badge}
+                                </div>
+                                <div style="font-size: 12px; color: #6b7280; margin-bottom: 4px;">
+                                    📍 ${cust.source_section}
+                                </div>
+                                <div style="font-size: 13px; color: #374151; font-style: italic;">
+                                    "${cust.context_snippet}"
+                                </div>
+                            </div>
+                        `;
+                    });
+                }
+
+                html += `</div>`;
+            });
+
+            html += `</div>`;
+            return html;
         }
 
         // Simple markdown to HTML converter

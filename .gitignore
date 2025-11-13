@@ -15,3 +15,6 @@ scripts/setup_env.ps1
 
 # Batch tracking (temporary)
 last_batch_id.txt
+
+# Entity logs (derived data, can be regenerated)
+data/entities/

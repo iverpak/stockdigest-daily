@@ -7673,7 +7673,7 @@ async def generate_article_summary(scraped_content: str, title: str, ticker: str
             if status in ["Gemini", "Sonnet"]:
                 # Gemini or Claude succeeded - return immediately
                 LOG.info(f"[{ticker}] ✅ {status} generated summary successfully")
-                return summary, "Claude"
+                return summary, status  # Return actual model name (Gemini or Sonnet)
             elif status == "filtered":
                 # Article intentionally filtered by retail analysis
                 LOG.info(f"[{ticker}] 🚫 Article filtered (retail content)")

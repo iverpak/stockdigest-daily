@@ -1065,7 +1065,7 @@ Rate this article's relevance to {company_name} ({ticker}) fundamental drivers o
                     # VALIDATION: Check if response is valid before parsing
                     if not response_text or len(response_text) < 5:
                         LOG.error(f"Claude returned empty/invalid response for {ticker}")
-                        LOG.debug(f"Full Claude response: {result_json}")
+                        LOG.error(f"Full Claude response: {result_json}")  # Changed to ERROR level
                         if attempt < max_retries:
                             wait_time = 2 ** attempt
                             LOG.warning(f"Retrying Claude relevance gate in {wait_time}s...")
@@ -1074,7 +1074,21 @@ Rate this article's relevance to {company_name} ({ticker}) fundamental drivers o
                         return None
 
                     # Parse JSON from response (only if validation passed)
-                    result = json.loads(response_text)
+                    # Wrap in try/except to catch JSON errors and retry properly
+                    try:
+                        LOG.info(f"[{ticker}] Attempting to parse Claude response ({len(response_text)} chars): {response_text[:200]}")
+                        result = json.loads(response_text)
+                    except json.JSONDecodeError as e:
+                        LOG.error(f"Claude returned non-JSON response for {ticker}: {e}")
+                        LOG.error(f"Response text (first 500 chars): {response_text[:500]}")
+                        LOG.error(f"Full Claude API response: {result_json}")
+                        if attempt < max_retries:
+                            wait_time = 2 ** attempt
+                            LOG.warning(f"Retrying Claude relevance gate in {wait_time}s...")
+                            time.sleep(wait_time)
+                            continue
+                        return None
+
                     score = result.get("score")
                     reason = result.get("reason", "")
 
@@ -1086,6 +1100,7 @@ Rate this article's relevance to {company_name} ({ticker}) fundamental drivers o
                         }
                     else:
                         LOG.warning(f"Claude response missing 'score' field for {ticker}")
+                        LOG.error(f"Parsed JSON (missing score): {result}")
                         if attempt < max_retries:
                             wait_time = 2 ** attempt
                             time.sleep(wait_time)

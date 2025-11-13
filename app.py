@@ -327,6 +327,13 @@ CLAUDE_PRICING = {
     "cache_read": 0.30       # $0.30 per 1M cache read tokens (90% savings)
 }
 
+# Gemini API Pricing (per 1M tokens as of November 2024)
+GEMINI_PRICING = {
+    "input": 0.075,          # $0.075 per 1M input tokens (40x cheaper than Claude)
+    "output": 0.30,          # $0.30 per 1M output tokens (50x cheaper than Claude)
+}
+# NOTE: Gemini does not support prompt caching (Claude-only feature)
+
 # Thread-local storage for cost tracking (one tracker per ticker thread)
 _cost_tracker = threading.local()
 
@@ -400,6 +407,16 @@ def calculate_claude_api_cost(usage: dict, function_name: str) -> dict:
     tracker["by_function"][function_name]["calls"] += 1
     tracker["by_function"][function_name]["cost"] += call_cost
 
+    # Store tokens for executive summary phases only
+    if function_name.startswith("executive_summary_phase"):
+        if "tokens" not in tracker["by_function"][function_name]:
+            tracker["by_function"][function_name]["tokens"] = {
+                "input": 0,
+                "output": 0
+            }
+        tracker["by_function"][function_name]["tokens"]["input"] += input_tokens
+        tracker["by_function"][function_name]["tokens"]["output"] += output_tokens
+
     # Track cache stats
     if cache_creation > 0:
         tracker["cache_stats"]["cache_creations"] += 1
@@ -424,6 +441,62 @@ def calculate_claude_api_cost(usage: dict, function_name: str) -> dict:
             "output": output_tokens,
             "cache_creation": cache_creation,
             "cache_read": cache_read
+        }
+    }
+
+
+def calculate_gemini_api_cost(usage: dict, function_name: str) -> dict:
+    """
+    Calculate cost from Gemini API usage response and track it.
+
+    Args:
+        usage: Usage dict from Gemini API response with keys:
+               - input_tokens: prompt token count
+               - output_tokens: candidates token count
+        function_name: Name of the function (for categorization)
+
+    Returns:
+        Cost breakdown dict
+    """
+    input_tokens = usage.get("input_tokens", 0)
+    output_tokens = usage.get("output_tokens", 0)
+
+    # Calculate costs (divide by 1M to get actual cost)
+    input_cost = (input_tokens / 1_000_000) * GEMINI_PRICING["input"]
+    output_cost = (output_tokens / 1_000_000) * GEMINI_PRICING["output"]
+
+    call_cost = input_cost + output_cost
+
+    # Track in thread-local tracker
+    tracker = get_cost_tracker()
+    tracker["total_cost"] += call_cost
+
+    if function_name not in tracker["by_function"]:
+        tracker["by_function"][function_name] = {
+            "calls": 0,
+            "cost": 0.0
+        }
+
+    tracker["by_function"][function_name]["calls"] += 1
+    tracker["by_function"][function_name]["cost"] += call_cost
+
+    # Store tokens for executive summary phases only
+    if function_name.startswith("executive_summary_phase"):
+        if "tokens" not in tracker["by_function"][function_name]:
+            tracker["by_function"][function_name]["tokens"] = {
+                "input": 0,
+                "output": 0
+            }
+        tracker["by_function"][function_name]["tokens"]["input"] += input_tokens
+        tracker["by_function"][function_name]["tokens"]["output"] += output_tokens
+
+    return {
+        "call_cost": round(call_cost, 6),
+        "input_cost": round(input_cost, 6),
+        "output_cost": round(output_cost, 6),
+        "tokens": {
+            "input": input_tokens,
+            "output": output_tokens
         }
     }
 
@@ -462,16 +535,17 @@ def log_cost_summary(ticker: str, company_name: str = ""):
         "triage_competitor": ("🏢 Triage (Competitor)", 3),
         "triage_upstream": ("⬆️ Triage (Upstream)", 4),
         "triage_downstream": ("⬇️ Triage (Downstream)", 5),
-        "article_summary": ("📝 Article Summaries", 6),
-        "competitor_summary": ("🏆 Competitor Summaries", 7),
-        "upstream_summary": ("⬆️ Upstream Summaries", 8),
-        "downstream_summary": ("⬇️ Downstream Summaries", 9),
-        "fundamental_driver_summary": ("🌐 Industry Summaries", 10),
+        "article_summary_company": ("📝 Company Summaries", 6),
+        "article_summary_competitor": ("🏆 Competitor Summaries", 7),
+        "article_summary_upstream": ("⬆️ Upstream Summaries", 8),
+        "article_summary_downstream": ("⬇️ Downstream Summaries", 9),
+        "article_summary_industry": ("🌐 Industry Summaries", 10),
         "fundamental_driver_scoring": ("⚖️ Industry Scoring", 11),
         "executive_summary": ("📊 Executive Summary (OLD)", 12),
         "executive_summary_phase1": ("📊 Executive Summary - Phase 1", 13),
         "executive_summary_phase2": ("📄 Executive Summary - Phase 2", 14),
-        "research_summary": ("📋 Research Summary (Transcript/PR)", 15)
+        "executive_summary_phase3": ("📝 Executive Summary - Phase 3", 15),
+        "research_summary": ("📋 Research Summary (Transcript/PR)", 16)
     }
 
     # Sort by display order
@@ -486,6 +560,12 @@ def log_cost_summary(ticker: str, company_name: str = ""):
         cost = data["cost"]
         plural = "calls" if calls != 1 else "call"
         LOG.info(f"[{ticker}]   {display_name}: {calls:3d} {plural:5s} →  ${cost:.4f}")
+
+        # Show token breakdown for executive summary phases only
+        if func_name.startswith("executive_summary_phase") and "tokens" in data:
+            input_tok = data["tokens"]["input"]
+            output_tok = data["tokens"]["output"]
+            LOG.info(f"[{ticker}]      Input: {input_tok:,} tokens | Output: {output_tok:,} tokens")
 
     LOG.info(f"[{ticker}] 💰 ────────────────────────────────────────────────────────────")
 
@@ -7364,27 +7444,27 @@ async def generate_article_summary_company(company_name: str, ticker: str, title
     Fallback: Claude Sonnet 4.5
 
     Returns:
-        Tuple[Optional[str], str]: (summary_with_quality_json, status)
+        Tuple[Optional[str], str]: (summary_with_quality_json, provider)
     """
     # Try Gemini first
     if GEMINI_API_KEY:
-        summary, provider = await article_summaries.generate_gemini_article_summary_company(
+        summary, provider, usage = await article_summaries.generate_gemini_article_summary_company(
             company_name, ticker, title, scraped_content, GEMINI_API_KEY
         )
-        if provider == "Gemini":
-            # Gemini returns summary with {"quality": X.X} on last line (for parse_quality_score)
+        if provider == "Gemini" and usage:
+            calculate_gemini_api_cost(usage, "article_summary_company")
             return summary, provider
         LOG.warning(f"[{ticker}] Gemini company summary failed, falling back to Claude")
 
     # Fallback to Claude
     if ANTHROPIC_API_KEY:
         session = get_http_session()
-        summary, provider = await article_summaries.generate_claude_article_summary_company(
+        summary, provider, usage = await article_summaries.generate_claude_article_summary_company(
             company_name, ticker, title, scraped_content,
             ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_API_URL, session
         )
-        if provider == "Sonnet":
-            # Claude returns summary with {"quality": X.X} on last line (for parse_quality_score)
+        if provider == "Sonnet" and usage:
+            calculate_claude_api_cost(usage, "article_summary_company")
             return summary, provider
 
     return None, "failed"
@@ -7393,21 +7473,23 @@ async def generate_article_summary_company(company_name: str, ticker: str, title
 async def generate_article_summary_competitor(competitor_name: str, competitor_ticker: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Tuple[Optional[str], str]:
     """Generate article summary for competitor article"""
     if GEMINI_API_KEY:
-        summary, provider = await article_summaries.generate_gemini_article_summary_competitor(
+        summary, provider, usage = await article_summaries.generate_gemini_article_summary_competitor(
             competitor_name, competitor_ticker, target_company, target_ticker,
             title, scraped_content, GEMINI_API_KEY
         )
-        if provider in ["Gemini", "Sonnet"]:
+        if provider == "Gemini" and usage:
+            calculate_gemini_api_cost(usage, "article_summary_competitor")
             return summary, provider
         LOG.warning(f"[{target_ticker}] Gemini competitor summary failed, falling back to Claude")
 
     if ANTHROPIC_API_KEY:
         session = get_http_session()
-        summary, provider = await article_summaries.generate_claude_article_summary_competitor(
+        summary, provider, usage = await article_summaries.generate_claude_article_summary_competitor(
             competitor_name, competitor_ticker, target_company, target_ticker,
             title, scraped_content, ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_API_URL, session
         )
-        if provider in ["Gemini", "Sonnet"]:
+        if provider == "Sonnet" and usage:
+            calculate_claude_api_cost(usage, "article_summary_competitor")
             return summary, provider
 
     return None, "failed"
@@ -7416,21 +7498,23 @@ async def generate_article_summary_competitor(competitor_name: str, competitor_t
 async def generate_article_summary_upstream(value_chain_company: str, value_chain_ticker: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Tuple[Optional[str], str]:
     """Generate article summary for upstream supplier article"""
     if GEMINI_API_KEY:
-        summary, provider = await article_summaries.generate_gemini_article_summary_upstream(
+        summary, provider, usage = await article_summaries.generate_gemini_article_summary_upstream(
             value_chain_company, value_chain_ticker, target_company, target_ticker,
             title, scraped_content, GEMINI_API_KEY
         )
-        if provider in ["Gemini", "Sonnet"]:
+        if provider == "Gemini" and usage:
+            calculate_gemini_api_cost(usage, "article_summary_upstream")
             return summary, provider
         LOG.warning(f"[{target_ticker}] Gemini upstream summary failed, falling back to Claude")
 
     if ANTHROPIC_API_KEY:
         session = get_http_session()
-        summary, provider = await article_summaries.generate_claude_article_summary_upstream(
+        summary, provider, usage = await article_summaries.generate_claude_article_summary_upstream(
             value_chain_company, value_chain_ticker, target_company, target_ticker,
             title, scraped_content, ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_API_URL, session
         )
-        if provider in ["Gemini", "Sonnet"]:
+        if provider == "Sonnet" and usage:
+            calculate_claude_api_cost(usage, "article_summary_upstream")
             return summary, provider
 
     return None, "failed"
@@ -7439,21 +7523,23 @@ async def generate_article_summary_upstream(value_chain_company: str, value_chai
 async def generate_article_summary_downstream(value_chain_company: str, value_chain_ticker: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Tuple[Optional[str], str]:
     """Generate article summary for downstream customer article"""
     if GEMINI_API_KEY:
-        summary, provider = await article_summaries.generate_gemini_article_summary_downstream(
+        summary, provider, usage = await article_summaries.generate_gemini_article_summary_downstream(
             value_chain_company, value_chain_ticker, target_company, target_ticker,
             title, scraped_content, GEMINI_API_KEY
         )
-        if provider in ["Gemini", "Sonnet"]:
+        if provider == "Gemini" and usage:
+            calculate_gemini_api_cost(usage, "article_summary_downstream")
             return summary, provider
         LOG.warning(f"[{target_ticker}] Gemini downstream summary failed, falling back to Claude")
 
     if ANTHROPIC_API_KEY:
         session = get_http_session()
-        summary, provider = await article_summaries.generate_claude_article_summary_downstream(
+        summary, provider, usage = await article_summaries.generate_claude_article_summary_downstream(
             value_chain_company, value_chain_ticker, target_company, target_ticker,
             title, scraped_content, ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_API_URL, session
         )
-        if provider in ["Gemini", "Sonnet"]:
+        if provider == "Sonnet" and usage:
+            calculate_claude_api_cost(usage, "article_summary_downstream")
             return summary, provider
 
     return None, "failed"
@@ -7466,21 +7552,23 @@ async def generate_article_summary_industry(industry_keyword: str, target_compan
     geographic_markets = (config.get('geographic_markets') or '').strip()
 
     if GEMINI_API_KEY:
-        summary, provider = await article_summaries.generate_gemini_article_summary_industry(
+        summary, provider, usage = await article_summaries.generate_gemini_article_summary_industry(
             industry_keyword, target_company, target_ticker,
             title, scraped_content, GEMINI_API_KEY, geographic_markets
         )
-        if provider in ["Gemini", "Sonnet"]:
+        if provider == "Gemini" and usage:
+            calculate_gemini_api_cost(usage, "article_summary_industry")
             return summary, provider
         LOG.warning(f"[{target_ticker}] Gemini industry summary failed, falling back to Claude")
 
     if ANTHROPIC_API_KEY:
         session = get_http_session()
-        summary, provider = await article_summaries.generate_claude_article_summary_industry(
+        summary, provider, usage = await article_summaries.generate_claude_article_summary_industry(
             industry_keyword, target_company, target_ticker,
             title, scraped_content, ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_API_URL, session, geographic_markets
         )
-        if provider in ["Gemini", "Sonnet"]:
+        if provider == "Sonnet" and usage:
+            calculate_claude_api_cost(usage, "article_summary_industry")
             return summary, provider
 
     return None, "failed"
@@ -21679,11 +21767,15 @@ async def process_ticker_job(job: dict):
                             LOG.info(f"[{ticker}] ✅ [JOB {job_id}] No bullets filtered (all {original_count} are high quality)")
 
                         # Generate Phase 3 with FILTERED JSON (returns merged JSON with integrated content)
-                        phase3_merged_json = generate_executive_summary_phase3(
+                        phase3_merged_json, phase3_usage = generate_executive_summary_phase3(
                             ticker=ticker,
                             phase2_merged_json=filtered_json_for_phase3,
                             anthropic_api_key=ANTHROPIC_API_KEY
                         )
+
+                        # Track Phase 3 cost
+                        if phase3_usage:
+                            calculate_claude_api_cost(phase3_usage, "executive_summary_phase3")
 
                         if phase3_merged_json:
                             # Update database with Phase 3 content
@@ -21777,11 +21869,15 @@ async def process_ticker_job(job: dict):
                             filtered_json_for_phase3 = filter_bullets_for_email3(phase2_merged_json)
 
                             # Generate Phase 3 with FILTERED JSON (returns merged JSON with integrated content)
-                            phase3_merged_json = generate_executive_summary_phase3(
+                            phase3_merged_json, phase3_usage = generate_executive_summary_phase3(
                                 ticker=ticker,
                                 phase2_merged_json=filtered_json_for_phase3,
                                 anthropic_api_key=ANTHROPIC_API_KEY
                             )
+
+                        # Track Phase 3 cost
+                        if phase3_usage:
+                            calculate_claude_api_cost(phase3_usage, "executive_summary_phase3")
 
                             if phase3_merged_json:
                                 # Update database with Phase 3 content
@@ -31673,11 +31769,15 @@ async def regenerate_email_api(request: Request):
                 filtered_json_for_phase3 = filter_bullets_for_email3(phase2_merged_json)
 
                 # Generate Phase 3 with FILTERED JSON (returns merged JSON with integrated content)
-                phase3_merged_json = generate_executive_summary_phase3(
+                phase3_merged_json, phase3_usage = generate_executive_summary_phase3(
                     ticker=ticker,
                     phase2_merged_json=filtered_json_for_phase3,
                     anthropic_api_key=ANTHROPIC_API_KEY
                 )
+
+                        # Track Phase 3 cost
+                        if phase3_usage:
+                            calculate_claude_api_cost(phase3_usage, "executive_summary_phase3")
 
                 if phase3_merged_json:
                     # Update database with Phase 3 content

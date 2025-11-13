@@ -20,7 +20,7 @@ import os
 import re
 import time
 from datetime import date
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import requests
 
 LOG = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ def generate_executive_summary_phase3(
     ticker: str,
     phase2_merged_json: Dict,
     anthropic_api_key: str
-) -> Optional[Dict]:
+) -> Tuple[Optional[Dict], Optional[Dict]]:
     """
     Generate Phase 3 integrated content and merge with Phase 2 metadata.
 
@@ -43,8 +43,9 @@ def generate_executive_summary_phase3(
         anthropic_api_key: Claude API key
 
     Returns:
-        Final merged JSON with Phase 2 metadata + Phase 3 integrated content
-        Or None if failed
+        Tuple of (final_merged_json, usage_dict) where:
+            - final_merged_json: Phase 2 metadata + Phase 3 integrated content (or None if failed)
+            - usage_dict: {"input_tokens": X, "output_tokens": Y} or None
     """
     LOG.info(f"[{ticker}] Generating Phase 3 context-integrated JSON...")
 
@@ -149,11 +150,17 @@ def generate_executive_summary_phase3(
             phase3_json = _parse_phase3_json_response(response_text, ticker)
             if not phase3_json:
                 LOG.error(f"[{ticker}] Failed to parse Phase 3 JSON response")
-                return None
+                return None, None
 
-            usage = result.get("usage", {})
-            prompt_tokens = usage.get("input_tokens", 0)
-            completion_tokens = usage.get("output_tokens", 0)
+            usage_data = result.get("usage", {})
+            prompt_tokens = usage_data.get("input_tokens", 0)
+            completion_tokens = usage_data.get("output_tokens", 0)
+
+            # Create usage dict for cost tracking
+            usage = {
+                "input_tokens": prompt_tokens,
+                "output_tokens": completion_tokens
+            }
 
             LOG.info(f"[{ticker}] ✅ Phase 3 JSON generated ({len(response_text)} chars, "
                     f"{prompt_tokens} prompt tokens, {completion_tokens} completion tokens, {generation_time_ms}ms)")
@@ -165,16 +172,16 @@ def generate_executive_summary_phase3(
 
             LOG.info(f"[{ticker}] ✅ Phase 3 merged with Phase 2 using bullet_id matching")
 
-            return final_merged
+            return final_merged, usage
 
         else:
             error_text = response.text[:500] if response.text else "No error details"
             LOG.error(f"[{ticker}] Phase 3 API error {response.status_code} after {max_retries + 1} attempts: {error_text}")
-            return None
+            return None, None
 
     except Exception as e:
         LOG.error(f"[{ticker}] Phase 3 generation failed: {e}", exc_info=True)
-        return None
+        return None, None
 
 
 def _parse_phase3_json_response(response_text: str, ticker: str) -> Optional[Dict]:

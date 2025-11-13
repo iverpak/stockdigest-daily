@@ -82,16 +82,17 @@ async def generate_gemini_article_summary_company(
     title: str,
     scraped_content: str,
     gemini_api_key: str
-) -> Tuple[Optional[str], str]:
+) -> Tuple[Optional[str], str, Optional[dict]]:
     """Generate Gemini summary for company article
 
     Returns:
-        Tuple[Optional[str], str]: (summary, status) where status is:
-            - "success": Summary generated successfully
-            - "failed": API error or processing failure
+        Tuple[Optional[str], str, Optional[dict]]: (summary, provider, usage) where:
+            - summary: Summary text with quality JSON
+            - provider: "Gemini" or "failed"
+            - usage: {"input_tokens": X, "output_tokens": Y} or None
     """
     if not gemini_api_key or not scraped_content or len(scraped_content.strip()) < 200:
-        return None, "failed"
+        return None, "failed", None
 
     max_retries = 3
 
@@ -136,11 +137,18 @@ The quality score (0-10) is MANDATORY."""
 
             if summary and quality is not None:
                 summary_with_quality = f"{summary}\n{{\"quality\": {quality}}}"
+
+                # Extract usage metadata
+                usage = {
+                    "input_tokens": response.usage_metadata.prompt_token_count,
+                    "output_tokens": response.usage_metadata.candidates_token_count
+                }
+
                 LOG.info(f"Gemini company summary: {ticker} ({len(summary)} chars, quality: {quality})")
-                return summary_with_quality, "Gemini"
+                return summary_with_quality, "Gemini", usage
             else:
                 LOG.error(f"Gemini returned incomplete JSON for {ticker}")
-                return None, "failed"
+                return None, "failed", None
 
         except Exception as e:
             if attempt < max_retries and should_retry(e):
@@ -149,9 +157,9 @@ The quality score (0-10) is MANDATORY."""
                 time.sleep(wait_time)
             else:
                 LOG.error(f"Gemini company summary failed for {ticker} after {attempt + 1} attempts: {e}")
-                return None, "failed"
+                return None, "failed", None
 
-    return None, "failed"
+    return None, "failed", None
 
 
 async def generate_gemini_article_summary_competitor(
@@ -162,10 +170,10 @@ async def generate_gemini_article_summary_competitor(
     title: str,
     scraped_content: str,
     gemini_api_key: str
-) -> Tuple[Optional[str], str]:
+) -> Tuple[Optional[str], str, Optional[dict]]:
     """Generate Gemini summary for competitor article"""
     if not gemini_api_key or not scraped_content or len(scraped_content.strip()) < 200:
-        return None, "failed"
+        return None, "failed", None
 
     max_retries = 3
 
@@ -206,9 +214,15 @@ Extract facts about {competitor_name}'s actions and performance. Do not speculat
                 # IMPORTANT: Return summary WITH quality JSON on last line (for parse_quality_score)
                 summary_with_quality = f"{summary}\n{{\"quality\": {quality}}}"
                 LOG.info(f"Gemini competitor summary: {target_ticker} vs {competitor_ticker} ({len(summary)} chars)")
-                return summary_with_quality, "Gemini"
+
+                # Extract usage metadata
+                usage = {
+                    "input_tokens": response.usage_metadata.prompt_token_count,
+                    "output_tokens": response.usage_metadata.candidates_token_count
+                }
+                return summary_with_quality, "Gemini", usage
             else:
-                return None, "failed"
+                return None, "failed", None
 
         except Exception as e:
             if attempt < max_retries and should_retry(e):
@@ -217,9 +231,9 @@ Extract facts about {competitor_name}'s actions and performance. Do not speculat
                 time.sleep(wait_time)
             else:
                 LOG.error(f"Gemini competitor summary failed for {target_ticker}: {e}")
-                return None, "failed"
+                return None, "failed", None
 
-    return None, "failed"
+    return None, "failed", None
 
 
 async def generate_gemini_article_summary_upstream(
@@ -230,10 +244,10 @@ async def generate_gemini_article_summary_upstream(
     title: str,
     scraped_content: str,
     gemini_api_key: str
-) -> Tuple[Optional[str], str]:
+) -> Tuple[Optional[str], str, Optional[dict]]:
     """Generate Gemini summary for upstream supplier article"""
     if not gemini_api_key or not scraped_content or len(scraped_content.strip()) < 200:
-        return None, "failed"
+        return None, "failed", None
 
     max_retries = 3
 
@@ -274,9 +288,15 @@ Extract facts about {value_chain_company}'s supply capacity, costs, financial he
                 # IMPORTANT: Return summary WITH quality JSON on last line (for parse_quality_score)
                 summary_with_quality = f"{summary}\n{{\"quality\": {quality}}}"
                 LOG.info(f"Gemini upstream summary: {target_ticker} <- {value_chain_ticker} ({len(summary)} chars)")
-                return summary_with_quality, "Gemini"
+
+                # Extract usage metadata
+                usage = {
+                    "input_tokens": response.usage_metadata.prompt_token_count,
+                    "output_tokens": response.usage_metadata.candidates_token_count
+                }
+                return summary_with_quality, "Gemini", usage
             else:
-                return None, "failed"
+                return None, "failed", None
 
         except Exception as e:
             if attempt < max_retries and should_retry(e):
@@ -285,9 +305,9 @@ Extract facts about {value_chain_company}'s supply capacity, costs, financial he
                 time.sleep(wait_time)
             else:
                 LOG.error(f"Gemini upstream summary failed for {target_ticker}: {e}")
-                return None, "failed"
+                return None, "failed", None
 
-    return None, "failed"
+    return None, "failed", None
 
 
 async def generate_gemini_article_summary_downstream(
@@ -298,10 +318,10 @@ async def generate_gemini_article_summary_downstream(
     title: str,
     scraped_content: str,
     gemini_api_key: str
-) -> Tuple[Optional[str], str]:
+) -> Tuple[Optional[str], str, Optional[dict]]:
     """Generate Gemini summary for downstream customer article"""
     if not gemini_api_key or not scraped_content or len(scraped_content.strip()) < 200:
-        return None, "failed"
+        return None, "failed", None
 
     max_retries = 3
 
@@ -342,9 +362,15 @@ Extract facts about {value_chain_company}'s order trends, demand signals, financ
                 # IMPORTANT: Return summary WITH quality JSON on last line (for parse_quality_score)
                 summary_with_quality = f"{summary}\n{{\"quality\": {quality}}}"
                 LOG.info(f"Gemini downstream summary: {target_ticker} -> {value_chain_ticker} ({len(summary)} chars)")
-                return summary_with_quality, "Gemini"
+
+                # Extract usage metadata
+                usage = {
+                    "input_tokens": response.usage_metadata.prompt_token_count,
+                    "output_tokens": response.usage_metadata.candidates_token_count
+                }
+                return summary_with_quality, "Gemini", usage
             else:
-                return None, "failed"
+                return None, "failed", None
 
         except Exception as e:
             if attempt < max_retries and should_retry(e):
@@ -353,9 +379,9 @@ Extract facts about {value_chain_company}'s order trends, demand signals, financ
                 time.sleep(wait_time)
             else:
                 LOG.error(f"Gemini downstream summary failed for {target_ticker}: {e}")
-                return None, "failed"
+                return None, "failed", None
 
-    return None, "failed"
+    return None, "failed", None
 
 
 async def generate_gemini_article_summary_industry(
@@ -366,10 +392,10 @@ async def generate_gemini_article_summary_industry(
     scraped_content: str,
     gemini_api_key: str,
     geographic_markets: str = ""
-) -> Tuple[Optional[str], str]:
+) -> Tuple[Optional[str], str, Optional[dict]]:
     """Generate Gemini summary for industry/fundamental driver article"""
     if not gemini_api_key or not scraped_content or len(scraped_content.strip()) < 200:
-        return None, "failed"
+        return None, "failed", None
 
     max_retries = 3
 
@@ -412,9 +438,15 @@ Extract facts about EXTERNAL market forces (commodity prices, demand indicators,
                 # IMPORTANT: Return summary WITH quality JSON on last line (for parse_quality_score)
                 summary_with_quality = f"{summary}\n{{\"quality\": {quality}}}"
                 LOG.info(f"Gemini industry summary: {target_ticker} - {industry_keyword} ({len(summary)} chars)")
-                return summary_with_quality, "Gemini"
+
+                # Extract usage metadata
+                usage = {
+                    "input_tokens": response.usage_metadata.prompt_token_count,
+                    "output_tokens": response.usage_metadata.candidates_token_count
+                }
+                return summary_with_quality, "Gemini", usage
             else:
-                return None, "failed"
+                return None, "failed", None
 
         except Exception as e:
             if attempt < max_retries and should_retry(e):
@@ -423,9 +455,9 @@ Extract facts about EXTERNAL market forces (commodity prices, demand indicators,
                 time.sleep(wait_time)
             else:
                 LOG.error(f"Gemini industry summary failed for {target_ticker}: {e}")
-                return None, "failed"
+                return None, "failed", None
 
-    return None, "failed"
+    return None, "failed", None
 
 
 # ============================================================================
@@ -441,16 +473,16 @@ async def generate_claude_article_summary_company(
     anthropic_model: str,
     anthropic_api_url: str,
     http_session: aiohttp.ClientSession
-) -> Tuple[Optional[str], str]:
+) -> Tuple[Optional[str], str, Optional[dict]]:
     """Generate Claude summary for company article (fallback)
 
     Returns:
         Tuple[Optional[str], str]: (summary, status) where status is:
-            - "success": Summary generated successfully
-            - "failed": API error or processing failure
+            - "summary: Summary text with quality JSON successfully
+            - "provider: "Gemini" or "failed"
     """
     if not anthropic_api_key or not scraped_content or len(scraped_content.strip()) < 200:
-        return None, "failed"
+        return None, "failed", None
 
     max_retries = 3
 
@@ -495,8 +527,17 @@ Omitting this will cause processing failure. This is MANDATORY for every article
                     summary = result.get("content", [{}])[0].get("text", "").strip()
 
                     if summary and len(summary) > 10:
+                        # Extract usage metadata
+                        usage_data = result.get("usage", {})
+                        usage = {
+                            "input_tokens": usage_data.get("input_tokens", 0),
+                            "output_tokens": usage_data.get("output_tokens", 0),
+                            "cache_creation_input_tokens": usage_data.get("cache_creation_input_tokens", 0),
+                            "cache_read_input_tokens": usage_data.get("cache_read_input_tokens", 0)
+                        }
+
                         LOG.info(f"Claude company summary: {ticker} ({len(summary)} chars)")
-                        return summary, "Sonnet"
+                        return summary, "Sonnet", usage
                 else:
                     LOG.error(f"Claude company API error {response.status}")
                     if attempt < max_retries:
@@ -504,7 +545,7 @@ Omitting this will cause processing failure. This is MANDATORY for every article
                         LOG.warning(f"Retrying Claude in {wait_time}s...")
                         time.sleep(wait_time)
                         continue
-                    return None, "failed"
+                    return None, "failed", None
 
         except Exception as e:
             if attempt < max_retries and should_retry(e):
@@ -513,9 +554,9 @@ Omitting this will cause processing failure. This is MANDATORY for every article
                 time.sleep(wait_time)
             else:
                 LOG.error(f"Claude company summary failed for {ticker}: {e}")
-                return None, "failed"
+                return None, "failed", None
 
-    return None, "failed"
+    return None, "failed", None
 
 
 async def generate_claude_article_summary_competitor(
@@ -529,10 +570,10 @@ async def generate_claude_article_summary_competitor(
     anthropic_model: str,
     anthropic_api_url: str,
     http_session: aiohttp.ClientSession
-) -> Tuple[Optional[str], str]:
+) -> Tuple[Optional[str], str, Optional[dict]]:
     """Generate Claude summary for competitor article (fallback)"""
     if not anthropic_api_key or not scraped_content or len(scraped_content.strip()) < 200:
-        return None, "failed"
+        return None, "failed", None
 
     max_retries = 3
 
@@ -581,13 +622,22 @@ Omitting this will cause processing failure. This is MANDATORY for every article
 
                     if summary and len(summary) > 10:
                         LOG.info(f"Claude competitor summary: {target_ticker} vs {competitor_ticker} ({len(summary)} chars)")
-                        return summary, "Sonnet"
+                        # Extract usage metadata
+                        usage_data = result.get("usage", {})
+                        usage = {
+                            "input_tokens": usage_data.get("input_tokens", 0),
+                            "output_tokens": usage_data.get("output_tokens", 0),
+                            "cache_creation_input_tokens": usage_data.get("cache_creation_input_tokens", 0),
+                            "cache_read_input_tokens": usage_data.get("cache_read_input_tokens", 0)
+                        }
+
+                        return summary, "Sonnet", usage
                 else:
                     if attempt < max_retries:
                         wait_time = 2 ** attempt
                         time.sleep(wait_time)
                         continue
-                    return None, "failed"
+                    return None, "failed", None
 
         except Exception as e:
             if attempt < max_retries and should_retry(e):
@@ -595,9 +645,9 @@ Omitting this will cause processing failure. This is MANDATORY for every article
                 time.sleep(wait_time)
             else:
                 LOG.error(f"Claude competitor summary failed: {e}")
-                return None, "failed"
+                return None, "failed", None
 
-    return None, "failed"
+    return None, "failed", None
 
 
 async def generate_claude_article_summary_upstream(
@@ -611,10 +661,10 @@ async def generate_claude_article_summary_upstream(
     anthropic_model: str,
     anthropic_api_url: str,
     http_session: aiohttp.ClientSession
-) -> Tuple[Optional[str], str]:
+) -> Tuple[Optional[str], str, Optional[dict]]:
     """Generate Claude summary for upstream supplier article (fallback)"""
     if not anthropic_api_key or not scraped_content or len(scraped_content.strip()) < 200:
-        return None, "failed"
+        return None, "failed", None
 
     max_retries = 3
 
@@ -663,13 +713,22 @@ Omitting this will cause processing failure. This is MANDATORY for every article
 
                     if summary and len(summary) > 10:
                         LOG.info(f"Claude upstream summary: {target_ticker} <- {value_chain_ticker} ({len(summary)} chars)")
-                        return summary, "Sonnet"
+                        # Extract usage metadata
+                        usage_data = result.get("usage", {})
+                        usage = {
+                            "input_tokens": usage_data.get("input_tokens", 0),
+                            "output_tokens": usage_data.get("output_tokens", 0),
+                            "cache_creation_input_tokens": usage_data.get("cache_creation_input_tokens", 0),
+                            "cache_read_input_tokens": usage_data.get("cache_read_input_tokens", 0)
+                        }
+
+                        return summary, "Sonnet", usage
                 else:
                     if attempt < max_retries:
                         wait_time = 2 ** attempt
                         time.sleep(wait_time)
                         continue
-                    return None, "failed"
+                    return None, "failed", None
 
         except Exception as e:
             if attempt < max_retries and should_retry(e):
@@ -677,9 +736,9 @@ Omitting this will cause processing failure. This is MANDATORY for every article
                 time.sleep(wait_time)
             else:
                 LOG.error(f"Claude upstream summary failed: {e}")
-                return None, "failed"
+                return None, "failed", None
 
-    return None, "failed"
+    return None, "failed", None
 
 
 async def generate_claude_article_summary_downstream(
@@ -693,10 +752,10 @@ async def generate_claude_article_summary_downstream(
     anthropic_model: str,
     anthropic_api_url: str,
     http_session: aiohttp.ClientSession
-) -> Tuple[Optional[str], str]:
+) -> Tuple[Optional[str], str, Optional[dict]]:
     """Generate Claude summary for downstream customer article (fallback)"""
     if not anthropic_api_key or not scraped_content or len(scraped_content.strip()) < 200:
-        return None, "failed"
+        return None, "failed", None
 
     max_retries = 3
 
@@ -745,13 +804,22 @@ Omitting this will cause processing failure. This is MANDATORY for every article
 
                     if summary and len(summary) > 10:
                         LOG.info(f"Claude downstream summary: {target_ticker} -> {value_chain_ticker} ({len(summary)} chars)")
-                        return summary, "Sonnet"
+                        # Extract usage metadata
+                        usage_data = result.get("usage", {})
+                        usage = {
+                            "input_tokens": usage_data.get("input_tokens", 0),
+                            "output_tokens": usage_data.get("output_tokens", 0),
+                            "cache_creation_input_tokens": usage_data.get("cache_creation_input_tokens", 0),
+                            "cache_read_input_tokens": usage_data.get("cache_read_input_tokens", 0)
+                        }
+
+                        return summary, "Sonnet", usage
                 else:
                     if attempt < max_retries:
                         wait_time = 2 ** attempt
                         time.sleep(wait_time)
                         continue
-                    return None, "failed"
+                    return None, "failed", None
 
         except Exception as e:
             if attempt < max_retries and should_retry(e):
@@ -759,9 +827,9 @@ Omitting this will cause processing failure. This is MANDATORY for every article
                 time.sleep(wait_time)
             else:
                 LOG.error(f"Claude downstream summary failed: {e}")
-                return None, "failed"
+                return None, "failed", None
 
-    return None, "failed"
+    return None, "failed", None
 
 
 async def generate_claude_article_summary_industry(
@@ -775,10 +843,10 @@ async def generate_claude_article_summary_industry(
     anthropic_api_url: str,
     http_session: aiohttp.ClientSession,
     geographic_markets: str = ""
-) -> Tuple[Optional[str], str]:
+) -> Tuple[Optional[str], str, Optional[dict]]:
     """Generate Claude summary for industry/fundamental driver article (fallback)"""
     if not anthropic_api_key or not scraped_content or len(scraped_content.strip()) < 200:
-        return None, "failed"
+        return None, "failed", None
 
     max_retries = 3
 
@@ -829,13 +897,22 @@ Omitting this will cause processing failure. This is MANDATORY for every article
 
                     if summary and len(summary) > 10:
                         LOG.info(f"Claude industry summary: {target_ticker} - {industry_keyword} ({len(summary)} chars)")
-                        return summary, "Sonnet"
+                        # Extract usage metadata
+                        usage_data = result.get("usage", {})
+                        usage = {
+                            "input_tokens": usage_data.get("input_tokens", 0),
+                            "output_tokens": usage_data.get("output_tokens", 0),
+                            "cache_creation_input_tokens": usage_data.get("cache_creation_input_tokens", 0),
+                            "cache_read_input_tokens": usage_data.get("cache_read_input_tokens", 0)
+                        }
+
+                        return summary, "Sonnet", usage
                 else:
                     if attempt < max_retries:
                         wait_time = 2 ** attempt
                         time.sleep(wait_time)
                         continue
-                    return None, "failed"
+                    return None, "failed", None
 
         except Exception as e:
             if attempt < max_retries and should_retry(e):
@@ -843,9 +920,9 @@ Omitting this will cause processing failure. This is MANDATORY for every article
                 time.sleep(wait_time)
             else:
                 LOG.error(f"Claude industry summary failed: {e}")
-                return None, "failed"
+                return None, "failed", None
 
-    return None, "failed"
+    return None, "failed", None
 
 
 # ============================================================================

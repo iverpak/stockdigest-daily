@@ -13,6 +13,7 @@ Architecture:
 
 import json
 import logging
+import os
 import time
 from typing import Dict, Optional, Tuple
 import google.generativeai as genai
@@ -29,9 +30,12 @@ CONTENT_CHAR_LIMIT = 50000
 # ============================================================================
 
 def load_prompt(prompt_file: str) -> str:
-    """Load prompt from modules/ directory"""
+    """Load prompt from modules/ directory using relative path"""
     try:
-        with open(f"/workspaces/quantbrief-daily/modules/{prompt_file}", "r") as f:
+        # Get the directory where this module file is located
+        module_dir = os.path.dirname(os.path.abspath(__file__))
+        prompt_path = os.path.join(module_dir, prompt_file)
+        with open(prompt_path, "r") as f:
             return f.read()
     except Exception as e:
         LOG.error(f"Failed to load prompt {prompt_file}: {e}")

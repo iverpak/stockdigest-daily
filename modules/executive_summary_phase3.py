@@ -134,7 +134,8 @@ def _generate_phase3_gemini(
 
         usage = {
             "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens
+            "completion_tokens": completion_tokens,
+            "model": "gemini-2.5-pro"  # Track which model was used
         }
 
         LOG.info(f"[{ticker}] ✅ Phase 3 Gemini JSON generated ({len(response_text)} chars, "
@@ -281,7 +282,8 @@ def _generate_phase3_claude(
             # Create usage dict for cost tracking
             usage = {
                 "input_tokens": prompt_tokens,
-                "output_tokens": completion_tokens
+                "output_tokens": completion_tokens,
+                "model": "claude-sonnet-4-5-20250929"  # Track which model was used
             }
 
             LOG.info(f"[{ticker}] ✅ Phase 3 JSON generated ({len(response_text)} chars, "
@@ -348,7 +350,8 @@ def generate_executive_summary_phase3(
             if "prompt_tokens" in usage:
                 usage = {
                     "input_tokens": usage["prompt_tokens"],
-                    "output_tokens": usage["completion_tokens"]
+                    "output_tokens": usage["completion_tokens"],
+                    "model": usage.get("model", "gemini-2.5-pro")  # Preserve model info
                 }
             return final_merged, usage
         else:

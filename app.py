@@ -14043,12 +14043,21 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
                 json_string = json.dumps(json_output, indent=2)
                 ai_analysis_summary = json_string
 
-                # Track Phase 1 cost
+                # Track Phase 1 cost based on which model was used
                 phase1_usage = {
                     "input_tokens": prompt_tokens,
                     "output_tokens": completion_tokens
                 }
-                calculate_claude_api_cost(phase1_usage, "executive_summary_phase1")
+
+                if "gemini" in model_used.lower():
+                    # Gemini primary succeeded (uses Pro for Phase 1)
+                    calculate_gemini_api_cost(phase1_usage, "executive_summary_phase1", model="pro")
+                elif "claude" in model_used.lower():
+                    # Claude fallback succeeded
+                    calculate_claude_api_cost(phase1_usage, "executive_summary_phase1")
+                else:
+                    # Unknown or missing model (shouldn't happen, but log warning)
+                    LOG.warning(f"[{ticker}] Phase 1 cost tracking: Unknown model '{model_used}', skipping cost tracking")
 
                 LOG.info(f"✅ EXECUTIVE SUMMARY (Phase 1 - {model_used}) [{ticker}]: Generated valid JSON ({len(json_string)} chars, {prompt_tokens} prompt tokens, {completion_tokens} completion tokens)")
 
@@ -14915,11 +14924,32 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
 
         # Display executive summary (Claude primary, OpenAI fallback)
         openai_summary = openai_summaries.get(ticker, {}).get("ai_analysis_summary", "")
-        model_used = openai_summaries.get(ticker, {}).get("model_used", "AI")  # Get actual model used
+        model_used = openai_summaries.get(ticker, {}).get("model_used", "AI")  # Get Phase 1 model
 
         if openai_summary:
+            # Fetch Phase 2 model info from database if available
+            phase2_model = None
+            try:
+                with db() as conn, conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT ai_models FROM executive_summaries
+                        WHERE ticker = %s AND summary_date = CURRENT_DATE
+                        ORDER BY generated_at DESC LIMIT 1
+                    """, (ticker,))
+                    result = cur.fetchone()
+                    if result and result.get('ai_models'):
+                        ai_models = result['ai_models']
+                        phase2_model = ai_models.get('phase2') if isinstance(ai_models, dict) else None
+            except Exception as e:
+                LOG.warning(f"[{ticker}] Could not fetch Phase 2 model info: {e}")
+
+            # Build model display string
+            models_display = f"Phase 1: {model_used}"
+            if phase2_model:
+                models_display += f" | Phase 2: {phase2_model}"
+
             html.append("<div class='company-summary'>")
-            html.append(f"<div class='summary-title'>📰 Executive Summary (Phase 1 - Articles Only) - {model_used}</div>")
+            html.append(f"<div class='summary-title'>📰 Executive Summary - {models_display}</div>")
             html.append("<div class='summary-content'>")
 
             # Parse Phase 1 JSON and show FULL structure (filing hints + topic labels)
@@ -19946,9 +19976,18 @@ async def process_ticker_job(job: dict):
                             gemini_api_key=GEMINI_API_KEY
                         )
 
-                        # Track Phase 3 cost
+                        # Track Phase 3 cost based on which model was used
                         if phase3_usage:
-                            calculate_claude_api_cost(phase3_usage, "executive_summary_phase3")
+                            phase3_model = phase3_usage.get("model", "")
+                            if "gemini" in phase3_model.lower():
+                                # Gemini primary succeeded (uses Pro for Phase 3)
+                                calculate_gemini_api_cost(phase3_usage, "executive_summary_phase3", model="pro")
+                            elif "claude" in phase3_model.lower():
+                                # Claude fallback succeeded
+                                calculate_claude_api_cost(phase3_usage, "executive_summary_phase3")
+                            else:
+                                # Unknown or missing model (shouldn't happen, but log warning)
+                                LOG.warning(f"[{ticker}] Phase 3 cost tracking: Unknown model '{phase3_model}', skipping cost tracking")
 
                         if phase3_merged_json:
                             # Update database with Phase 3 content
@@ -20049,9 +20088,18 @@ async def process_ticker_job(job: dict):
                                 gemini_api_key=GEMINI_API_KEY
                             )
 
-                            # Track Phase 3 cost
+                            # Track Phase 3 cost based on which model was used
                             if phase3_usage:
-                                calculate_claude_api_cost(phase3_usage, "executive_summary_phase3")
+                                phase3_model = phase3_usage.get("model", "")
+                                if "gemini" in phase3_model.lower():
+                                    # Gemini primary succeeded (uses Pro for Phase 3)
+                                    calculate_gemini_api_cost(phase3_usage, "executive_summary_phase3", model="pro")
+                                elif "claude" in phase3_model.lower():
+                                    # Claude fallback succeeded
+                                    calculate_claude_api_cost(phase3_usage, "executive_summary_phase3")
+                                else:
+                                    # Unknown or missing model (shouldn't happen, but log warning)
+                                    LOG.warning(f"[{ticker}] Phase 3 cost tracking: Unknown model '{phase3_model}', skipping cost tracking")
 
                             if phase3_merged_json:
                                 # Update database with Phase 3 content
@@ -29777,12 +29825,21 @@ async def regenerate_email_api(request: Request):
         LOG.info(f"[{ticker}] Cleaning domain URLs to formal publication names in Phase 1 content")
         json_output = clean_executive_summary_domains(json_output)
 
-        # Track Phase 1 cost
+        # Track Phase 1 cost based on which model was used
         phase1_usage = {
             "input_tokens": prompt_tokens,
             "output_tokens": completion_tokens
         }
-        calculate_claude_api_cost(phase1_usage, "executive_summary_phase1")
+
+        if "gemini" in model_used.lower():
+            # Gemini primary succeeded (uses Pro for Phase 1)
+            calculate_gemini_api_cost(phase1_usage, "executive_summary_phase1", model="pro")
+        elif "claude" in model_used.lower():
+            # Claude fallback succeeded
+            calculate_claude_api_cost(phase1_usage, "executive_summary_phase1")
+        else:
+            # Unknown or missing model (shouldn't happen, but log warning)
+            LOG.warning(f"[{ticker}] Phase 1 cost tracking: Unknown model '{model_used}', skipping cost tracking")
 
         # PHASE 2: Enrich Phase 1 with filing context (10-K, 10-Q, Transcript)
         final_json = json_output  # Default to Phase 1 only
@@ -30038,9 +30095,18 @@ async def regenerate_email_api(request: Request):
                     gemini_api_key=GEMINI_API_KEY
                 )
 
-                # Track Phase 3 cost
+                # Track Phase 3 cost based on which model was used
                 if phase3_usage:
-                    calculate_claude_api_cost(phase3_usage, "executive_summary_phase3")
+                    phase3_model = phase3_usage.get("model", "")
+                    if "gemini" in phase3_model.lower():
+                        # Gemini primary succeeded (uses Pro for Phase 3)
+                        calculate_gemini_api_cost(phase3_usage, "executive_summary_phase3", model="pro")
+                    elif "claude" in phase3_model.lower():
+                        # Claude fallback succeeded
+                        calculate_claude_api_cost(phase3_usage, "executive_summary_phase3")
+                    else:
+                        # Unknown or missing model (shouldn't happen, but log warning)
+                        LOG.warning(f"[{ticker}] Phase 3 cost tracking: Unknown model '{phase3_model}', skipping cost tracking")
 
                 if phase3_merged_json:
                     # Update database with Phase 3 content

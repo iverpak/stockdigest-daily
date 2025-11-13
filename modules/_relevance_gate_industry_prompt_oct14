@@ -141,4 +141,33 @@ Regulatory development without specific numbers (Score: 7.0):
   "reason": "Congress advances drug pricing reform bill with Medicare negotiation provisions, material driver for pharma revenues despite lack of specific pricing impact figures."
 }}
 
-**Your Goal:** Score based on ACTIONABILITY for investors. Prefer quantified data (scores 8-10) but accept qualitative developments if material (scores 6-7). When in doubt, score lower.
+**Your Goal:** Score based on ACTIONABILITY for investors. Prefer quantified data (scores 8-10) but accept qualitative developments if material (scores 6-7). When in doubt, score lower."""
+
+            # User content (ticker-specific)
+            user_content = f"""**TARGET COMPANY:** {company_name} ({ticker})
+**FUNDAMENTAL DRIVER KEYWORD:** {industry_keyword}
+**GEOGRAPHIC MARKETS:** {geographic_markets if geographic_markets else 'Unknown'}
+
+**ARTICLE TITLE:**
+{title}
+
+**ARTICLE CONTENT:**
+{scraped_content[:8000]}
+
+**YOUR TASK:**
+Rate this article's relevance to {company_name} ({ticker}) fundamental drivers on a 0-10 scale. Focus on whether article contains quantifiable or qualitative intelligence about external market forces driving financial performance. Return JSON only."""
+
+            headers = {
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json"
+            }
+
+            data = {
+                "model": ANTHROPIC_MODEL,
+                "max_tokens": 512,
+                "system": [
+                    {
+                        "type": "text",
+                        "text": system_prompt,
+                        

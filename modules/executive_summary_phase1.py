@@ -311,22 +311,15 @@ def generate_executive_summary_phase1(
         if response.status_code == 200:
             result = response.json()
 
-            # Extract JSON from response
+            # Extract JSON from response using unified parser (4-tier fallback strategy)
             content = result.get("content", [{}])[0].get("text", "")
 
-            # Claude may wrap JSON in ```json ... ``` - extract it
-            json_match = re.search(r'```json\s*(\{.*?\})\s*```', content, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(1)
-            else:
-                json_str = content
+            # Use shared JSON extraction utility (handles all response formats)
+            from modules.json_utils import extract_json_from_claude_response
+            json_output = extract_json_from_claude_response(content, ticker)
 
-            # Parse JSON
-            try:
-                json_output = json.loads(json_str)
-            except json.JSONDecodeError as e:
-                LOG.error(f"[{ticker}] Failed to parse Phase 1 JSON: {e}")
-                LOG.error(f"[{ticker}] Raw response (first 1000 chars): {content[:1000]}")
+            if not json_output:
+                LOG.error(f"[{ticker}] Failed to extract Phase 1 JSON from response")
                 return None
 
             # Track usage

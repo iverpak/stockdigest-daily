@@ -188,10 +188,11 @@ def _parse_phase3_json_response(response_text: str, ticker: str) -> Optional[Dic
     """
     Parse Phase 3 JSON response from Claude.
 
-    Handles Claude's common response formats:
+    Uses unified JSON extraction utility with 4-tier fallback strategy:
     1. Plain JSON
-    2. JSON wrapped in markdown code blocks
-    3. Text before/after JSON
+    2. Markdown wrapped with 'json' tag
+    3. Markdown wrapped without tag
+    4. Brace counting (handles deeply nested JSON)
 
     Args:
         response_text: Raw response text from Claude
@@ -200,30 +201,5 @@ def _parse_phase3_json_response(response_text: str, ticker: str) -> Optional[Dic
     Returns:
         Parsed JSON dict or None if failed
     """
-    try:
-        # Try direct JSON parse first
-        return json.loads(response_text)
-    except json.JSONDecodeError:
-        pass
-
-    # Try extracting from markdown code block
-    json_pattern = r'```(?:json)?\s*(\{.+?\})\s*```'
-    match = re.search(json_pattern, response_text, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group(1))
-        except json.JSONDecodeError:
-            pass
-
-    # Try finding JSON object in text
-    json_pattern = r'\{[\s\S]*"sections"[\s\S]*\}'
-    match = re.search(json_pattern, response_text)
-    if match:
-        try:
-            return json.loads(match.group(0))
-        except json.JSONDecodeError:
-            pass
-
-    LOG.error(f"[{ticker}] Could not parse Phase 3 JSON from response (length: {len(response_text)})")
-    LOG.error(f"[{ticker}] Full response:\n{response_text}")
-    return None
+    from modules.json_utils import extract_json_from_claude_response
+    return extract_json_from_claude_response(response_text, ticker)

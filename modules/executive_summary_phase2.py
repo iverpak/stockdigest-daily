@@ -470,21 +470,18 @@ def generate_executive_summary_phase2(
                 LOG.error(f"❌ [{ticker}] Claude returned empty Phase 2 response")
                 return None
 
-            # Parse JSON from response
+            # Parse JSON from response using unified parser (4-tier fallback strategy)
             try:
-                # Extract JSON if wrapped in markdown code blocks
-                if "```json" in response_text:
-                    json_start = response_text.find("```json") + 7
-                    json_end = response_text.find("```", json_start)
-                    json_str = response_text[json_start:json_end].strip()
-                elif "```" in response_text:
-                    json_start = response_text.find("```") + 3
-                    json_end = response_text.find("```", json_start)
-                    json_str = response_text[json_start:json_end].strip()
-                else:
-                    json_str = response_text.strip()
+                # Use shared JSON extraction utility (handles all response formats)
+                from modules.json_utils import extract_json_from_claude_response
+                parsed_json = extract_json_from_claude_response(response_text, ticker)
 
-                parsed_json = json.loads(json_str)
+                if not parsed_json:
+                    LOG.error(f"❌ [{ticker}] Failed to extract Phase 2 JSON from response")
+                    return None
+
+                # For logging: get JSON string length
+                json_str = response_text.strip()
 
                 # Handle different possible structures from Claude
                 # Claude might return:

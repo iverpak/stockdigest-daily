@@ -89,6 +89,46 @@ Material questions Phase 2 context should answer:
 If context answers NONE of these → DISCARD
 
 ═══════════════════════════════════════════════════════════════════════════
+BALANCE STRUCTURES - PROFESSIONAL FLOW
+═══════════════════════════════════════════════════════════════════════════
+
+Use connectors to create analytical depth (not flat statements):
+
+CONTRAST (Problem + Mitigation):
+❌ "Vacancy rose to 7.4%. Company occupancy was 95.3%."
+✅ "While vacancy rose to 7.4%, Prologis's occupancy stood at 95.3%, outperforming by 290 bps per Oct 15 call"
+
+QUALIFICATION (Positive + Reality):
+❌ "Expanded AWS partnership. Business segment declined 2.8%."
+✅ "Expanded AWS partnership for AI workloads, targeting a 'booming' market, though the Business segment saw revenues decline 2.8% YoY per Q3 10-Q"
+
+VALIDATION (Claim + Evidence):
+❌ "Competitive pressure exists. Lease rates declined."
+✅ "Management acknowledged pressure, noting October new lease rates down 2.9% YoY per Oct 30 call"
+
+Key connectors: "While...however", "though", "noting that", "However, [company] also"
+
+═══════════════════════════════════════════════════════════════════════════
+QUANTIFICATION-FIRST (CRITICAL)
+═══════════════════════════════════════════════════════════════════════════
+
+When context contains metrics, lead with the number:
+
+❌ BANNED:                          ✅ REQUIRED:
+"significant exposure"           → "56.2% of FY2024 revenue per 10-K"
+"high leverage"                  → "$535M debt with July 2027 maturity"
+"competitive pressure"           → "new lease rates down 2.9% YoY"
+"major customer"                 → "6.0% of consolidated rent per 10-K"
+
+Structure: [Description], with/representing [NUMBER + SOURCE]
+
+Risk integration order:
+1. State risk → 2. Quantify exposure → 3. Add evidence → 4. Management acknowledgment
+
+Conflicting numbers: Present both with sources
+"Debt load ($97.5B per Yahoo Finance; $93.8B per FY2024 10-K)"
+
+═══════════════════════════════════════════════════════════════════════════
 SCENARIO VALIDATION (CRITICAL)
 ═══════════════════════════════════════════════════════════════════════════
 
@@ -122,6 +162,32 @@ Examples:
 
 If scenario becomes very short after removals (e.g., 1 sentence left), that's OK.
 Do NOT pad with generic statements. Quality over quantity.
+
+═══════════════════════════════════════════════════════════════════════════
+SCENARIO STRUCTURE - SEQUENCING LOGIC
+═══════════════════════════════════════════════════════════════════════════
+
+UPSIDE - Concrete First, Speculative Second:
+✅ Lead with: Current metrics, strategic actions, quantified opportunities
+❌ Avoid leading with: "If rates fall...", "Should market improve..."
+
+Example sequence:
+"Company realizing 4.5% renewal growth on 75% of leases [CURRENT]. Affordability 
+gap of ~$900/month supports demand [STRUCTURAL]. Acquiring homes at 20%+ discounts 
+[STRATEGIC]. Should rates fall, could further improve [POTENTIAL]."
+
+DOWNSIDE - Evidence First, Implications Second:
+✅ Lead with: Concentration %, declining metrics, financial constraints
+❌ Avoid: "Could face challenges" without quantification
+
+Example sequence:
+"Sun Belt represents 56.2% of revenue per 10-K [QUANTIFIED]. Management expects 
+oversupply for 'a couple more quarters' with new lease rates down 2.9% [EVIDENCE]. 
+Leverage at $535M adds financial risk [CONTEXT]."
+
+Management quotes: Always integrate inline with attribution
+"targeting legacy businesses 'costing us billions' per Oct 29 call"
+Never summarize away: "clearly losing share", "$17.58-$18.50 per share"
 
 ═══════════════════════════════════════════════════════════════════════════
 LENGTH ENFORCEMENT

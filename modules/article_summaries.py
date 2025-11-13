@@ -14,6 +14,7 @@ Architecture:
 import json
 import logging
 import os
+import re
 import time
 from typing import Dict, Optional, Tuple
 import google.generativeai as genai
@@ -1077,6 +1078,13 @@ Rate this article's relevance to {company_name} ({ticker}) fundamental drivers o
                     # Wrap in try/except to catch JSON errors and retry properly
                     try:
                         LOG.info(f"[{ticker}] Attempting to parse Claude response ({len(response_text)} chars): {response_text[:200]}")
+
+                        # Extract JSON from markdown code blocks (Claude often wraps JSON in ```json ... ```)
+                        json_match = re.search(r'```json\s*(\{.*?\})\s*```', response_text, re.DOTALL)
+                        if json_match:
+                            response_text = json_match.group(1)
+                            LOG.info(f"[{ticker}] Extracted JSON from markdown wrapper")
+
                         result = json.loads(response_text)
                     except json.JSONDecodeError as e:
                         LOG.error(f"Claude returned non-JSON response for {ticker}: {e}")

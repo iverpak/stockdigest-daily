@@ -131,8 +131,9 @@ The quality score (0-10) is MANDATORY."""
             quality = result.get("quality")
 
             if summary and quality is not None:
+                summary_with_quality = f"{summary}\n{{\"quality\": {quality}}}"
                 LOG.info(f"Gemini company summary: {ticker} ({len(summary)} chars, quality: {quality})")
-                return summary, "success"
+                return summary_with_quality, "Gemini"
             else:
                 LOG.error(f"Gemini returned incomplete JSON for {ticker}")
                 return None, "failed"
@@ -198,8 +199,10 @@ Extract facts about {competitor_name}'s actions and performance. Do not speculat
             quality = result.get("quality")
 
             if summary and quality is not None:
+                # IMPORTANT: Return summary WITH quality JSON on last line (for parse_quality_score)
+                summary_with_quality = f"{summary}\n{{\"quality\": {quality}}}"
                 LOG.info(f"Gemini competitor summary: {target_ticker} vs {competitor_ticker} ({len(summary)} chars)")
-                return summary, "success"
+                return summary_with_quality, "Gemini"
             else:
                 return None, "failed"
 
@@ -264,8 +267,10 @@ Extract facts about {value_chain_company}'s supply capacity, costs, financial he
             quality = result.get("quality")
 
             if summary and quality is not None:
+                # IMPORTANT: Return summary WITH quality JSON on last line (for parse_quality_score)
+                summary_with_quality = f"{summary}\n{{\"quality\": {quality}}}"
                 LOG.info(f"Gemini upstream summary: {target_ticker} <- {value_chain_ticker} ({len(summary)} chars)")
-                return summary, "success"
+                return summary_with_quality, "Gemini"
             else:
                 return None, "failed"
 
@@ -330,8 +335,10 @@ Extract facts about {value_chain_company}'s order trends, demand signals, financ
             quality = result.get("quality")
 
             if summary and quality is not None:
+                # IMPORTANT: Return summary WITH quality JSON on last line (for parse_quality_score)
+                summary_with_quality = f"{summary}\n{{\"quality\": {quality}}}"
                 LOG.info(f"Gemini downstream summary: {target_ticker} -> {value_chain_ticker} ({len(summary)} chars)")
-                return summary, "success"
+                return summary_with_quality, "Gemini"
             else:
                 return None, "failed"
 
@@ -398,8 +405,10 @@ Extract facts about EXTERNAL market forces (commodity prices, demand indicators,
             quality = result.get("quality")
 
             if summary and quality is not None:
+                # IMPORTANT: Return summary WITH quality JSON on last line (for parse_quality_score)
+                summary_with_quality = f"{summary}\n{{\"quality\": {quality}}}"
                 LOG.info(f"Gemini industry summary: {target_ticker} - {industry_keyword} ({len(summary)} chars)")
-                return summary, "success"
+                return summary_with_quality, "Gemini"
             else:
                 return None, "failed"
 
@@ -483,7 +492,7 @@ Omitting this will cause processing failure. This is MANDATORY for every article
 
                     if summary and len(summary) > 10:
                         LOG.info(f"Claude company summary: {ticker} ({len(summary)} chars)")
-                        return summary, "success"
+                        return summary, "Sonnet"
                 else:
                     LOG.error(f"Claude company API error {response.status}")
                     if attempt < max_retries:
@@ -568,7 +577,7 @@ Omitting this will cause processing failure. This is MANDATORY for every article
 
                     if summary and len(summary) > 10:
                         LOG.info(f"Claude competitor summary: {target_ticker} vs {competitor_ticker} ({len(summary)} chars)")
-                        return summary, "success"
+                        return summary, "Sonnet"
                 else:
                     if attempt < max_retries:
                         wait_time = 2 ** attempt
@@ -650,7 +659,7 @@ Omitting this will cause processing failure. This is MANDATORY for every article
 
                     if summary and len(summary) > 10:
                         LOG.info(f"Claude upstream summary: {target_ticker} <- {value_chain_ticker} ({len(summary)} chars)")
-                        return summary, "success"
+                        return summary, "Sonnet"
                 else:
                     if attempt < max_retries:
                         wait_time = 2 ** attempt
@@ -732,7 +741,7 @@ Omitting this will cause processing failure. This is MANDATORY for every article
 
                     if summary and len(summary) > 10:
                         LOG.info(f"Claude downstream summary: {target_ticker} -> {value_chain_ticker} ({len(summary)} chars)")
-                        return summary, "success"
+                        return summary, "Sonnet"
                 else:
                     if attempt < max_retries:
                         wait_time = 2 ** attempt
@@ -816,7 +825,7 @@ Omitting this will cause processing failure. This is MANDATORY for every article
 
                     if summary and len(summary) > 10:
                         LOG.info(f"Claude industry summary: {target_ticker} - {industry_keyword} ({len(summary)} chars)")
-                        return summary, "success"
+                        return summary, "Sonnet"
                 else:
                     if attempt < max_retries:
                         wait_time = 2 ** attempt

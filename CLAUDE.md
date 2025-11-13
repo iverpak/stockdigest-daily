@@ -667,11 +667,12 @@ CREATE TABLE sec_8k_filings (
   - summary_text, ai_provider (claude/gemini), ai_model
   - UNIQUE(ticker, report_type, quarter, year)
 
-- **`press_releases`**: Stores press release summaries **(NEW - Oct 30, 2025)**
-  - ticker, company_name, report_date, pr_title (VARCHAR 200)
+- **`press_releases`**: Stores press release summaries **(NEW - Oct 30, 2025, UPDATED - Nov 13, 2025)**
+  - ticker, company_name, report_date (TIMESTAMPTZ), pr_title (VARCHAR 200)
   - summary_text, ai_provider (claude), ai_model
   - processing_duration_seconds, job_id, generated_at
-  - **UNIQUE(ticker, report_date, pr_title)** - Supports multiple PRs per day
+  - **UNIQUE INDEX on (ticker, report_date, pr_title)** - Full datetime precision for deduplication
+  - **Schema Fix (Nov 13, 2025):** Changed report_date from DATE to TIMESTAMPTZ to store full datetime (e.g., "2025-11-13 10:00:00") for accurate comparison logic
   - **Migrated from transcript_summaries** - Separate table for better schema design
   - **Research Library UI (Oct 30, 2025):**
     - Title displayed prominently (80 char truncation)

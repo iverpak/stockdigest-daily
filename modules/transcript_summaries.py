@@ -753,18 +753,18 @@ def build_transcript_summary_html(sections: Dict[str, List[str]], content_type: 
 
     html = ""
 
-    # Always render sections in fixed order (emojis stripped automatically)
-    html += build_section("📌 Bottom Line", sections.get("bottom_line", []), use_bullets=False)
-    html += build_section("💰 Financial Results", sections.get("financial_results", []), use_bullets=True, bold_labels=True)
-    html += build_section("🏢 Major Developments", sections.get("major_developments", []), use_bullets=True, bold_labels=True)
-    html += build_section("📊 Operational Metrics", sections.get("operational_metrics", []), use_bullets=True, bold_labels=True)
-    html += build_section("📈 Guidance", sections.get("guidance", []), use_bullets=True, bold_labels=True)
-    html += build_section("🎯 Strategic Initiatives", sections.get("strategic_initiatives", []), use_bullets=True, bold_labels=True)
-    html += build_section("💼 Management Sentiment & Tone", sections.get("management_sentiment", []), use_bullets=True, bold_labels=True)
-    html += build_section("⚠️ Risk Factors & Headwinds", sections.get("risk_factors", []), use_bullets=True, bold_labels=True)
-    html += build_section("🏭 Industry & Competitive Dynamics", sections.get("industry_competitive", []), use_bullets=True, bold_labels=True)
-    html += build_section("🤝 Related Entities", sections.get("related_entities", []), use_bullets=True, bold_labels=True)
-    html += build_section("💡 Capital Allocation", sections.get("capital_allocation", []), use_bullets=True, bold_labels=True)
+    # Always render sections in fixed order (clean headers without emojis)
+    html += build_section("Bottom Line", sections.get("bottom_line", []), use_bullets=False)
+    html += build_section("Financial Results", sections.get("financial_results", []), use_bullets=True, bold_labels=True)
+    html += build_section("Major Developments", sections.get("major_developments", []), use_bullets=True, bold_labels=True)
+    html += build_section("Operational Metrics", sections.get("operational_metrics", []), use_bullets=True, bold_labels=True)
+    html += build_section("Guidance", sections.get("guidance", []), use_bullets=True, bold_labels=True)
+    html += build_section("Strategic Initiatives", sections.get("strategic_initiatives", []), use_bullets=True, bold_labels=True)
+    html += build_section("Management Sentiment & Tone", sections.get("management_sentiment", []), use_bullets=True, bold_labels=True)
+    html += build_section("Risk Factors & Headwinds", sections.get("risk_factors", []), use_bullets=True, bold_labels=True)
+    html += build_section("Industry & Competitive Dynamics", sections.get("industry_competitive", []), use_bullets=True, bold_labels=True)
+    html += build_section("Related Entities", sections.get("related_entities", []), use_bullets=True, bold_labels=True)
+    html += build_section("Capital Allocation", sections.get("capital_allocation", []), use_bullets=True, bold_labels=True)
 
     # Q&A Highlights (only for transcripts, special formatting)
     if content_type == 'transcript':
@@ -772,9 +772,9 @@ def build_transcript_summary_html(sections: Dict[str, List[str]], content_type: 
 
     # Top-level Upside/Downside/Variables sections (Oct 2025 - promoted from sub-sections)
     # Upside/Downside are PARAGRAPHS, Variables are BULLETS
-    html += build_section("📈 Upside Scenario", sections.get("upside_scenario", []), use_bullets=False, bold_labels=False)
-    html += build_section("📉 Downside Scenario", sections.get("downside_scenario", []), use_bullets=False, bold_labels=False)
-    html += build_section("🔍 Key Variables to Monitor", sections.get("key_variables", []), use_bullets=True, bold_labels=True)
+    html += build_section("Upside Scenario", sections.get("upside_scenario", []), use_bullets=False, bold_labels=False)
+    html += build_section("Downside Scenario", sections.get("downside_scenario", []), use_bullets=False, bold_labels=False)
+    html += build_section("Key Variables to Monitor", sections.get("key_variables", []), use_bullets=True, bold_labels=True)
 
     return html
 

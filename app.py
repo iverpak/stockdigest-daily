@@ -17141,7 +17141,7 @@ If no industry/competitive discussion:
 SCOPE: Specific companies management named during the call (competitors, suppliers, customers)
 
 Format (use • bullet with entity type label):
-- [COMPETITOR/SUPPLIER/CUSTOMER]: [Company Name] - [What management said about them with attribution]
+- Competitor/Supplier/Customer: [Company Name] - [What management said about them with attribution]
 
 Include ONLY if:
 - Management named the company explicitly (not "a large customer" or "our biggest supplier")
@@ -17151,12 +17151,12 @@ Include ONLY if:
 Impact/sentiment tags NOT required for this section.
 
 Examples:
-- [COMPETITOR]: Microsoft - CEO acknowledged losing enterprise cloud deals to Azure; noted pricing 15-20% below company rates
-- [CUSTOMER]: Amazon - CFO stated accounts for 18% of Q3 revenue; multi-year contract extends through 2027
-- [SUPPLIER]: NVIDIA - Management confirmed Blackwell GPU deliveries began in October; expect full production ramp in Q1 2026
+- Competitor: Microsoft - CEO acknowledged losing enterprise cloud deals to Azure; noted pricing 15-20% below company rates
+- Customer: Amazon - CFO stated accounts for 18% of Q3 revenue; multi-year contract extends through 2027
+- Supplier: NVIDIA - Management confirmed Blackwell GPU deliveries began in October; expect full production ramp in Q1 2026
 
 If management discusses entity without naming:
-- [CUSTOMER]: Large hyperscale provider - CFO stated represents 23% of revenue but did not name company; contract renewal in Q2 2026
+- Customer: Large hyperscale provider - CFO stated represents 23% of revenue but did not name company; contract renewal in Q2 2026
 
 If no specific companies named:
 [Omit section entirely]
@@ -27200,62 +27200,49 @@ async def generate_transcript_summary_api(request: Request):
 
         LOG.info(f"💾 Saved summary to database")
 
-        # Only send emails for Claude summaries (Gemini is view-only for A/B testing)
-        if ai_provider == 'claude':
-            # Get real-time stock data using unified helper (yfinance → Polygon → database → None)
-            stock_data = get_filing_stock_data(ticker)
+        # Send email for both Gemini and Claude summaries
+        # Get real-time stock data using unified helper (yfinance → Polygon → database → None)
+        stock_data = get_filing_stock_data(ticker)
 
-            # Generate and send email (using module function)
-            # Use formatted quarter (already has Q prefix from above)
-            email_data = generate_transcript_email(
-                ticker=ticker,
-                company_name=company_name,
-                report_type=report_type,
-                quarter=quarter_formatted,
-                year=year,
-                report_date=report_date,
-                pr_title=pr_title,
-                summary_text=summary_text,
-                fmp_url=fmp_url,
-                stock_price=stock_data['stock_price'],
-                price_change_pct=stock_data['price_change_pct'],
-                price_change_color=stock_data['price_change_color'],
-                ytd_return_pct=stock_data['ytd_return_pct'],
-                ytd_return_color=stock_data['ytd_return_color'],
-                market_status=stock_data['market_status'],
-                return_label=stock_data['return_label']
-            )
+        # Generate and send email (using module function)
+        # Use formatted quarter (already has Q prefix from above)
+        email_data = generate_transcript_email(
+            ticker=ticker,
+            company_name=company_name,
+            report_type=report_type,
+            quarter=quarter_formatted,
+            year=year,
+            report_date=report_date,
+            pr_title=pr_title,
+            summary_text=summary_text,
+            fmp_url=fmp_url,
+            stock_price=stock_data['stock_price'],
+            price_change_pct=stock_data['price_change_pct'],
+            price_change_color=stock_data['price_change_color'],
+            ytd_return_pct=stock_data['ytd_return_pct'],
+            ytd_return_color=stock_data['ytd_return_color'],
+            market_status=stock_data['market_status'],
+            return_label=stock_data['return_label']
+        )
 
-            # Send to admin email
-            success = send_email(
-                subject=email_data['subject'],
-                html_body=email_data['html'],
-                to='stockdigest.research@gmail.com'
-            )
+        # Send to admin email
+        success = send_email(
+            subject=email_data['subject'],
+            html_body=email_data['html'],
+            to='stockdigest.research@gmail.com'
+        )
 
-            if success:
-                LOG.info(f"✅ Transcript summary email sent successfully")
-                return {
-                    "status": "success",
-                    "message": f"Summary generated and email sent to stockdigest.research@gmail.com",
-                    "ticker": ticker,
-                    "company_name": company_name,
-                    "report_type": report_type
-                }
-            else:
-                return {"status": "error", "message": "Email sending failed"}
-
-        else:  # Gemini - view only
-            LOG.info(f"✅ Gemini summary saved (view-only, no email sent)")
+        if success:
+            LOG.info(f"✅ Transcript summary email sent successfully")
             return {
                 "status": "success",
-                "message": f"Summary generated and saved to database (view-only)",
+                "message": f"Summary generated and email sent to stockdigest.research@gmail.com",
                 "ticker": ticker,
                 "company_name": company_name,
-                "report_type": report_type,
-                "model": ai_model,
-                "generation_time_seconds": generation_time_seconds
+                "report_type": report_type
             }
+        else:
+            return {"status": "error", "message": "Email sending failed"}
 
     except Exception as e:
         LOG.error(f"Failed to generate transcript summary: {e}", exc_info=True)

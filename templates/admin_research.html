@@ -733,7 +733,7 @@
                             </div>
                             <button onclick="generateTranscript('${ticker}', ${item.quarter}, ${item.year})"
                                     style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600;">
-                                Generate Summary (5-10 min)
+                                GENERATE
                             </button>
                         </div>
                     `;
@@ -1473,8 +1473,8 @@
                 ai_provider: doc.ai_provider         // Include ai_provider for transcript disambiguation
             }).replace(/"/g, '&quot;');
 
-            // Hide Email button for Gemini transcripts (view-only for A/B testing) and entity logs (no email endpoint)
-            const showEmailButton = !(type === 'transcripts' && doc.ai_provider === 'gemini') && type !== 'entity_logs';
+            // Hide Email button only for entity logs (no email endpoint)
+            const showEmailButton = type !== 'entity_logs';
 
             return `
                 <div style="display: flex; gap: 3px; justify-content: center; flex-wrap: nowrap;">

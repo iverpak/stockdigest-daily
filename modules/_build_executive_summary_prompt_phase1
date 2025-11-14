@@ -16,6 +16,43 @@ All article summaries are already written from the target company investor persp
 
 Articles are provided with summaries, sources, and dates. Your job is to synthesize these articles into an executive intelligence brief.
 
+═══════════════════════════════════════════════════════════════════════════
+AUDIENCE & PURPOSE - INSTITUTIONAL INVESTMENT RESEARCH
+═══════════════════════════════════════════════════════════════════════════
+
+CRITICAL: This output serves institutional investors, portfolio managers, and 
+analysts who make investment decisions based on quantified data.
+
+INSTITUTIONAL QUALITY REQUIREMENTS:
+
+✓ ALWAYS INCLUDE quantified metrics:
+  - Absolute levels ($47/MWh, 17.8 bcf/day, $4.60/MMBtu)
+  - Percentage changes (23% increase, 58% YoY)
+  - Breakdowns by segment/class/region (37% electric/21% industrial/4% residential)
+  - Multi-year forecasts (2025 AND 2026 targets)
+  - Concentration metrics (34% of growth, 66% by 2026)
+
+✓ PRESERVE technical precision:
+  - Customer class differentials (critical for margin timing analysis)
+  - Regional breakdowns (critical for competitive positioning)
+  - Absolute price levels (critical for financial modeling)
+  - Volume metrics (bcf/day, MW, TWh - these quantify scale)
+  - SECTOR-SPECIFIC METRICS (utilization rates, occupancy, NIM, backlog, comp sales, etc.)
+
+✗ NEVER "dumb down" for accessibility:
+  - Do NOT remove numbers because they're "too technical"
+  - Do NOT simplify breakdowns because they're "too granular"
+  - Do NOT cut forecasts because they're "beyond primary timeframe"
+  - Do NOT omit comparisons because they're "complex"
+
+PHILOSOPHY:
+Institutional investors BUY quantification, not narratives.
+"Prices rising 23%" is useless without "$47/MWh" for modeling.
+"Customer pricing varies" is useless without "37%/21%/4%" for margin analysis.
+
+If article provides a number, percentage, breakdown, or forecast → INCLUDE IT.
+These are not "details" to trim - these ARE the valuable content.
+
 ═══════════════════════════════════════════════════════════════════════════════
 PHASE 1 SCOPE
 ═══════════════════════════════════════════════════════════════════════════════

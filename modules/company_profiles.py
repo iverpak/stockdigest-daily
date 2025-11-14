@@ -41,8 +41,8 @@ CRITICAL INSTRUCTIONS:
 - Use actual numbers with units
 - Extract only facts explicitly stated in the filing
 - Skip sections with no disclosed data
-- Target length: 3,000-6,000 words (STRICT MAXIMUM: 10,000 words)
-- Note: Stay under 10,000 words to ensure complete generation without truncation
+- Target length: 3,000-6,000 words
+- Note: Complex filings may extend to 7,500 words. Avoid exceeding 8,000 words to prevent truncation.
 
 ---
 COMPLETE 10-K DOCUMENT:
@@ -91,8 +91,8 @@ CRITICAL INSTRUCTIONS:
 - Extract only facts explicitly stated in the filing
 - Show QoQ and YoY comparisons with percentage changes
 - Skip sections with no disclosed data
-- Target length: 2,500-5,000 words (STRICT MAXIMUM: 10,000 words)
-- Note: Stay under 10,000 words to ensure complete generation without truncation
+- Target length: 2,500-5,000 words
+- Note: Complex filings may extend to 6,500 words. Avoid exceeding 7,500 words to prevent truncation.
 
 ---
 COMPLETE 10-Q DOCUMENT:

@@ -335,7 +335,7 @@ GEMINI_FLASH_PRICING = {
 # Gemini Pro API Pricing (per 1M tokens as of November 2024)
 GEMINI_PRO_PRICING = {
     "input": 1.25,           # $1.25 per 1M input tokens (2.4x cheaper than Claude)
-    "output": 5.00,          # $5.00 per 1M output tokens (3x cheaper than Claude)
+    "output": 10.00,         # $10.00 per 1M output tokens (1.5x cheaper than Claude)
 }
 # NOTE: Gemini does not support prompt caching (Claude-only feature)
 
@@ -368,13 +368,14 @@ def reset_cost_tracker():
         del _cost_tracker.data
 
 
-def calculate_claude_api_cost(usage: dict, function_name: str) -> dict:
+def calculate_claude_api_cost(usage: dict, function_name: str, model_name: str = None) -> dict:
     """
     Calculate cost from Claude API usage response and track it.
 
     Args:
         usage: Usage dict from Claude API response
         function_name: Name of the function (for categorization)
+        model_name: Full model name for tracking (e.g., "claude-sonnet-4-5-20250929", optional)
 
     Returns:
         Cost breakdown dict
@@ -412,7 +413,7 @@ def calculate_claude_api_cost(usage: dict, function_name: str) -> dict:
     tracker["by_function"][function_name]["calls"] += 1
     tracker["by_function"][function_name]["cost"] += call_cost
 
-    # Store tokens for executive summary phases only
+    # Store tokens and model name for executive summary phases only
     if function_name.startswith("executive_summary_phase"):
         if "tokens" not in tracker["by_function"][function_name]:
             tracker["by_function"][function_name]["tokens"] = {
@@ -421,6 +422,10 @@ def calculate_claude_api_cost(usage: dict, function_name: str) -> dict:
             }
         tracker["by_function"][function_name]["tokens"]["input"] += input_tokens
         tracker["by_function"][function_name]["tokens"]["output"] += output_tokens
+
+        # Store model name for Phase 1/2/3 (only if provided)
+        if model_name:
+            tracker["by_function"][function_name]["model"] = model_name
 
     # Track cache stats
     if cache_creation > 0:
@@ -450,7 +455,7 @@ def calculate_claude_api_cost(usage: dict, function_name: str) -> dict:
     }
 
 
-def calculate_gemini_api_cost(usage: dict, function_name: str, model: str = "flash") -> dict:
+def calculate_gemini_api_cost(usage: dict, function_name: str, model: str = "flash", model_name: str = None) -> dict:
     """
     Calculate cost from Gemini API usage response and track it.
 
@@ -460,6 +465,7 @@ def calculate_gemini_api_cost(usage: dict, function_name: str, model: str = "fla
                - output_tokens: candidates token count
         function_name: Name of the function (for categorization)
         model: "flash" or "pro" (default: "flash")
+        model_name: Full model name for tracking (e.g., "gemini-2.5-pro", optional)
 
     Returns:
         Cost breakdown dict
@@ -492,7 +498,7 @@ def calculate_gemini_api_cost(usage: dict, function_name: str, model: str = "fla
     tracker["by_function"][function_name]["calls"] += 1
     tracker["by_function"][function_name]["cost"] += call_cost
 
-    # Store tokens for executive summary phases only
+    # Store tokens and model name for executive summary phases only
     if function_name.startswith("executive_summary_phase"):
         if "tokens" not in tracker["by_function"][function_name]:
             tracker["by_function"][function_name]["tokens"] = {
@@ -501,6 +507,10 @@ def calculate_gemini_api_cost(usage: dict, function_name: str, model: str = "fla
             }
         tracker["by_function"][function_name]["tokens"]["input"] += input_tokens
         tracker["by_function"][function_name]["tokens"]["output"] += output_tokens
+
+        # Store model name for Phase 1/2/3 (only if provided)
+        if model_name:
+            tracker["by_function"][function_name]["model"] = model_name
 
     return {
         "call_cost": round(call_cost, 6),
@@ -572,7 +582,13 @@ def log_cost_summary(ticker: str, company_name: str = ""):
         calls = data["calls"]
         cost = data["cost"]
         plural = "calls" if calls != 1 else "call"
-        LOG.info(f"[{ticker}]   {display_name}: {calls:3d} {plural:5s} →  ${cost:.4f}")
+
+        # Add model name to display for Phase 1/2/3 if available
+        model_suffix = ""
+        if func_name.startswith("executive_summary_phase") and "model" in data:
+            model_suffix = f" ({data['model']})"
+
+        LOG.info(f"[{ticker}]   {display_name}: {calls:3d} {plural:5s} →  ${cost:.4f}{model_suffix}")
 
         # Show token breakdown for executive summary phases only
         if func_name.startswith("executive_summary_phase") and "tokens" in data:
@@ -14896,10 +14912,10 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
 
                 if "gemini" in model_used.lower():
                     # Gemini primary succeeded (uses Pro for Phase 1)
-                    calculate_gemini_api_cost(phase1_usage, "executive_summary_phase1", model="pro")
+                    calculate_gemini_api_cost(phase1_usage, "executive_summary_phase1", model="pro", model_name=model_used)
                 elif "claude" in model_used.lower():
                     # Claude fallback succeeded
-                    calculate_claude_api_cost(phase1_usage, "executive_summary_phase1")
+                    calculate_claude_api_cost(phase1_usage, "executive_summary_phase1", model_name=model_used)
                 else:
                     # Unknown or missing model (shouldn't happen, but log warning)
                     LOG.warning(f"[{ticker}] Phase 1 cost tracking: Unknown model '{model_used}', skipping cost tracking")
@@ -14980,10 +14996,10 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
 
                         if "gemini" in phase2_model.lower():
                             # Gemini primary succeeded (uses Pro for Phase 2)
-                            calculate_gemini_api_cost(phase2_usage, "executive_summary_phase2", model="pro")
+                            calculate_gemini_api_cost(phase2_usage, "executive_summary_phase2", model="pro", model_name=phase2_model)
                         elif "claude" in phase2_model.lower():
                             # Claude fallback succeeded
-                            calculate_claude_api_cost(phase2_usage, "executive_summary_phase2")
+                            calculate_claude_api_cost(phase2_usage, "executive_summary_phase2", model_name=phase2_model)
                         else:
                             # Unknown or missing model (shouldn't happen, but log warning)
                             LOG.warning(f"[{ticker}] Phase 2 cost tracking: Unknown model '{phase2_model}', skipping cost tracking")
@@ -20853,10 +20869,10 @@ async def process_ticker_job(job: dict):
                             phase3_model = phase3_usage.get("model", "")
                             if "gemini" in phase3_model.lower():
                                 # Gemini primary succeeded (uses Pro for Phase 3)
-                                calculate_gemini_api_cost(phase3_usage, "executive_summary_phase3", model="pro")
+                                calculate_gemini_api_cost(phase3_usage, "executive_summary_phase3", model="pro", model_name=phase3_model)
                             elif "claude" in phase3_model.lower():
                                 # Claude fallback succeeded
-                                calculate_claude_api_cost(phase3_usage, "executive_summary_phase3")
+                                calculate_claude_api_cost(phase3_usage, "executive_summary_phase3", model_name=phase3_model)
                             else:
                                 # Unknown or missing model (shouldn't happen, but log warning)
                                 LOG.warning(f"[{ticker}] Phase 3 cost tracking: Unknown model '{phase3_model}', skipping cost tracking")
@@ -20965,10 +20981,10 @@ async def process_ticker_job(job: dict):
                                 phase3_model = phase3_usage.get("model", "")
                                 if "gemini" in phase3_model.lower():
                                     # Gemini primary succeeded (uses Pro for Phase 3)
-                                    calculate_gemini_api_cost(phase3_usage, "executive_summary_phase3", model="pro")
+                                    calculate_gemini_api_cost(phase3_usage, "executive_summary_phase3", model="pro", model_name=phase3_model)
                                 elif "claude" in phase3_model.lower():
                                     # Claude fallback succeeded
-                                    calculate_claude_api_cost(phase3_usage, "executive_summary_phase3")
+                                    calculate_claude_api_cost(phase3_usage, "executive_summary_phase3", model_name=phase3_model)
                                 else:
                                     # Unknown or missing model (shouldn't happen, but log warning)
                                     LOG.warning(f"[{ticker}] Phase 3 cost tracking: Unknown model '{phase3_model}', skipping cost tracking")
@@ -30885,10 +30901,10 @@ async def regenerate_email_api(request: Request):
 
         if "gemini" in model_used.lower():
             # Gemini primary succeeded (uses Pro for Phase 1)
-            calculate_gemini_api_cost(phase1_usage, "executive_summary_phase1", model="pro")
+            calculate_gemini_api_cost(phase1_usage, "executive_summary_phase1", model="pro", model_name=model_used)
         elif "claude" in model_used.lower():
             # Claude fallback succeeded
-            calculate_claude_api_cost(phase1_usage, "executive_summary_phase1")
+            calculate_claude_api_cost(phase1_usage, "executive_summary_phase1", model_name=model_used)
         else:
             # Unknown or missing model (shouldn't happen, but log warning)
             LOG.warning(f"[{ticker}] Phase 1 cost tracking: Unknown model '{model_used}', skipping cost tracking")
@@ -30956,10 +30972,10 @@ async def regenerate_email_api(request: Request):
 
                     if "gemini" in phase2_model.lower():
                         # Gemini primary succeeded (uses Pro for Phase 2)
-                        calculate_gemini_api_cost(phase2_usage, "executive_summary_phase2", model="pro")
+                        calculate_gemini_api_cost(phase2_usage, "executive_summary_phase2", model="pro", model_name=phase2_model)
                     elif "claude" in phase2_model.lower():
                         # Claude fallback succeeded
-                        calculate_claude_api_cost(phase2_usage, "executive_summary_phase2")
+                        calculate_claude_api_cost(phase2_usage, "executive_summary_phase2", model_name=phase2_model)
                     else:
                         # Unknown or missing model (shouldn't happen, but log warning)
                         LOG.warning(f"[{ticker}] Phase 2 cost tracking: Unknown model '{phase2_model}', skipping cost tracking")
@@ -31152,10 +31168,10 @@ async def regenerate_email_api(request: Request):
                     phase3_model = phase3_usage.get("model", "")
                     if "gemini" in phase3_model.lower():
                         # Gemini primary succeeded (uses Pro for Phase 3)
-                        calculate_gemini_api_cost(phase3_usage, "executive_summary_phase3", model="pro")
+                        calculate_gemini_api_cost(phase3_usage, "executive_summary_phase3", model="pro", model_name=phase3_model)
                     elif "claude" in phase3_model.lower():
                         # Claude fallback succeeded
-                        calculate_claude_api_cost(phase3_usage, "executive_summary_phase3")
+                        calculate_claude_api_cost(phase3_usage, "executive_summary_phase3", model_name=phase3_model)
                     else:
                         # Unknown or missing model (shouldn't happen, but log warning)
                         LOG.warning(f"[{ticker}] Phase 3 cost tracking: Unknown model '{phase3_model}', skipping cost tracking")

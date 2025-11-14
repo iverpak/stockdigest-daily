@@ -28,6 +28,52 @@ LOG = logging.getLogger(__name__)
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 
 
+def detect_garbage_pattern(text: str) -> Tuple[bool, str]:
+    """
+    Detect if Gemini response is garbage/safety-filtered output.
+
+    Safety filters often output repetitive patterns with very few unique characters.
+
+    Args:
+        text: Response text from Gemini
+
+    Returns:
+        Tuple of (is_garbage: bool, reason: str)
+    """
+    if len(text) < 100:
+        return False, "too_short"
+
+    # Count unique characters in first 1000 chars
+    sample = text[:min(1000, len(text))]
+    unique_chars = len(set(sample))
+
+    # Check for repetitive pattern (safety filter signature)
+    is_repetitive = unique_chars < 10  # Less than 10 unique chars = garbage
+
+    # Check for specific patterns common in garbage output
+    dash_count = text.count('-')
+    dash_ratio = dash_count / len(text) if len(text) > 0 else 0
+    has_dash_pattern = dash_ratio > 0.3  # >30% dashes
+
+    number_count = text.count('1') + text.count('2') + text.count('3')
+    number_ratio = number_count / len(text) if len(text) > 0 else 0
+    has_number_spam = number_ratio > 0.2  # >20% numbers
+
+    if is_repetitive or has_dash_pattern or has_number_spam:
+        reason_parts = []
+        if is_repetitive:
+            reason_parts.append(f"unique_chars={unique_chars}")
+        if has_dash_pattern:
+            reason_parts.append(f"dashes={dash_count} ({dash_ratio:.1%})")
+        if has_number_spam:
+            reason_parts.append(f"numbers={number_count} ({number_ratio:.1%})")
+
+        return True, f"repetitive ({', '.join(reason_parts)})"
+
+    return False, "ok"
+
+
+
 def get_phase2_system_prompt() -> str:
     """
     Load Phase 2 system prompt from file.
@@ -364,6 +410,13 @@ Downstream Customers: {entity_refs['downstream']}
         base_user_content = _build_phase2_user_content(ticker, phase1_json, filings)
         user_content = entity_header + base_user_content
 
+        # Log filing sources for debugging (helps identify what triggered failures)
+        filing_sources = list(filings.keys())
+        LOG.info(f"[{ticker}] 📄 Phase 2 input: {len(filing_sources)} filing source(s): {filing_sources}")
+        for filing_type, filing_data in filings.items():
+            text_len = len(filing_data.get('text', ''))
+            LOG.info(f"[{ticker}]   - {filing_type}: {text_len:,} chars")
+
         # Estimate token counts for logging
         system_tokens_est = len(system_prompt) // 4
         user_tokens_est = len(user_content) // 4
@@ -431,6 +484,31 @@ Downstream Customers: {entity_refs['downstream']}
         # Extract text from response
         response_text = response.text
 
+        # Log Gemini response metadata for debugging
+        if hasattr(response, 'candidates') and response.candidates:
+            candidate = response.candidates[0]
+
+            # Log finish reason
+            finish_reason = getattr(candidate, 'finish_reason', None)
+            if finish_reason:
+                finish_reason_name = str(finish_reason).split('.')[-1] if hasattr(finish_reason, 'name') else str(finish_reason)
+                LOG.info(f"[{ticker}] 🔍 Gemini finish_reason: {finish_reason_name}")
+
+            # Check safety ratings
+            if hasattr(candidate, 'safety_ratings') and candidate.safety_ratings:
+                # Filter for non-negligible safety concerns
+                safety_concerns = []
+                for rating in candidate.safety_ratings:
+                    # rating.probability can be: NEGLIGIBLE, LOW, MEDIUM, HIGH
+                    if hasattr(rating, 'probability'):
+                        prob_name = str(rating.probability).split('.')[-1] if hasattr(rating.probability, 'name') else str(rating.probability)
+                        if prob_name not in ['NEGLIGIBLE', 'HARM_PROBABILITY_UNSPECIFIED']:
+                            category_name = str(rating.category).split('.')[-1] if hasattr(rating.category, 'name') else str(rating.category)
+                            safety_concerns.append(f"{category_name}={prob_name}")
+
+                if safety_concerns:
+                    LOG.error(f"[{ticker}] 🚨 Gemini safety filter triggered: {safety_concerns}")
+
         if not response_text or len(response_text.strip()) < 10:
             LOG.error(f"[{ticker}] ❌ Gemini returned empty Phase 2 response")
             return None
@@ -440,7 +518,42 @@ Downstream Customers: {entity_refs['downstream']}
         parsed_json = extract_json_from_claude_response(response_text, ticker)
 
         if not parsed_json:
-            LOG.error(f"[{ticker}] ❌ Failed to extract Phase 2 JSON from Gemini response")
+            # Detect garbage pattern and provide enhanced diagnostics
+            is_garbage, garbage_reason = detect_garbage_pattern(response_text)
+
+            if is_garbage:
+                LOG.error(f"[{ticker}] 🚨 Gemini returned GARBAGE output (likely safety filter)")
+                LOG.error(f"[{ticker}]   Pattern detected: {garbage_reason}")
+                LOG.error(f"[{ticker}]   Response length: {len(response_text):,} chars")
+                LOG.error(f"[{ticker}]   Filing sources: {filing_sources}")
+            else:
+                LOG.error(f"[{ticker}] ❌ Failed to extract Phase 2 JSON from Gemini response")
+                LOG.error(f"[{ticker}]   Response looks structurally ok, but not valid JSON")
+                LOG.error(f"[{ticker}]   Response length: {len(response_text):,} chars")
+
+            # Optional: Save response to file for deep debugging (requires env var)
+            save_failures = os.getenv("SAVE_GEMINI_FAILURES", "false").lower() == "true"
+            if save_failures:
+                try:
+                    import tempfile
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    filepath = f"/tmp/gemini_phase2_failure_{ticker}_{timestamp}.txt"
+
+                    with open(filepath, 'w', encoding='utf-8') as f:
+                        f.write(f"Ticker: {ticker}\n")
+                        f.write(f"Filing sources: {filing_sources}\n")
+                        f.write(f"Response length: {len(response_text)}\n")
+                        f.write(f"Garbage pattern: {is_garbage} ({garbage_reason})\n")
+                        f.write(f"Timestamp: {timestamp}\n")
+                        f.write(f"\n{'='*80}\n")
+                        f.write(f"FULL RESPONSE:\n")
+                        f.write(f"{'='*80}\n\n")
+                        f.write(response_text)
+
+                    LOG.info(f"[{ticker}] 💾 Saved full Gemini response to: {filepath}")
+                except Exception as e:
+                    LOG.warning(f"[{ticker}] ⚠️ Failed to save Gemini response: {e}")
+
             return None
 
         # Extract token usage from Gemini response

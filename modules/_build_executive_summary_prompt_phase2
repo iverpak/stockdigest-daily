@@ -1232,6 +1232,15 @@ HIGH IMPACT (assign if ANY true):
 MEDIUM IMPACT (assign if ANY true):
 - 1-5% of revenue/EBIT/assets OR top 4-10 customer/supplier
 - Default when filings lack data but article suggests material ("significant", "major", 3+ articles emphasize)
+- Comparative/contextual value for institutional analysis:
+  • Competitor operational or financial metrics (deliveries, revenue, margins, capacity, market share)
+  • Industry structural trends affecting multiple players (technology shifts, regulatory changes, supply chain dynamics)
+  • Supply/demand signals from customers or suppliers (orders, capacity plans, pricing, lead times)
+  • Contrarian forecasts or data challenging consensus/management views
+  
+  Note: These bullets provide comparative context for stock selection, competitive positioning, 
+  and risk assessment even without direct target company quantification. They answer institutional 
+  questions: "How does target compare to peers?", "What's the industry trend?", "Are forecasts aligned?"
 
 LOW IMPACT:
 - <1% of revenue/EBIT/assets

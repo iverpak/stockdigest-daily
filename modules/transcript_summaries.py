@@ -566,6 +566,25 @@ def parse_transcript_summary_sections(summary_text: str, ticker: str = None) -> 
 
     Returns dict: {section_name: [line1, line2, ...]}
     """
+    def normalize_header(text: str) -> str:
+        """
+        Normalize header for flexible matching.
+        Strips: ##, emojis, leading/trailing spaces
+        Returns uppercase for case-insensitive matching.
+
+        Examples:
+        - "## BOTTOM LINE" → "BOTTOM LINE"
+        - "BOTTOM LINE" → "BOTTOM LINE"
+        - "📌 BOTTOM LINE" → "BOTTOM LINE"
+        - "## 📌 BOTTOM LINE" → "BOTTOM LINE"
+        """
+        # Remove leading non-alphanumeric characters (##, emojis, punctuation)
+        text = re.sub(r'^[^\w\s]+\s*', '', text)
+        # Remove all non-ASCII characters (emojis)
+        text = re.sub(r'[^\x00-\x7F]+', '', text)
+        # Strip and uppercase
+        return text.strip().upper()
+
     sections = {
         "bottom_line": [],
         "financial_results": [],
@@ -609,7 +628,8 @@ def parse_transcript_summary_sections(summary_text: str, ticker: str = None) -> 
     ]
 
     current_section = None
-    section_marker_prefixes = tuple(marker for marker, _ in section_markers)
+    # Normalize section marker prefixes for flexible matching
+    section_marker_prefixes = tuple(normalize_header(marker) for marker, _ in section_markers)
 
     for line in summary_text.split('\n'):
         line_stripped = line.strip()
@@ -618,29 +638,41 @@ def parse_transcript_summary_sections(summary_text: str, ticker: str = None) -> 
         if line_stripped == '---':
             continue
 
-        # Check if line is a section header (case-insensitive matching)
+        # Check if line is a section header (normalized matching)
         is_header = False
+        line_normalized = normalize_header(line_stripped)
+
         for marker, section_key in section_markers:
-            # Case-insensitive matching for robustness
-            if line_stripped.upper().startswith(marker):
+            # Normalize both sides for flexible matching
+            marker_normalized = normalize_header(marker)
+
+            if line_normalized.startswith(marker_normalized):
                 current_section = section_key
                 is_header = True
 
                 # NEW: Extract content after header if on same line (Gemini format)
-                content_after_header = line_stripped[len(marker):].strip()
+                # Find where actual content starts (after header in original line)
+                content_after_header = line_stripped
+                # Strip the header portion (try both normalized and original marker)
+                for prefix_to_remove in [marker, marker_normalized, line_stripped.split()[0]]:
+                    if content_after_header.startswith(prefix_to_remove):
+                        content_after_header = content_after_header[len(prefix_to_remove):].strip()
+                        break
+
                 if content_after_header:
                     # Handle different section types
                     if current_section in ['bottom_line', 'qa_highlights', 'upside_scenario', 'downside_scenario']:
                         # Paragraph sections - capture all text
                         sections[current_section].append(content_after_header)
                     else:
-                        # Bullet sections - check if starts with bullet marker
-                        if content_after_header.startswith(('•', '-', '*', '• ', '- ', '* ')):
-                            bullet_text = content_after_header.lstrip('•-* ').strip()
-                            if bullet_text:
-                                sections[current_section].append(bullet_text)
-                        # If no bullet marker but content exists, treat as continuation of previous section
-                        # (defensive: shouldn't happen with proper formatting)
+                        # Bullet sections - split multi-bullet lines (Fix #2)
+                        # Split by bullet markers: "• A • B" → ["• A", "• B"]
+                        bullet_parts = re.split(r'(?=[•\-\*]\s)', content_after_header)
+                        for bullet_part in bullet_parts:
+                            if bullet_part.strip().startswith(('•', '-', '*')):
+                                bullet_text = bullet_part.lstrip('•-* ').strip()
+                                if bullet_text:
+                                    sections[current_section].append(bullet_text)
 
                 break
 
@@ -649,8 +681,8 @@ def parse_transcript_summary_sections(summary_text: str, ticker: str = None) -> 
 
             # Special handling for sections that capture ALL text (paragraphs)
             if current_section in ['bottom_line', 'qa_highlights', 'upside_scenario', 'downside_scenario']:
-                # Skip lines that start with section markers
-                if not line_stripped.upper().startswith(section_marker_prefixes):
+                # Skip lines that start with section markers (normalized check)
+                if not line_normalized.startswith(section_marker_prefixes):
                     # Skip empty lines at start, but keep them once content exists
                     if line_stripped or sections[current_section]:
                         sections[current_section].append(line_stripped)
@@ -659,10 +691,13 @@ def parse_transcript_summary_sections(summary_text: str, ticker: str = None) -> 
             else:
                 # Accept multiple bullet formats: •, -, *
                 if line_stripped.startswith(('•', '-', '*', '• ', '- ', '* ')):
-                    # Extract bullet text
-                    bullet_text = line_stripped.lstrip('•-* ').strip()
-                    if bullet_text:
-                        sections[current_section].append(bullet_text)
+                    # Split multi-bullet lines (Fix #2): "• A • B • C" → ["A", "B", "C"]
+                    bullet_parts = re.split(r'(?=[•\-\*]\s)', line_stripped)
+                    for bullet_part in bullet_parts:
+                        if bullet_part.strip().startswith(('•', '-', '*')):
+                            bullet_text = bullet_part.lstrip('•-* ').strip()
+                            if bullet_text:
+                                sections[current_section].append(bullet_text)
                 elif line.startswith('  ') and sections[current_section]:
                     # Indented continuation line (e.g., "  Context: ...")
                     continuation = line_stripped

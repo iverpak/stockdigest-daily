@@ -17417,7 +17417,30 @@ CRITICAL WRITING RULES
    - ## UPSIDE SCENARIO
    - ## DOWNSIDE SCENARIO
 
-   Add blank line between sections
+   CRITICAL FORMATTING REQUIREMENTS:
+   ✅ Place each ## header on its OWN line (no content after header)
+   ✅ Add ONE blank line after each header before content starts
+   ✅ Add ONE blank line between sections
+   ✅ Use • (bullet character) for ALL bullet points (not -, not *)
+   ✅ Start bullets on new line (not inline with header)
+
+   Example of CORRECT formatting:
+   ## BOTTOM LINE
+
+   [Paragraph content here spanning multiple lines]
+
+   ## FINANCIAL RESULTS
+
+   • Q3 2025 Revenue: $177 million
+   • Operational Cash Burn: Improved by 50%
+
+   ## OPERATIONAL METRICS
+
+   • GenEco Electrolyzer Revenue: $65 million
+
+   Example of WRONG formatting (DO NOT DO THIS):
+   ## BOTTOM LINE [content here on same line] ❌
+   ## FINANCIAL RESULTS • Q3 2025 Revenue: $177 million ❌
 
 2. End bullets with dates - (call date) or (Aug 7) or (Q3 2025 call)
 3. Source attribution IN bullets - "CEO stated," "CFO noted," "Analyst [Name, Firm] questioned"

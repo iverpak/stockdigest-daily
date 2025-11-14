@@ -554,11 +554,16 @@ def generate_transcript_summary_with_fallback(
 # SECTION PARSING
 # ==============================================================================
 
-def parse_transcript_summary_sections(summary_text: str) -> Dict[str, List[str]]:
+def parse_transcript_summary_sections(summary_text: str, ticker: str = None) -> Dict[str, List[str]]:
     """
     Parse transcript summary text into sections by markdown headers.
     Handles special Q&A format (Q:/A: paragraphs) and top-level Upside/Downside/Variables sections.
     Uses partial matching for header flexibility (e.g., "## MANAGEMENT SENTIMENT" matches "## MANAGEMENT SENTIMENT & TONE").
+
+    Args:
+        summary_text: Raw summary text from AI
+        ticker: Optional ticker for debug logging
+
     Returns dict: {section_name: [line1, line2, ...]}
     """
     sections = {
@@ -613,12 +618,30 @@ def parse_transcript_summary_sections(summary_text: str) -> Dict[str, List[str]]
         if line_stripped == '---':
             continue
 
-        # Check if line is a section header
+        # Check if line is a section header (case-insensitive matching)
         is_header = False
         for marker, section_key in section_markers:
-            if line_stripped.startswith(marker):
+            # Case-insensitive matching for robustness
+            if line_stripped.upper().startswith(marker):
                 current_section = section_key
                 is_header = True
+
+                # NEW: Extract content after header if on same line (Gemini format)
+                content_after_header = line_stripped[len(marker):].strip()
+                if content_after_header:
+                    # Handle different section types
+                    if current_section in ['bottom_line', 'qa_highlights', 'upside_scenario', 'downside_scenario']:
+                        # Paragraph sections - capture all text
+                        sections[current_section].append(content_after_header)
+                    else:
+                        # Bullet sections - check if starts with bullet marker
+                        if content_after_header.startswith(('•', '-', '*', '• ', '- ', '* ')):
+                            bullet_text = content_after_header.lstrip('•-* ').strip()
+                            if bullet_text:
+                                sections[current_section].append(bullet_text)
+                        # If no bullet marker but content exists, treat as continuation of previous section
+                        # (defensive: shouldn't happen with proper formatting)
+
                 break
 
         if not is_header and current_section:
@@ -627,16 +650,17 @@ def parse_transcript_summary_sections(summary_text: str) -> Dict[str, List[str]]
             # Special handling for sections that capture ALL text (paragraphs)
             if current_section in ['bottom_line', 'qa_highlights', 'upside_scenario', 'downside_scenario']:
                 # Skip lines that start with section markers
-                if not line_stripped.startswith(section_marker_prefixes):
+                if not line_stripped.upper().startswith(section_marker_prefixes):
                     # Skip empty lines at start, but keep them once content exists
                     if line_stripped or sections[current_section]:
                         sections[current_section].append(line_stripped)
 
             # Standard handling for bullet sections
             else:
-                if line_stripped.startswith('•') or line_stripped.startswith('-'):
+                # Accept multiple bullet formats: •, -, *
+                if line_stripped.startswith(('•', '-', '*', '• ', '- ', '* ')):
                     # Extract bullet text
-                    bullet_text = line_stripped.lstrip('•- ').strip()
+                    bullet_text = line_stripped.lstrip('•-* ').strip()
                     if bullet_text:
                         sections[current_section].append(bullet_text)
                 elif line.startswith('  ') and sections[current_section]:
@@ -645,6 +669,14 @@ def parse_transcript_summary_sections(summary_text: str) -> Dict[str, List[str]]
                     if continuation:
                         # Append to the last bullet with a line break
                         sections[current_section][-1] += '\n' + continuation
+
+    # Debug logging: Check if parser captured content
+    total_items = sum(len(v) for v in sections.values())
+    ticker_label = f"[{ticker}]" if ticker else ""
+    if total_items == 0:
+        LOG.warning(f"{ticker_label} Parser captured ZERO items. First 500 chars of raw text: {summary_text[:500]}")
+    else:
+        LOG.info(f"{ticker_label} Parser captured {total_items} total items across all sections")
 
     return sections
 
@@ -813,7 +845,7 @@ def generate_transcript_email(
     LOG.info(f"Generating transcript email for {ticker} ({report_type}) using unified template")
 
     # Parse sections from summary text
-    sections = parse_transcript_summary_sections(summary_text)
+    sections = parse_transcript_summary_sections(summary_text, ticker=ticker)
 
     # Build summary HTML
     summary_html = build_transcript_summary_html(sections, report_type)

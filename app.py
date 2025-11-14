@@ -13398,7 +13398,14 @@ def extract_entities_from_summary(ticker: str, summary_text: str, filing_type: s
         import google.generativeai as genai
         genai.configure(api_key=gemini_api_key)
 
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        # Gemini 2.5 Flash (same model as 10-K/10-Q generation)
+        model = genai.GenerativeModel('gemini-2.5-flash')
+
+        # Generation config (same pattern as 10-K/10-Q)
+        generation_config = {
+            "temperature": 0.0,  # Maximum determinism for consistent entity extraction
+            "max_output_tokens": 4000  # Enough for entity JSON (much smaller than 32K for profiles)
+        }
 
         # Combine system prompt with user input
         full_prompt = f"""{GEMINI_ENTITY_EXTRACTION_PROMPT}
@@ -13417,14 +13424,11 @@ SUMMARY TEXT:
 
 Please extract competitors, suppliers, and customers following the rules above."""
 
-        LOG.info(f"[{ticker}] Extracting entities from {filing_type} summary using Gemini...")
+        LOG.info(f"[{ticker}] Extracting entities from {filing_type} summary using Gemini 2.5 Flash...")
 
         response = model.generate_content(
             full_prompt,
-            generation_config=genai.types.GenerationConfig(
-                temperature=0.3,
-                max_output_tokens=4000
-            )
+            generation_config=generation_config
         )
 
         # Parse JSON from response

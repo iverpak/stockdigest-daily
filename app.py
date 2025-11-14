@@ -17453,11 +17453,11 @@ CRITICAL WRITING RULES
 
 LENGTH REQUIREMENTS:
 
-EARNINGS TRANSCRIPTS: Target ~5,000 words
+EARNINGS TRANSCRIPTS: 4,000 words minimum, 6,000 words maximum
 - Include ALL material developments, metrics, guidance updates
 - Include ALL Q&A highlights (comprehensive coverage of analyst questions)
 - Q&A section typically 1,500-2,000 words (30-40% of total)
-- If genuinely comprehensive coverage results in 4,000-6,000 words → Acceptable
+- Aim for comprehensive coverage within 4,000-6,000 word range
 - Better to include borderline material content than miss something important
 
 PRESS RELEASES: Scale to announcement substance

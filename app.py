@@ -17456,7 +17456,7 @@ LENGTH REQUIREMENTS:
 EARNINGS TRANSCRIPTS: 4,000 words MINIMUM, 6,000 words maximum
 ⚠️ CRITICAL: You MUST reach at least 4,000 words of comprehensive analysis.
 - Outputs under 4,000 words indicate insufficient coverage and will be rejected.
-- max_output_tokens = 9,000 (you have ample room - use it!)
+- max_output_tokens = 16,000 (you have significant room - use it!)
 - Include EVERY material development mentioned in the transcript
 - Include EVERY Q&A exchange (comprehensive coverage of ALL analyst questions)
 - Q&A section MUST be 1,500-2,000 words minimum (30-40% of total)

@@ -16668,7 +16668,7 @@ You will receive either:
 
 Generate sections based on what content exists. Omit sections with no applicable content entirely (no empty headers).
 
-CRITICAL: For press releases, skip 💬 Q&A HIGHLIGHTS section (does not exist).
+CRITICAL: For press releases, skip ## Q&A HIGHLIGHTS section (does not exist).
 
 ---
 
@@ -17498,28 +17498,29 @@ Only repeat when adding NEW context not previously stated.
 SECTION RULES:
 
 ALWAYS include:
-- 📌 BOTTOM LINE
-- 💰 FINANCIAL RESULTS
-- 📊 OPERATIONAL METRICS
-- 🏢 MAJOR DEVELOPMENTS
-- 💬 Q&A HIGHLIGHTS (ALWAYS for transcripts, NEVER for press releases)
+- ## BOTTOM LINE
+- ## FINANCIAL RESULTS
+- ## OPERATIONAL METRICS
+- ## MAJOR DEVELOPMENTS
+- ## Q&A HIGHLIGHTS (ALWAYS for transcripts, NEVER for press releases)
 
 Include ONLY if management discussed:
-- 📈 GUIDANCE (if provided or updated)
-- 🎯 STRATEGIC INITIATIVES (if strategy discussed)
-- 💼 MANAGEMENT SENTIMENT & TONE (always include unless truly no patterns)
-- ⚠️ RISK FACTORS & HEADWINDS (if risks discussed)
-- 🏭 INDUSTRY & COMPETITIVE LANDSCAPE (if discussed)
-- 💡 CAPITAL ALLOCATION & BALANCE SHEET (if discussed)
-- 📈 UPSIDE SCENARIO (if bullish developments exist)
-- 📉 DOWNSIDE SCENARIO (if bearish developments exist)
-- 🔍 KEY VARIABLES TO MONITOR (if variables flagged)
+- ## GUIDANCE (if provided or updated)
+- ## STRATEGIC INITIATIVES (if strategy discussed)
+- ## MANAGEMENT SENTIMENT & TONE (always include unless truly no patterns)
+- ## RISK FACTORS & HEADWINDS (if risks discussed)
+- ## INDUSTRY & COMPETITIVE LANDSCAPE (if discussed)
+- ## RELATED ENTITIES (if specific companies named)
+- ## CAPITAL ALLOCATION & BALANCE SHEET (if discussed)
+- ## UPSIDE SCENARIO (if bullish developments exist)
+- ## DOWNSIDE SCENARIO (if bearish developments exist)
+- ## KEY VARIABLES TO MONITOR (if variables flagged)
 
 Omit empty section headers entirely.
 
 CRITICAL FOR PRESS RELEASES:
-- NEVER include 💬 Q&A HIGHLIGHTS
-- NEVER include 💼 MANAGEMENT SENTIMENT & TONE
+- NEVER include ## Q&A HIGHLIGHTS
+- NEVER include ## MANAGEMENT SENTIMENT & TONE
 - Focus on announcement essentials
 
 ---

@@ -1084,6 +1084,113 @@ def generate_sec_filing_profile_with_gemini(
         profile_markdown = response.text
         LOG.info(f"🔍 [DIAGNOSTIC] Response text extracted, length: {len(profile_markdown) if profile_markdown else 0}")
 
+        # ====================================================================
+        # DIAGNOSTIC LOGGING - Detect truncation, safety filters, recitation
+        # ====================================================================
+
+        if hasattr(response, 'candidates') and response.candidates:
+            candidate = response.candidates[0]
+
+            # 1. Log finish reason (critical for diagnosing truncation)
+            finish_reason = getattr(candidate, 'finish_reason', None)
+            if finish_reason:
+                finish_reason_name = str(finish_reason).split('.')[-1] if hasattr(finish_reason, 'name') else str(finish_reason)
+                LOG.info(f"[{ticker}] 🔍 Gemini finish_reason: {finish_reason_name}")
+
+                # Warn on abnormal finish reasons
+                if 'MAX_TOKENS' in finish_reason_name:
+                    LOG.error(f"[{ticker}] ❌ OUTPUT TRUNCATED - Hit max_output_tokens limit!")
+                    LOG.error(f"[{ticker}]   Output length: {len(profile_markdown):,} chars")
+                    LOG.error(f"[{ticker}]   Configured max_output_tokens: {generation_config.get('max_output_tokens', 'unknown')}")
+                elif 'SAFETY' in finish_reason_name:
+                    LOG.error(f"[{ticker}] 🚨 SAFETY FILTER triggered - Output may be incomplete or garbage")
+                elif 'RECITATION' in finish_reason_name:
+                    LOG.error(f"[{ticker}] 📋 RECITATION detected - Gemini aborted due to copyright concerns")
+                    LOG.error(f"[{ticker}]   This means Gemini detected verbatim copying from the {filing_type}")
+                    LOG.error(f"[{ticker}]   Solution: Update prompt to emphasize synthesis/paraphrasing")
+                elif 'OTHER' in finish_reason_name:
+                    LOG.error(f"[{ticker}] ⚠️ Abnormal finish_reason: {finish_reason_name}")
+            else:
+                LOG.warning(f"[{ticker}] ⚠️ No finish_reason available from Gemini response")
+
+            # 2. Check safety ratings
+            if hasattr(candidate, 'safety_ratings') and candidate.safety_ratings:
+                safety_concerns = []
+                for rating in candidate.safety_ratings:
+                    if hasattr(rating, 'probability'):
+                        prob_name = str(rating.probability).split('.')[-1] if hasattr(rating.probability, 'name') else str(rating.probability)
+                        if prob_name not in ['NEGLIGIBLE', 'HARM_PROBABILITY_UNSPECIFIED']:
+                            category_name = str(rating.category).split('.')[-1] if hasattr(rating.category, 'name') else str(rating.category)
+                            safety_concerns.append(f"{category_name}={prob_name}")
+
+                if safety_concerns:
+                    LOG.error(f"[{ticker}] 🚨 Gemini safety filter concerns: {safety_concerns}")
+
+        # 3. Detect garbage pattern (like Phase 2 safety filter output)
+        if len(profile_markdown) > 100:
+            sample = profile_markdown[:min(1000, len(profile_markdown))]
+            unique_chars = len(set(sample))
+
+            # Check for repetitive pattern (safety filter signature)
+            is_repetitive = unique_chars < 10  # Less than 10 unique chars = garbage
+
+            # Check for specific garbage patterns
+            dash_count = profile_markdown.count('-')
+            dash_ratio = dash_count / len(profile_markdown) if len(profile_markdown) > 0 else 0
+            has_dash_pattern = dash_ratio > 0.3  # >30% dashes
+
+            number_count = profile_markdown.count('1') + profile_markdown.count('2') + profile_markdown.count('3')
+            number_ratio = number_count / len(profile_markdown) if len(profile_markdown) > 0 else 0
+            has_number_spam = number_ratio > 0.2  # >20% numbers
+
+            if is_repetitive or has_dash_pattern or has_number_spam:
+                reason_parts = []
+                if is_repetitive:
+                    reason_parts.append(f"unique_chars={unique_chars}")
+                if has_dash_pattern:
+                    reason_parts.append(f"dashes={dash_count} ({dash_ratio:.1%})")
+                if has_number_spam:
+                    reason_parts.append(f"numbers={number_count} ({number_ratio:.1%})")
+
+                LOG.error(f"[{ticker}] 🚨 GARBAGE OUTPUT detected - likely safety filter")
+                LOG.error(f"[{ticker}]   Pattern: {', '.join(reason_parts)}")
+                LOG.error(f"[{ticker}]   First 200 chars: {profile_markdown[:200]}")
+                LOG.error(f"[{ticker}]   Last 200 chars: {profile_markdown[-200:]}")
+
+        # 4. Validate section completeness
+        expected_sections = 18 if filing_type == '10-K' else 13
+        section_count = profile_markdown.count('## ')
+
+        if section_count < expected_sections:
+            LOG.warning(f"[{ticker}] ⚠️ INCOMPLETE: Only {section_count}/{expected_sections} sections generated")
+            LOG.warning(f"[{ticker}]   Expected {expected_sections} sections for {filing_type}, got {section_count}")
+
+            # List which sections are present (first 50 chars of each ## header)
+            sections_found = []
+            for line in profile_markdown.split('\n'):
+                if line.startswith('## '):
+                    sections_found.append(line[:50])
+
+            if sections_found:
+                LOG.info(f"[{ticker}]   Sections found: {len(sections_found)}")
+                for i, section in enumerate(sections_found[:5], 1):  # Log first 5
+                    LOG.info(f"[{ticker}]     {i}. {section}")
+                if len(sections_found) > 5:
+                    LOG.info(f"[{ticker}]     ... and {len(sections_found) - 5} more")
+
+        # 5. Check for mid-sentence truncation
+        last_chars = profile_markdown.rstrip()[-100:] if len(profile_markdown) > 100 else profile_markdown
+        clean_endings = ('.', ')', ']', '*', '`', '>', '|', ':', ';')  # Common markdown endings
+
+        if not profile_markdown.rstrip().endswith(clean_endings):
+            LOG.error(f"[{ticker}] ✂️ MID-SENTENCE TRUNCATION detected!")
+            LOG.error(f"[{ticker}]   Last 100 chars: {last_chars}")
+            LOG.error(f"[{ticker}]   Does not end with: {clean_endings}")
+
+        # ====================================================================
+        # END DIAGNOSTIC LOGGING
+        # ====================================================================
+
         if not profile_markdown or len(profile_markdown) < 1000:
             LOG.warning(f"❌ Gemini returned suspiciously short profile for {ticker} {filing_type} ({len(profile_markdown) if profile_markdown else 0} chars)")
             if profile_markdown:

@@ -77,7 +77,6 @@ from modules.transcript_summaries import (
     fetch_fmp_press_releases,
     fetch_fmp_press_release_by_date,
     generate_transcript_summary_with_claude,
-    generate_transcript_summary_with_gemini,
     generate_transcript_email,
     save_transcript_summary_to_database
 )
@@ -16867,7 +16866,7 @@ Topic labels will be automatically bolded during HTML rendering. Just write: "To
 
 ---
 
-📌 BOTTOM LINE (Always - 150 words HARD CAP)
+## BOTTOM LINE (Always - 150 words HARD CAP)
 
 EDITORIAL BANS FOR BOTTOM LINE:
 
@@ -16908,7 +16907,7 @@ Format: [What announced]. [Strategic rationale]. [Financial impact]. [Timing]. [
 
 ---
 
-💰 FINANCIAL RESULTS (Always - 4-8 bullets)
+## FINANCIAL RESULTS (Always - 4-8 bullets)
 
 Report financial metrics as disclosed by management during the call.
 
@@ -16929,7 +16928,7 @@ CRITICAL: Only include metrics management explicitly disclosed. If management sa
 
 ---
 
-📊 OPERATIONAL METRICS (Always - 3-6 bullets max)
+## OPERATIONAL METRICS (Always - 3-6 bullets max)
 
 SCOPE: Business-specific KPIs that drive financial performance
 
@@ -16955,7 +16954,7 @@ NEVER skip this section.
 
 ---
 
-🏢 MAJOR DEVELOPMENTS (Always - 3-6 bullets max)
+## MAJOR DEVELOPMENTS (Always - 3-6 bullets max)
 
 SCOPE: Company-specific announcements, strategic actions, material events disclosed during call
 
@@ -16989,7 +16988,7 @@ Example:
 
 ---
 
-📈 GUIDANCE (Always if guidance provided or updated)
+## GUIDANCE (Always if guidance provided or updated)
 
 CRITICAL: Include ALL guidance metrics with exact ranges, even if reiterated
 
@@ -17013,7 +17012,7 @@ If no guidance provided:
 
 ---
 
-🎯 STRATEGIC INITIATIVES (Always if strategy discussed - 2-5 bullets max)
+## STRATEGIC INITIATIVES (Always if strategy discussed - 2-5 bullets max)
 
 SCOPE: Forward-looking strategic direction, investments, transformations
 
@@ -17037,7 +17036,7 @@ If no strategic initiatives discussed:
 
 ---
 
-💼 MANAGEMENT SENTIMENT & TONE (Always - 2-4 bullets)
+## MANAGEMENT SENTIMENT & TONE (Always - 2-4 bullets)
 
 SCOPE: Management's confidence level, emphasis patterns, tone shifts
 
@@ -17069,7 +17068,7 @@ If tone neutral/balanced:
 
 ---
 
-⚠️ RISK FACTORS & HEADWINDS (Always if risks discussed - 3-6 bullets max)
+## RISK FACTORS & HEADWINDS (Always if risks discussed - 3-6 bullets max)
 
 SCOPE: Challenges, obstacles, concerns that could impact performance
 
@@ -17100,7 +17099,7 @@ If no risks discussed:
 
 ---
 
-🏭 INDUSTRY & COMPETITIVE LANDSCAPE (Always - 2-5 bullets max)
+## INDUSTRY & COMPETITIVE LANDSCAPE (Always - 2-5 bullets max)
 
 SCOPE: Management's view of external environment and competitive position
 
@@ -17137,7 +17136,7 @@ If no industry/competitive discussion:
 
 ---
 
-🤝 RELATED ENTITIES (COMPETITORS, SUPPLIERS, CUSTOMERS) (Always if applicable - 0-5 total entities)
+## RELATED ENTITIES (COMPETITORS, SUPPLIERS, CUSTOMERS) (Always if applicable - 0-5 total entities)
 
 SCOPE: Specific companies management named during the call (competitors, suppliers, customers)
 
@@ -17164,7 +17163,7 @@ If no specific companies named:
 
 ---
 
-💡 CAPITAL ALLOCATION & BALANCE SHEET (Always if discussed - 2-4 bullets max)
+## CAPITAL ALLOCATION & BALANCE SHEET (Always if discussed - 2-4 bullets max)
 
 SCOPE: Cash deployment priorities, balance sheet strength, shareholder returns
 
@@ -17196,7 +17195,7 @@ If not discussed:
 
 ---
 
-💬 Q&A HIGHLIGHTS (TRANSCRIPTS ONLY - Omit entirely if press release)
+## Q&A HIGHLIGHTS (TRANSCRIPTS ONLY - Omit entirely if press release)
 
 CRITICAL: This section does NOT exist for press releases. Skip completely if analyzing press release.
 
@@ -17255,7 +17254,7 @@ NEVER skip this section for transcripts - Q&A provides critical intelligence.
 
 ---
 
-📈 UPSIDE SCENARIO (Only if bullish developments exist - single paragraph, 80-100 words)
+## UPSIDE SCENARIO (Only if bullish developments exist - single paragraph, 80-100 words)
 
 🚨 MANDATORY PRE-WRITE CHECKPOINT 🚨
 Before writing, verify you will NOT write these BANNED PHRASES:
@@ -17311,7 +17310,7 @@ DO NOT include this section if no bullish management views exist.
 
 ---
 
-📉 DOWNSIDE SCENARIO (Only if bearish developments exist - single paragraph, 80-100 words)
+## DOWNSIDE SCENARIO (Only if bearish developments exist - single paragraph, 80-100 words)
 
 🚨 MANDATORY PRE-WRITE CHECKPOINT 🚨
 Before writing, verify you will NOT write these BANNED PHRASES:
@@ -17371,7 +17370,7 @@ DO NOT include this section if no bearish management/analyst views exist.
 
 ---
 
-🔍 KEY VARIABLES TO MONITOR (Include if variables discussed - 3-5 bullets max)
+## KEY VARIABLES TO MONITOR (Include if variables discussed - 3-5 bullets max)
 
 CRITICAL: Report what management/analysts explicitly identified as important upcoming events/metrics to watch.
 
@@ -17394,29 +17393,29 @@ DO NOT include this section if management/analysts did not explicitly identify v
 
 CRITICAL WRITING RULES
 
-0. NO MARKDOWN - Section headers are emoji only
+0. SECTION HEADERS - Use markdown level 2 headers (##) for all sections
 
 1. BULLET FORMAT
 
    Sections using BULLETS (• character):
-   - 💰 FINANCIAL RESULTS
-   - 📊 OPERATIONAL METRICS
-   - 🏢 MAJOR DEVELOPMENTS
-   - 📈 GUIDANCE
-   - 🎯 STRATEGIC INITIATIVES
-   - 💼 MANAGEMENT SENTIMENT & TONE
-   - ⚠️ RISK FACTORS & HEADWINDS
-   - 🏭 INDUSTRY & COMPETITIVE LANDSCAPE
-   - 💡 CAPITAL ALLOCATION & BALANCE SHEET
-   - 🔍 KEY VARIABLES TO MONITOR
+   - ## FINANCIAL RESULTS
+   - ## OPERATIONAL METRICS
+   - ## MAJOR DEVELOPMENTS
+   - ## GUIDANCE
+   - ## STRATEGIC INITIATIVES
+   - ## MANAGEMENT SENTIMENT & TONE
+   - ## RISK FACTORS & HEADWINDS
+   - ## INDUSTRY & COMPETITIVE LANDSCAPE
+   - ## CAPITAL ALLOCATION & BALANCE SHEET
+   - ## KEY VARIABLES TO MONITOR
 
    Sections using Q:/A: FORMAT:
-   - 💬 Q&A HIGHLIGHTS
+   - ## Q&A HIGHLIGHTS
 
    Sections using PARAGRAPHS:
-   - 📌 BOTTOM LINE
-   - 📈 UPSIDE SCENARIO
-   - 📉 DOWNSIDE SCENARIO
+   - ## BOTTOM LINE
+   - ## UPSIDE SCENARIO
+   - ## DOWNSIDE SCENARIO
 
    Add blank line between sections
 
@@ -19925,7 +19924,7 @@ async def process_transcript_phase(job: dict):
         LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Fetching transcript Q{quarter} FY{year} from FMP...")
 
         # Fetch transcript content from FMP
-        from modules.transcript_summaries import generate_transcript_summary_with_claude
+        from modules.transcript_summaries import generate_transcript_summary_with_fallback
 
         fmp_url = f"https://financialmodelingprep.com/api/v3/earning_call_transcript/{ticker}?quarter={quarter}&year={year}"
         response = requests.get(f"{fmp_url}&apikey={FMP_API_KEY}", timeout=30)
@@ -19943,19 +19942,29 @@ async def process_transcript_phase(job: dict):
 
         LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Fetched {len(content)} characters")
 
-        # Progress: 30% - Generating summary with Claude (this takes 30-60s)
+        # Progress: 30% - Generating summary with AI (Gemini Pro → Claude Sonnet fallback)
         update_job_status(job_id, progress=30)
-        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating summary with Claude (30-60s)...")
+        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating summary with AI (30-60s)...")
 
         ticker_config = get_ticker_config(ticker)
-        summary_text = generate_transcript_summary_with_claude(
-            ticker, content, ticker_config, 'transcript',
-            ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_API_URL,
-            _build_research_summary_prompt
+        result = generate_transcript_summary_with_fallback(
+            ticker=ticker,
+            content=content,
+            config=ticker_config,
+            content_type='transcript',
+            anthropic_api_key=ANTHROPIC_API_KEY,
+            gemini_api_key=GEMINI_API_KEY,
+            anthropic_model=ANTHROPIC_MODEL,
+            anthropic_api_url=ANTHROPIC_API_URL,
+            build_prompt_func=_build_research_summary_prompt
         )
 
-        if not summary_text:
-            raise ValueError("Claude summary generation failed")
+        if not result:
+            raise ValueError("Both Gemini and Claude transcript summarization failed")
+
+        summary_text = result['summary_text']
+        ai_provider = result['ai_provider']
+        ai_model = result['ai_model']
 
         # Progress: 80% - Saving to database
         update_job_status(job_id, progress=80)
@@ -19975,6 +19984,7 @@ async def process_transcript_phase(job: dict):
                 ON CONFLICT (ticker, report_type, quarter, year)
                 DO UPDATE SET
                     summary_text = EXCLUDED.summary_text,
+                    ai_provider = EXCLUDED.ai_provider,
                     ai_model = EXCLUDED.ai_model,
                     generated_at = NOW()
             """, (
@@ -19986,8 +19996,8 @@ async def process_transcript_phase(job: dict):
                 data[0].get('date'),
                 summary_text,
                 fmp_url,
-                'claude',
-                ANTHROPIC_MODEL
+                ai_provider,  # Dynamic: 'gemini' or 'claude'
+                ai_model      # Dynamic: 'gemini-2.5-pro' or 'claude-sonnet-4-5-20250929'
             ))
             conn.commit()
 
@@ -20072,7 +20082,7 @@ async def process_press_release_phase(job: dict):
 
         # Fetch press release content from FMP
         from modules.transcript_summaries import (
-            generate_transcript_summary_with_claude,
+            generate_transcript_summary_with_fallback,
             fetch_fmp_press_release_by_date_and_title
         )
 
@@ -20086,19 +20096,29 @@ async def process_press_release_phase(job: dict):
 
         LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Fetched {len(content)} characters")
 
-        # Progress: 30% - Generating summary with Claude (this takes 30-60s)
+        # Progress: 30% - Generating summary with AI (Gemini Pro → Claude Sonnet fallback)
         update_job_status(job_id, progress=30)
-        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating summary with Claude (30-60s)...")
+        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating summary with AI (30-60s)...")
 
         ticker_config = get_ticker_config(ticker)
-        summary_text = generate_transcript_summary_with_claude(
-            ticker, content, ticker_config, 'press_release',
-            ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_API_URL,
-            _build_research_summary_prompt
+        result = generate_transcript_summary_with_fallback(
+            ticker=ticker,
+            content=content,
+            config=ticker_config,
+            content_type='press_release',
+            anthropic_api_key=ANTHROPIC_API_KEY,
+            gemini_api_key=GEMINI_API_KEY,
+            anthropic_model=ANTHROPIC_MODEL,
+            anthropic_api_url=ANTHROPIC_API_URL,
+            build_prompt_func=_build_research_summary_prompt
         )
 
-        if not summary_text:
-            raise ValueError("Claude summary generation failed")
+        if not result:
+            raise ValueError("Both Gemini and Claude press release summarization failed")
+
+        summary_text = result['summary_text']
+        ai_provider = result['ai_provider']
+        ai_model = result['ai_model']
 
         # Progress: 80% - Saving to database
         update_job_status(job_id, progress=80)
@@ -20113,8 +20133,8 @@ async def process_press_release_phase(job: dict):
                 report_date=pr_date,
                 pr_title=pr_title,
                 summary_text=summary_text,
-                ai_provider='claude',
-                ai_model=ANTHROPIC_MODEL,
+                ai_provider=ai_provider,  # Dynamic: 'gemini' or 'claude'
+                ai_model=ai_model,        # Dynamic: 'gemini-2.5-pro' or 'claude-sonnet-4-5-20250929'
                 processing_duration_seconds=0,  # Could add timing later
                 job_id=job_id,
                 db_connection=conn
@@ -27064,10 +27084,9 @@ async def generate_transcript_summary_api(request: Request):
     year = body.get('year')  # Integer (2024) for transcripts
     pr_date = body.get('pr_date')  # String date for press releases
     pr_title = body.get('pr_title')  # String title for press releases (optional, for exact matching)
-    model = body.get('model', 'claude')  # 'claude' or 'gemini'
 
     try:
-        LOG.info(f"📊 Generating transcript summary for {ticker} ({report_type}) using {model}")
+        LOG.info(f"📊 Generating transcript summary for {ticker} ({report_type}) using automatic AI fallback")
 
         # Get ticker config
         config = get_ticker_config(ticker)
@@ -27108,51 +27127,31 @@ async def generate_transcript_summary_api(request: Request):
                 pr_title = data['title']
             fmp_url = f"https://financialmodelingprep.com/api/v3/press-releases/{ticker}"
 
-        # Summarize with selected AI model
-        summary_text = None
-        ai_provider = None
-        ai_model = None
-        generation_time_seconds = 0
-        token_count_input = 0
-        token_count_output = 0
+        # Summarize with automatic AI fallback (Gemini Pro → Claude Sonnet)
+        from modules.transcript_summaries import generate_transcript_summary_with_fallback
 
-        if model == 'gemini':
-            # Gemini summarization (transcripts only for now)
-            if report_type != 'transcript':
-                return {"status": "error", "message": "Gemini only supports transcripts currently"}
+        LOG.info(f"🤖 Summarizing {report_type} with AI (Gemini Pro → Claude Sonnet fallback, content: {len(content)} chars)")
+        result = generate_transcript_summary_with_fallback(
+            ticker=ticker,
+            content=content,
+            config=config,
+            content_type=report_type,
+            anthropic_api_key=ANTHROPIC_API_KEY,
+            gemini_api_key=GEMINI_API_KEY,
+            anthropic_model=ANTHROPIC_MODEL,
+            anthropic_api_url=ANTHROPIC_API_URL,
+            build_prompt_func=_build_research_summary_prompt
+        )
 
-            LOG.info(f"🤖 Summarizing with Gemini 2.5 Flash (content length: {len(content)} chars)")
-            result = generate_transcript_summary_with_gemini(
-                ticker, content, config, quarter, year, GEMINI_API_KEY
-            )
+        if not result:
+            return {"status": "error", "message": "Both Gemini and Claude summarization failed"}
 
-            if not result:
-                return {"status": "error", "message": "Gemini summarization failed"}
-
-            summary_text = result['summary_text']
-            ai_provider = 'gemini'
-            ai_model = 'gemini-2.5-flash'
-            generation_time_seconds = result['generation_time_seconds']
-            token_count_input = result['token_count_input']
-            token_count_output = result['token_count_output']
-
-        else:  # Claude (default)
-            LOG.info(f"🤖 Summarizing with Claude Sonnet 4.5 (content length: {len(content)} chars)")
-            summary_text = generate_transcript_summary_with_claude(
-                ticker, content, config, report_type,
-                ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_API_URL,
-                _build_research_summary_prompt  # Pass prompt builder
-            )
-
-            if not summary_text:
-                return {"status": "error", "message": "Claude summarization failed"}
-
-            ai_provider = 'claude'
-            ai_model = ANTHROPIC_MODEL  # claude-sonnet-4-5-20250929
-            # Claude function doesn't return timing/tokens, use defaults
-            generation_time_seconds = 0
-            token_count_input = 0
-            token_count_output = 0
+        summary_text = result['summary_text']
+        ai_provider = result['ai_provider']
+        ai_model = result['ai_model']
+        generation_time_seconds = result['generation_time_seconds']
+        token_count_input = result['token_count_input']
+        token_count_output = result['token_count_output']
 
         # Save to database (using module function)
         # Ensure quarter has Q prefix (defensive check - don't double-prefix)

@@ -266,124 +266,9 @@ def fetch_fmp_press_release_by_date_and_title(
 # PROMPTS
 # ==============================================================================
 
-GEMINI_TRANSCRIPT_PROMPT = """You are extracting key information from an earnings call transcript for {company_name} ({ticker}) - Q{quarter} {fiscal_year}.
-
-Summarize the transcript into these sections:
-
-## 0. BOTTOM LINE
-## 1. FINANCIAL RESULTS
-## 2. PERFORMANCE VS EXPECTATIONS
-## 3. SEGMENT PERFORMANCE
-## 4. OPERATIONAL METRICS & KPIS
-## 5. GUIDANCE UPDATES
-## 6. STRATEGIC ANNOUNCEMENTS
-## 7. CAPITAL ALLOCATION & BALANCE SHEET
-## 8. MANAGEMENT COMMENTARY ON OUTLOOK
-## 9. KEY RISKS & CHALLENGES DISCUSSED
-## 10. ANALYST QUESTIONS & CONCERNS
-## 11. INVESTMENT IMPLICATIONS
-
-For each section, extract the most important information discussed. Use bullet points where appropriate. If a section is not discussed on the call, write "Not discussed."
-
-Target length: 2,000-4,000 words.
-
----
-TRANSCRIPT:
-{transcript_text}
----
-
-Generate the earnings call summary now."""
-
-
 # ==============================================================================
 # AI SUMMARIZATION
 # ==============================================================================
-
-def generate_transcript_summary_with_gemini(
-    ticker: str,
-    content: str,
-    config: Dict,
-    quarter: int,
-    fiscal_year: int,
-    gemini_api_key: str
-) -> Optional[Dict]:
-    """
-    Generate transcript summary using Gemini 2.5 Flash (2-4k words).
-    Returns dict with {summary_text, generation_time_seconds, token_count_input, token_count_output}
-    or None if failed.
-    """
-    if not gemini_api_key:
-        LOG.error("Gemini API key not configured")
-        return None
-
-    try:
-        import time
-        import google.generativeai as genai
-
-        start_time = time.time()
-
-        # Configure Gemini
-        genai.configure(api_key=gemini_api_key)
-
-        # Build prompt
-        company_name = config.get('company_name', ticker)
-        prompt = GEMINI_TRANSCRIPT_PROMPT.format(
-            company_name=company_name,
-            ticker=ticker,
-            quarter=quarter,
-            fiscal_year=fiscal_year,
-            transcript_text=content
-        )
-
-        LOG.info(f"Generating transcript summary for {ticker} Q{quarter} {fiscal_year} using Gemini 2.5 Flash")
-
-        # Configure model
-        model = genai.GenerativeModel(
-            model_name='gemini-2.5-flash',
-            generation_config={
-                'temperature': 0.0,  # Maximum determinism for completely consistent transcripts
-                'max_output_tokens': 16000,  # Allow up to 4k words
-            }
-        )
-
-        # Generate summary
-        response = model.generate_content(prompt)
-
-        if not response or not response.text:
-            LOG.error(f"Gemini returned empty response for {ticker}")
-            return None
-
-        summary_text = response.text.strip()
-        generation_time = time.time() - start_time
-
-        # Extract token counts (if available)
-        token_count_input = 0
-        token_count_output = 0
-        if hasattr(response, 'usage_metadata'):
-            token_count_input = getattr(response.usage_metadata, 'prompt_token_count', 0)
-            token_count_output = getattr(response.usage_metadata, 'candidates_token_count', 0)
-
-        word_count = len(summary_text.split())
-
-        LOG.info(f"✅ Generated Gemini summary for {ticker} Q{quarter} {fiscal_year}")
-        LOG.info(f"   Words: {word_count}, Time: {generation_time:.1f}s")
-        LOG.info(f"   Tokens: in={token_count_input}, out={token_count_output}")
-
-        # NOTE: Emojis are preserved in database for proper section parsing
-        # They are stripped during HTML rendering by build_transcript_summary_html()
-
-        return {
-            'summary_text': summary_text,
-            'generation_time_seconds': int(generation_time),
-            'token_count_input': token_count_input,
-            'token_count_output': token_count_output
-        }
-
-    except Exception as e:
-        LOG.error(f"Failed to generate Gemini summary for {ticker}: {e}")
-        LOG.error(f"Stacktrace: {traceback.format_exc()}")
-        return None
-
 
 def generate_transcript_summary_with_claude(
     ticker: str,
@@ -474,14 +359,206 @@ def generate_transcript_summary_with_claude(
         return None
 
 
+def _generate_transcript_gemini_pro(
+    ticker: str,
+    content: str,
+    config: Dict,
+    content_type: str,
+    gemini_api_key: str,
+    build_prompt_func  # _build_research_summary_prompt from app.py
+) -> Optional[Dict]:
+    """
+    Generate transcript summary using Gemini 2.5 Pro with comprehensive prompt.
+
+    Args:
+        ticker: Stock ticker
+        content: Transcript or press release text
+        config: Ticker configuration dict
+        content_type: 'transcript' or 'press_release'
+        gemini_api_key: Google Gemini API key
+        build_prompt_func: Reference to _build_research_summary_prompt from app.py
+
+    Returns:
+        {
+            "summary_text": "...",
+            "ai_provider": "gemini",
+            "ai_model": "gemini-2.5-pro",
+            "generation_time_seconds": 45,
+            "token_count_input": 15000,
+            "token_count_output": 4500
+        }
+        Or None if generation failed
+    """
+    if not gemini_api_key:
+        LOG.error("Gemini API key not configured")
+        return None
+
+    try:
+        import time
+        import google.generativeai as genai
+
+        start_time = time.time()
+
+        # Build prompt using app.py helper (comprehensive 14-section prompt)
+        system_prompt, user_content, company_name = build_prompt_func(
+            ticker, content, config, content_type
+        )
+
+        if not system_prompt or not user_content:
+            LOG.error(f"[{ticker}] Failed to build transcript summary prompt")
+            return None
+
+        LOG.info(f"[{ticker}] Generating {content_type} summary using Gemini 2.5 Pro (comprehensive prompt)")
+
+        # Configure Gemini
+        genai.configure(api_key=gemini_api_key)
+
+        # Combine system + user into single prompt (Gemini doesn't have separate system role)
+        full_prompt = f"{system_prompt}\n\n{user_content}"
+
+        # Configure model
+        model = genai.GenerativeModel(
+            model_name='gemini-2.5-pro',
+            generation_config={
+                'temperature': 0.0,  # Maximum determinism (matches Claude)
+                'max_output_tokens': 16000,  # Allow up to 6k words
+            }
+        )
+
+        # Generate summary
+        response = model.generate_content(full_prompt)
+
+        if not response or not response.text:
+            LOG.error(f"[{ticker}] Gemini returned empty response")
+            return None
+
+        summary_text = response.text.strip()
+        generation_time = time.time() - start_time
+
+        # Extract token counts
+        token_count_input = 0
+        token_count_output = 0
+        if hasattr(response, 'usage_metadata'):
+            token_count_input = getattr(response.usage_metadata, 'prompt_token_count', 0)
+            token_count_output = getattr(response.usage_metadata, 'candidates_token_count', 0)
+
+        word_count = len(summary_text.split())
+
+        LOG.info(f"[{ticker}] ✅ Gemini 2.5 Pro {content_type} summary generated")
+        LOG.info(f"   Words: {word_count}, Time: {generation_time:.1f}s")
+        LOG.info(f"   Tokens: in={token_count_input}, out={token_count_output}")
+
+        return {
+            'summary_text': summary_text,
+            'ai_provider': 'gemini',
+            'ai_model': 'gemini-2.5-pro',
+            'generation_time_seconds': int(generation_time),
+            'token_count_input': token_count_input,
+            'token_count_output': token_count_output
+        }
+
+    except Exception as e:
+        LOG.error(f"[{ticker}] Failed to generate Gemini summary: {e}")
+        LOG.error(f"Stacktrace: {traceback.format_exc()}")
+        return None
+
+
+def generate_transcript_summary_with_fallback(
+    ticker: str,
+    content: str,
+    config: Dict,
+    content_type: str,
+    anthropic_api_key: str,
+    gemini_api_key: str,
+    anthropic_model: str,
+    anthropic_api_url: str,
+    build_prompt_func  # _build_research_summary_prompt from app.py
+) -> Optional[Dict]:
+    """
+    Generate transcript summary with Gemini 2.5 Pro (primary) and Claude Sonnet 4.5 (fallback).
+
+    Matches the pattern used in Executive Summary Phase 1/2/3.
+
+    Args:
+        ticker: Stock ticker
+        content: Transcript or press release text
+        config: Ticker configuration dict
+        content_type: 'transcript' or 'press_release'
+        anthropic_api_key: Anthropic API key for Claude fallback
+        gemini_api_key: Google Gemini API key
+        anthropic_model: Claude model identifier
+        anthropic_api_url: Anthropic API URL
+        build_prompt_func: Reference to _build_research_summary_prompt from app.py
+
+    Returns:
+        {
+            "summary_text": "...",
+            "ai_provider": "gemini" or "claude",
+            "ai_model": "gemini-2.5-pro" or "claude-sonnet-4-5-20250929",
+            "generation_time_seconds": 45,
+            "token_count_input": 15000,
+            "token_count_output": 4500
+        }
+        Or None if both providers failed
+    """
+    # Try Gemini 2.5 Pro first (primary)
+    if gemini_api_key:
+        LOG.info(f"[{ticker}] Transcript: Attempting Gemini 2.5 Pro (primary)")
+        gemini_result = _generate_transcript_gemini_pro(
+            ticker=ticker,
+            content=content,
+            config=config,
+            content_type=content_type,
+            gemini_api_key=gemini_api_key,
+            build_prompt_func=build_prompt_func
+        )
+
+        if gemini_result and gemini_result.get("summary_text"):
+            LOG.info(f"[{ticker}] ✅ Transcript: Gemini 2.5 Pro succeeded")
+            return gemini_result
+        else:
+            LOG.warning(f"[{ticker}] ⚠️ Transcript: Gemini 2.5 Pro failed, falling back to Claude Sonnet")
+    else:
+        LOG.warning(f"[{ticker}] ⚠️ No Gemini API key provided, using Claude Sonnet only")
+
+    # Fall back to Claude Sonnet 4.5
+    if anthropic_api_key:
+        LOG.info(f"[{ticker}] Transcript: Using Claude Sonnet 4.5 (fallback)")
+        summary_text = generate_transcript_summary_with_claude(
+            ticker, content, config, content_type,
+            anthropic_api_key, anthropic_model, anthropic_api_url,
+            build_prompt_func
+        )
+
+        if summary_text:
+            LOG.info(f"[{ticker}] ✅ Transcript: Claude Sonnet succeeded (fallback)")
+            return {
+                "summary_text": summary_text,
+                "ai_provider": "claude",
+                "ai_model": anthropic_model,
+                "generation_time_seconds": 0,  # Not tracked in old function
+                "token_count_input": 0,
+                "token_count_output": 0
+            }
+        else:
+            LOG.error(f"[{ticker}] ❌ Transcript: Claude Sonnet also failed")
+    else:
+        LOG.error(f"[{ticker}] ❌ No Anthropic API key provided for fallback")
+
+    # Both failed
+    LOG.error(f"[{ticker}] ❌ Transcript: Both Gemini and Claude failed")
+    return None
+
+
 # ==============================================================================
 # SECTION PARSING
 # ==============================================================================
 
 def parse_transcript_summary_sections(summary_text: str) -> Dict[str, List[str]]:
     """
-    Parse transcript summary text into sections by emoji headers.
+    Parse transcript summary text into sections by markdown headers.
     Handles special Q&A format (Q:/A: paragraphs) and top-level Upside/Downside/Variables sections.
+    Uses partial matching for header flexibility (e.g., "## MANAGEMENT SENTIMENT" matches "## MANAGEMENT SENTIMENT & TONE").
     Returns dict: {section_name: [line1, line2, ...]}
     """
     sections = {
@@ -494,6 +571,7 @@ def parse_transcript_summary_sections(summary_text: str) -> Dict[str, List[str]]
         "management_sentiment": [],
         "risk_factors": [],
         "industry_competitive": [],
+        "related_entities": [],
         "capital_allocation": [],
         "qa_highlights": [],
         "upside_scenario": [],
@@ -504,23 +582,25 @@ def parse_transcript_summary_sections(summary_text: str) -> Dict[str, List[str]]
     if not summary_text:
         return sections
 
-    # Split by emoji headers (updated Oct 2025 - new section flow)
-    # Order matches new prompt structure: Operational before Major Developments
+    # Split by markdown headers (updated Nov 2025 - markdown format)
+    # Uses partial matching for flexibility with AI variations
+    # Order matches prompt structure: Operational before Major Developments
     section_markers = [
-        ("📌 BOTTOM LINE", "bottom_line"),
-        ("💰 FINANCIAL RESULTS", "financial_results"),
-        ("📊 OPERATIONAL METRICS", "operational_metrics"),
-        ("🏢 MAJOR DEVELOPMENTS", "major_developments"),
-        ("📈 GUIDANCE", "guidance"),
-        ("🎯 STRATEGIC INITIATIVES", "strategic_initiatives"),
-        ("💼 MANAGEMENT SENTIMENT", "management_sentiment"),
-        ("⚠️ RISK FACTORS", "risk_factors"),
-        ("🏭 INDUSTRY", "industry_competitive"),  # Matches "INDUSTRY & COMPETITIVE LANDSCAPE"
-        ("💡 CAPITAL ALLOCATION", "capital_allocation"),
-        ("💬 Q&A HIGHLIGHTS", "qa_highlights"),
-        ("📈 UPSIDE SCENARIO", "upside_scenario"),
-        ("📉 DOWNSIDE SCENARIO", "downside_scenario"),
-        ("🔍 KEY VARIABLES TO MONITOR", "key_variables")
+        ("## BOTTOM LINE", "bottom_line"),
+        ("## FINANCIAL RESULTS", "financial_results"),
+        ("## OPERATIONAL METRICS", "operational_metrics"),
+        ("## MAJOR DEVELOPMENTS", "major_developments"),
+        ("## GUIDANCE", "guidance"),
+        ("## STRATEGIC INITIATIVES", "strategic_initiatives"),
+        ("## MANAGEMENT SENTIMENT", "management_sentiment"),      # Matches with or without "& TONE"
+        ("## RISK FACTORS", "risk_factors"),                      # Matches with or without "& HEADWINDS"
+        ("## INDUSTRY", "industry_competitive"),                  # Matches "## INDUSTRY & COMPETITIVE LANDSCAPE"
+        ("## RELATED ENTITIES", "related_entities"),              # Matches with or without parenthetical
+        ("## CAPITAL ALLOCATION", "capital_allocation"),          # Matches with or without "& BALANCE SHEET"
+        ("## Q&A", "qa_highlights"),                              # Matches both "## Q&A" and "## Q&A HIGHLIGHTS"
+        ("## UPSIDE SCENARIO", "upside_scenario"),
+        ("## DOWNSIDE SCENARIO", "downside_scenario"),
+        ("## KEY VARIABLES", "key_variables")                     # Matches with or without "TO MONITOR"
     ]
 
     current_section = None
@@ -683,6 +763,7 @@ def build_transcript_summary_html(sections: Dict[str, List[str]], content_type: 
     html += build_section("💼 Management Sentiment & Tone", sections.get("management_sentiment", []), use_bullets=True, bold_labels=True)
     html += build_section("⚠️ Risk Factors & Headwinds", sections.get("risk_factors", []), use_bullets=True, bold_labels=True)
     html += build_section("🏭 Industry & Competitive Dynamics", sections.get("industry_competitive", []), use_bullets=True, bold_labels=True)
+    html += build_section("🤝 Related Entities", sections.get("related_entities", []), use_bullets=True, bold_labels=True)
     html += build_section("💡 Capital Allocation", sections.get("capital_allocation", []), use_bullets=True, bold_labels=True)
 
     # Q&A Highlights (only for transcripts, special formatting)

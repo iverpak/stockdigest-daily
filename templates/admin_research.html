@@ -731,16 +731,10 @@
                                 <strong>${item.label}</strong>
                                 ${item.call_date ? `<span style="color: #6b7280; font-size: 12px; margin-left: 8px;">Filed: ${formatShortDate(item.call_date)}</span>` : ''}
                             </div>
-                            <div style="display: flex; gap: 8px; align-items: center;">
-                                <select id="model-select-${item.quarter}-${item.year}" style="padding: 8px 12px; border: 2px solid #e5e7eb; border-radius: 4px; font-size: 14px; cursor: pointer;">
-                                    <option value="claude">Sonnet</option>
-                                    <option value="gemini">Gemini</option>
-                                </select>
-                                <button onclick="generateTranscript('${ticker}', ${item.quarter}, ${item.year})"
-                                        style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600;">
-                                    Generate
-                                </button>
-                            </div>
+                            <button onclick="generateTranscript('${ticker}', ${item.quarter}, ${item.year})"
+                                    style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600;">
+                                Generate Summary (5-10 min)
+                            </button>
                         </div>
                     `;
                 }
@@ -986,12 +980,7 @@
         }
 
         async function generateTranscript(ticker, quarter, year) {
-            // Get selected model from dropdown
-            const modelSelect = document.getElementById(`model-select-${quarter}-${year}`);
-            const model = modelSelect ? modelSelect.value : 'claude';
-            const modelName = model === 'gemini' ? 'Gemini 2.5 Flash' : 'Claude Sonnet 4.5';
-
-            alert(`Generating transcript for ${ticker} Q${quarter} ${year} using ${modelName}...`);
+            alert(`Generating transcript for ${ticker} Q${quarter} ${year}...`);
 
             try {
                 const response = await fetch('/api/admin/generate-transcript-summary', {
@@ -1002,18 +991,13 @@
                         ticker: ticker,
                         report_type: 'transcript',
                         quarter: quarter,
-                        year: year,
-                        model: model
+                        year: year
                     })
                 });
 
                 const result = await response.json();
                 if (result.status === 'success') {
-                    if (model === 'gemini') {
-                        alert(`✅ Transcript generated successfully with Gemini!\n\nGeneration time: ${result.generation_time_seconds}s\n\nView-only (no email sent for A/B testing).`);
-                    } else {
-                        alert('✅ Transcript generated successfully! Check your email.');
-                    }
+                    alert('✅ Transcript generated successfully! Check your email.');
                     loadTickerResearch(); // Reload to show updated status
                 } else {
                     alert(`❌ Error: ${result.message}`);

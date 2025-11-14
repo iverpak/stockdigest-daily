@@ -13273,9 +13273,9 @@ def generate_enhanced_ticker_metadata_with_ai(ticker: str, company_name: str = N
 # ═══════════════════════════════════════════════════════════════════════
 
 # Gemini entity extraction prompt (embedded)
-GEMINI_ENTITY_EXTRACTION_PROMPT = """You are extracting entity mentions from a 10-K company profile or earnings transcript summary.
+GEMINI_ENTITY_EXTRACTION_PROMPT = """You are extracting entity mentions from a complete 10-K SEC filing or earnings call transcript.
 
-Extract competitors, suppliers, and customers mentioned in the summary.
+Extract competitors, suppliers, and customers mentioned in the filing.
 
 **CRITICAL LIMITS:**
 - Return UP TO 3 competitors (prioritize by materiality: high > medium > low)
@@ -13316,6 +13316,29 @@ For EACH entity, provide:
 - Generic industry terms ("the technology sector", "European banks")
 - Historical mentions ("Blockbuster was a competitor 20 years ago")
 - Hypothetical competitors ("if a new entrant were to...")
+
+═══════════════════════════════════════════════════════════════════════
+
+**ENTITY FILTERING RULES:**
+
+1. PUBLICLY TRADED COMPANIES PREFERRED:
+   ✅ INCLUDE: Any company with valid ticker symbol (AAPL, RY.TO, BP.L, etc.)
+   ✅ INCLUDE: Private companies ONLY if ALL of:
+      - Full legal name explicitly stated in filing
+      - Industry-dominant (market leader, oligopoly member)
+      - Material relationship (>10% concentration OR sole-source critical supplier)
+   ❌ EXCLUDE: Generic anonymized names ("Customer A", "Supplier X", "Large customer", "Major supplier")
+
+2. COMPLETE COMPANY NAMES REQUIRED:
+   ✅ "Taiwan Semiconductor Manufacturing Company Limited (TSM)"
+   ✅ "Amazon Web Services" (specific business unit - acceptable)
+   ❌ "TSMC" alone (too abbreviated - provide full name)
+   ❌ "AWS" alone (use "Amazon Web Services" or "Amazon.com, Inc.")
+
+3. PARENT COMPANIES FOR DIVISIONS:
+   ✅ "The Walt Disney Company (DIS)" [Parent company]
+   ❌ "ABC (DIS)" [Division only]
+   Rule: If filing mentions division/brand (ABC, Hulu, Azure, AWS), identify and return the parent company name + ticker.
 
 **SELECTION PRIORITY (if more than limits exist):**
 1. Entities with "high" materiality (always include these first)
@@ -13368,20 +13391,20 @@ Return valid JSON with this exact structure:
 - suppliers: 0-2 entities (return empty array if none)
 - customers: 0-2 entities (return empty array if none)
 
-If a summary mentions 5 competitors, return ONLY the top 3 by materiality.
-If a summary mentions 4 suppliers, return ONLY the top 2 by materiality.
+If a filing mentions 5 competitors, return ONLY the top 3 by materiality.
+If a filing mentions 4 suppliers, return ONLY the top 2 by materiality.
 """
 
 
-def extract_entities_from_summary(ticker: str, summary_text: str, filing_type: str,
+def extract_entities_from_summary(ticker: str, filing_text: str, filing_type: str,
                                    fiscal_year: int, fiscal_quarter: Optional[int],
                                    gemini_api_key: str) -> Optional[Dict]:
     """
-    Extract competitor, supplier, and customer entities from a 10-K/transcript summary using Gemini.
+    Extract competitor, supplier, and customer entities from a raw 10-K SEC filing or earnings transcript using Gemini.
 
     Args:
         ticker: Stock ticker
-        summary_text: The markdown summary text to analyze
+        filing_text: The complete raw filing or transcript text to analyze
         filing_type: "10K", "10Q", or "transcript"
         fiscal_year: Fiscal year
         fiscal_quarter: Fiscal quarter (None for 10-K)
@@ -13419,12 +13442,12 @@ TICKER: {ticker}
 FISCAL YEAR: {fiscal_year}
 FISCAL QUARTER: {fiscal_quarter if fiscal_quarter else 'N/A'}
 
-SUMMARY TEXT:
-{summary_text[:15000]}
+FILING CONTENT:
+{filing_text}
 
 Please extract competitors, suppliers, and customers following the rules above."""
 
-        LOG.info(f"[{ticker}] Extracting entities from {filing_type} summary using Gemini 2.5 Flash...")
+        LOG.info(f"[{ticker}] Extracting entities from raw {filing_type} filing using Gemini 2.5 Flash (input length: {len(filing_text)} chars)...")
 
         response = model.generate_content(
             full_prompt,
@@ -13674,12 +13697,12 @@ def backfill_entity_logs() -> Dict:
                 company_name = filing['company_name']
                 fiscal_year = filing['fiscal_year']
                 filing_date = filing['filing_date'].strftime('%Y-%m-%d') if filing['filing_date'] else str(fiscal_year)
-                summary_text = filing['profile_markdown']
+                filing_text = filing['profile_markdown']
 
                 try:
                     # Extract entities
                     entities = extract_entities_from_summary(
-                        ticker, summary_text, '10K', fiscal_year, None, GEMINI_API_KEY
+                        ticker, filing_text, '10K', fiscal_year, None, GEMINI_API_KEY
                     )
 
                     if entities:
@@ -13720,7 +13743,7 @@ def backfill_entity_logs() -> Dict:
                 quarter = transcript['quarter']
                 year = transcript['year']
                 report_date = transcript['report_date']
-                summary_text = transcript['summary_text']
+                filing_text = transcript['summary_text']
 
                 # Get company name from ticker_reference
                 config = get_ticker_config(ticker)
@@ -13730,7 +13753,7 @@ def backfill_entity_logs() -> Dict:
                 try:
                     # Extract entities
                     entities = extract_entities_from_summary(
-                        ticker, summary_text, 'transcript', year, quarter, GEMINI_API_KEY
+                        ticker, filing_text, 'transcript', year, quarter, GEMINI_API_KEY
                     )
 
                     if entities:

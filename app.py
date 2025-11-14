@@ -17453,12 +17453,14 @@ CRITICAL WRITING RULES
 
 LENGTH REQUIREMENTS:
 
-EARNINGS TRANSCRIPTS: 4,000 words minimum, 6,000 words maximum
-- max_output_tokens = 9,000
-- Include ALL material developments, metrics, guidance updates
-- Include ALL Q&A highlights (comprehensive coverage of analyst questions)
-- Q&A section typically 1,500-2,000 words (30-40% of total)
-- Aim for comprehensive coverage within 4,000-6,000 word range
+EARNINGS TRANSCRIPTS: 4,000 words MINIMUM, 6,000 words maximum
+⚠️ CRITICAL: You MUST reach at least 4,000 words of comprehensive analysis.
+- Outputs under 4,000 words indicate insufficient coverage and will be rejected.
+- max_output_tokens = 9,000 (you have ample room - use it!)
+- Include EVERY material development mentioned in the transcript
+- Include EVERY Q&A exchange (comprehensive coverage of ALL analyst questions)
+- Q&A section MUST be 1,500-2,000 words minimum (30-40% of total)
+- When in doubt, include the detail rather than omit it
 - Better to include borderline material content than miss something important
 
 PRESS RELEASES: Scale to announcement substance
@@ -17467,7 +17469,7 @@ PRESS RELEASES: Scale to announcement substance
 - Routine update: 500-800 words
 - NEVER include Q&A section
 
-RULE: Never pad to hit word count. But never omit material content to stay brief.
+RULE: Comprehensive coverage is MORE important than brevity. Never pad to hit word count, but never omit material content to stay brief.
 
 ---
 

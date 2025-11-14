@@ -13496,9 +13496,121 @@ Please extract competitors, suppliers, and customers following the rules above."
         return None
 
 
+def save_entity_log_to_db(ticker: str, extraction: Dict, company_name: str = None) -> bool:
+    """
+    Save or append entity extraction to database (replaces file-based storage).
+    Appends extraction to existing ticker's extractions array.
+
+    Args:
+        ticker: Stock ticker (normalized)
+        extraction: Single extraction dict with {filing_type, fiscal_year, competitors, suppliers, customers, ...}
+        company_name: Company name (optional, will lookup if not provided)
+
+    Returns:
+        True on success, False on error
+    """
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Check if ticker already has entity log
+            cur.execute("SELECT entity_data FROM entity_logs WHERE ticker = %s", (ticker,))
+            existing = cur.fetchone()
+
+            if existing:
+                # Append to existing extractions array
+                entity_data = existing['entity_data']
+                if 'extractions' not in entity_data:
+                    entity_data['extractions'] = []
+
+                # Check for duplicate extraction (same filing_type + fiscal_year + fiscal_quarter)
+                existing_extractions = entity_data['extractions']
+                filing_key = (
+                    extraction.get('filing_type'),
+                    extraction.get('fiscal_year'),
+                    extraction.get('fiscal_quarter')
+                )
+
+                # Remove existing extraction with same key (will be replaced)
+                entity_data['extractions'] = [
+                    e for e in existing_extractions
+                    if (e.get('filing_type'), e.get('fiscal_year'), e.get('fiscal_quarter')) != filing_key
+                ]
+
+                # Append new extraction
+                entity_data['extractions'].append(extraction)
+
+                # Sort chronologically (most recent first)
+                entity_data['extractions'].sort(
+                    key=lambda x: (x.get('fiscal_year', 0), x.get('fiscal_quarter', 0)),
+                    reverse=True
+                )
+
+                # Update database
+                cur.execute("""
+                    UPDATE entity_logs
+                    SET entity_data = %s::jsonb, last_updated = NOW()
+                    WHERE ticker = %s
+                """, (json.dumps(entity_data), ticker))
+
+                LOG.info(f"[{ticker}] ✅ Updated entity log in database ({len(entity_data['extractions'])} total extractions)")
+
+            else:
+                # Create new entity log
+                entity_data = {
+                    'ticker': ticker,
+                    'company_name': company_name or ticker,
+                    'extractions': [extraction]
+                }
+
+                cur.execute("""
+                    INSERT INTO entity_logs (ticker, company_name, entity_data)
+                    VALUES (%s, %s, %s::jsonb)
+                """, (ticker, company_name or ticker, json.dumps(entity_data)))
+
+                LOG.info(f"[{ticker}] ✅ Created new entity log in database")
+
+            return True
+
+    except Exception as e:
+        LOG.error(f"[{ticker}] Failed to save entity log to database: {e}")
+        return False
+
+
+def load_entity_log_from_db(ticker: str) -> Optional[Dict]:
+    """
+    Load entity log from database (replaces file-based storage).
+
+    Args:
+        ticker: Stock ticker (normalized)
+
+    Returns:
+        Entity log dict with {ticker, company_name, extractions: [...]} or None if not found
+    """
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT ticker, company_name, entity_data, last_updated
+                FROM entity_logs
+                WHERE ticker = %s
+            """, (ticker,))
+
+            row = cur.fetchone()
+            if not row:
+                return None
+
+            return row['entity_data']
+
+    except Exception as e:
+        LOG.error(f"[{ticker}] Failed to load entity log from database: {e}")
+        return None
+
+
+# ==================== DEPRECATED FILE-BASED FUNCTIONS ====================
+# These are kept for backward compatibility but should not be used in new code
+
 def save_entity_log(ticker: str, log_data: Dict) -> bool:
     """
-    Save entity log to data/entities/{ticker}_entity_log.json
+    DEPRECATED: Save entity log to data/entities/{ticker}_entity_log.json
+    Use save_entity_log_to_db() instead.
 
     Args:
         ticker: Stock ticker (normalized)
@@ -13528,7 +13640,8 @@ def save_entity_log(ticker: str, log_data: Dict) -> bool:
 
 def load_entity_log(ticker: str) -> Optional[Dict]:
     """
-    Load entity log from data/entities/{ticker}_entity_log.json
+    DEPRECATED: Load entity log from data/entities/{ticker}_entity_log.json
+    Use load_entity_log_from_db() instead.
 
     Args:
         ticker: Stock ticker (normalized)
@@ -13556,7 +13669,7 @@ def load_entity_log(ticker: str) -> Optional[Dict]:
 
 def delete_entity_log(ticker: str) -> bool:
     """
-    Delete entity log file for ticker
+    Delete entity log from database for ticker
 
     Args:
         ticker: Stock ticker (normalized)
@@ -13565,15 +13678,14 @@ def delete_entity_log(ticker: str) -> bool:
         True on success, False on error
     """
     try:
-        import os
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM entity_logs WHERE ticker = %s", (ticker,))
+            deleted_count = cur.rowcount
 
-        file_path = f'data/entities/{ticker}_entity_log.json'
-
-        if os.path.exists(file_path):
-            os.remove(file_path)
-            LOG.info(f"[{ticker}] ✅ Deleted entity log: {file_path}")
-        else:
-            LOG.warning(f"[{ticker}] Entity log not found: {file_path}")
+            if deleted_count > 0:
+                LOG.info(f"[{ticker}] ✅ Deleted entity log from database")
+            else:
+                LOG.warning(f"[{ticker}] Entity log not found in database")
 
         return True
 
@@ -13586,8 +13698,8 @@ def append_to_entity_log(ticker: str, company_name: str, filing_type: str,
                           fiscal_year: int, fiscal_quarter: Optional[int],
                           filing_date: str, entities: Dict) -> bool:
     """
-    Append new filing entities to ticker's entity log.
-    Creates log if doesn't exist. Updates if entry_id exists.
+    Append new filing entities to ticker's entity log in database.
+    Creates log if doesn't exist. Updates if extraction already exists.
 
     Args:
         ticker: Stock ticker (normalized)
@@ -13601,40 +13713,9 @@ def append_to_entity_log(ticker: str, company_name: str, filing_type: str,
     Returns:
         True on success, False on error
     """
-    from datetime import datetime
-
     try:
-        # Load existing log or create new
-        log_data = load_entity_log(ticker)
-
-        if not log_data:
-            log_data = {
-                "ticker": ticker,
-                "company_name": company_name,
-                "last_updated": datetime.utcnow().isoformat() + "Z",
-                "log_entries": []
-            }
-
-        # Create entry_id
-        if filing_type == '10K':
-            entry_id = f"10K-{fiscal_year}"
-        elif filing_type == '10Q':
-            entry_id = f"10Q-Q{fiscal_quarter}-{fiscal_year}"
-        elif filing_type == 'transcript':
-            entry_id = f"Transcript-Q{fiscal_quarter}-{fiscal_year}"
-        else:
-            entry_id = f"{filing_type}-{fiscal_year}"
-
-        # Check if entry already exists
-        existing_entry = next((e for e in log_data['log_entries'] if e['entry_id'] == entry_id), None)
-
-        if existing_entry:
-            LOG.info(f"[{ticker}] Updating existing log entry: {entry_id}")
-            log_data['log_entries'].remove(existing_entry)
-
-        # Create new entry
-        new_entry = {
-            "entry_id": entry_id,
+        # Create extraction record
+        extraction = {
             "filing_type": filing_type,
             "fiscal_year": fiscal_year,
             "fiscal_quarter": fiscal_quarter,
@@ -13644,13 +13725,8 @@ def append_to_entity_log(ticker: str, company_name: str, filing_type: str,
             "customers": entities.get('customers', [])
         }
 
-        # Append and sort by filing_date DESC
-        log_data['log_entries'].append(new_entry)
-        log_data['log_entries'].sort(key=lambda e: e['filing_date'], reverse=True)
-        log_data['last_updated'] = datetime.utcnow().isoformat() + "Z"
-
-        # Save to file
-        return save_entity_log(ticker, log_data)
+        # Save to database (automatically handles merge/append logic)
+        return save_entity_log_to_db(ticker, extraction, company_name)
 
     except Exception as e:
         LOG.error(f"[{ticker}] Failed to append to entity log: {e}")
@@ -28878,43 +28954,32 @@ async def regenerate_all_metadata_api(request: Request):
 @APP.get("/api/admin/entity-logs")
 def get_all_entity_logs_api(token: str = Query(...)):
     """
-    Get list of all entity logs with basic stats.
+    Get list of all entity logs from database with basic stats.
     Used by Research Library dropdown.
     """
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
     try:
-        import os
-        import glob
-
-        # Get all entity log files
-        log_files = glob.glob('data/entities/*_entity_log.json')
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT ticker, company_name, entity_data, last_updated
+                FROM entity_logs
+                ORDER BY last_updated DESC
+            """)
+            rows = cur.fetchall()
 
         entity_logs = []
-        for file_path in log_files:
-            try:
-                with open(file_path, 'r') as f:
-                    log_data = json.load(f)
+        for row in rows:
+            entity_data = row['entity_data']
+            extractions = entity_data.get('extractions', [])
 
-                ticker = log_data.get('ticker', '')
-                company_name = log_data.get('company_name', '')
-                last_updated = log_data.get('last_updated', '')
-                entry_count = len(log_data.get('log_entries', []))
-
-                entity_logs.append({
-                    'ticker': ticker,
-                    'company_name': company_name,
-                    'last_updated': last_updated,
-                    'entry_count': entry_count
-                })
-
-            except Exception as e:
-                LOG.error(f"Error reading entity log {file_path}: {e}")
-                continue
-
-        # Sort by last_updated DESC
-        entity_logs.sort(key=lambda x: x.get('last_updated', ''), reverse=True)
+            entity_logs.append({
+                'ticker': row['ticker'],
+                'company_name': row['company_name'],
+                'last_updated': row['last_updated'].isoformat() if row['last_updated'] else '',
+                'entry_count': len(extractions)
+            })
 
         return {
             "status": "success",
@@ -28930,7 +28995,7 @@ def get_all_entity_logs_api(token: str = Query(...)):
 @APP.get("/api/admin/entity-log/{ticker}")
 def get_entity_log_api(ticker: str, token: str = Query(...)):
     """
-    Get full entity log for a specific ticker.
+    Get full entity log for a specific ticker from database.
     Used by Research Library modal viewer.
     """
     if not check_admin_token(token):
@@ -28940,8 +29005,8 @@ def get_entity_log_api(ticker: str, token: str = Query(...)):
         # Normalize ticker
         normalized_ticker = normalize_ticker_format(ticker)
 
-        # Load entity log
-        log_data = load_entity_log(normalized_ticker)
+        # Load entity log from database
+        log_data = load_entity_log_from_db(normalized_ticker)
 
         if not log_data:
             return {"status": "error", "message": f"No entity log found for {ticker}"}

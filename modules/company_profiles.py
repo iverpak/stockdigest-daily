@@ -73,6 +73,7 @@ Create a Company Profile in Markdown format with these sections:
 ## 15. MANAGEMENT & GOVERNANCE
 ## 16. LEGAL PROCEEDINGS & CONTINGENCIES
 ## 17. RECENT EVENTS & DEVELOPMENTS
+## 18. RELATED ENTITIES (COMPETITORS, SUPPLIERS, CUSTOMERS)
 
 OUTPUT FORMAT: Valid Markdown with proper headers, bullets, and tables.
 """
@@ -116,6 +117,7 @@ Create a Quarterly Update in Markdown format with these sections:
 ## 10. SUMMARY OF KEY CHANGES
 ## 11. RECENT EVENTS & SUBSEQUENT EVENTS
 ## 12. COMPETITIVE & INDUSTRY CONTEXT
+## 13. RELATED ENTITIES (COMPETITORS, SUPPLIERS, CUSTOMERS)
 
 For each section, show current quarter vs prior quarter vs year-ago quarter with percentage changes. Extract what changed since the last period.
 

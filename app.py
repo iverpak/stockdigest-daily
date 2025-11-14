@@ -16843,6 +16843,33 @@ If no industry/competitive discussion:
 
 ---
 
+🤝 RELATED ENTITIES (COMPETITORS, SUPPLIERS, CUSTOMERS) (Always if applicable - 0-5 total entities)
+
+SCOPE: Specific companies management named during the call (competitors, suppliers, customers)
+
+Format (use • bullet with entity type label):
+- [COMPETITOR/SUPPLIER/CUSTOMER]: [Company Name] - [What management said about them with attribution]
+
+Include ONLY if:
+- Management named the company explicitly (not "a large customer" or "our biggest supplier")
+- Company discussed in context of competitive dynamics, partnerships, or material relationships
+- Management provided specific details (pricing, contracts, market share, etc.)
+
+Impact/sentiment tags NOT required for this section.
+
+Examples:
+- [COMPETITOR]: Microsoft - CEO acknowledged losing enterprise cloud deals to Azure; noted pricing 15-20% below company rates
+- [CUSTOMER]: Amazon - CFO stated accounts for 18% of Q3 revenue; multi-year contract extends through 2027
+- [SUPPLIER]: NVIDIA - Management confirmed Blackwell GPU deliveries began in October; expect full production ramp in Q1 2026
+
+If management discusses entity without naming:
+- [CUSTOMER]: Large hyperscale provider - CFO stated represents 23% of revenue but did not name company; contract renewal in Q2 2026
+
+If no specific companies named:
+[Omit section entirely]
+
+---
+
 💡 CAPITAL ALLOCATION & BALANCE SHEET (Always if discussed - 2-4 bullets max)
 
 SCOPE: Cash deployment priorities, balance sheet strength, shareholder returns

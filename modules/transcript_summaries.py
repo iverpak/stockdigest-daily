@@ -666,13 +666,21 @@ def parse_transcript_summary_sections(summary_text: str, ticker: str = None) -> 
                         sections[current_section].append(content_after_header)
                     else:
                         # Bullet sections - split multi-bullet lines (Fix #2)
-                        # Split by bullet markers: "• A • B" → ["• A", "• B"]
-                        bullet_parts = re.split(r'(?=[•\-\*]\s)', content_after_header)
-                        for bullet_part in bullet_parts:
-                            if bullet_part.strip().startswith(('•', '-', '*')):
-                                bullet_text = bullet_part.lstrip('•-* ').strip()
-                                if bullet_text:
-                                    sections[current_section].append(bullet_text)
+                        # Only split on • and * (NOT on - to preserve ranges like "$100M - $120M")
+                        # If starts with -, treat entire line as one bullet
+                        if content_after_header.lstrip().startswith('-'):
+                            # Don't split lines starting with - (preserves internal dashes)
+                            bullet_text = content_after_header.lstrip('- ').strip()
+                            if bullet_text:
+                                sections[current_section].append(bullet_text)
+                        else:
+                            # Split by • and * only: "• A • B" → ["• A", "• B"]
+                            bullet_parts = re.split(r'(?=[•\*]\s)', content_after_header)
+                            for bullet_part in bullet_parts:
+                                if bullet_part.strip().startswith(('•', '*')):
+                                    bullet_text = bullet_part.lstrip('•* ').strip()
+                                    if bullet_text:
+                                        sections[current_section].append(bullet_text)
 
                 break
 
@@ -691,13 +699,21 @@ def parse_transcript_summary_sections(summary_text: str, ticker: str = None) -> 
             else:
                 # Accept multiple bullet formats: •, -, *
                 if line_stripped.startswith(('•', '-', '*', '• ', '- ', '* ')):
-                    # Split multi-bullet lines (Fix #2): "• A • B • C" → ["A", "B", "C"]
-                    bullet_parts = re.split(r'(?=[•\-\*]\s)', line_stripped)
-                    for bullet_part in bullet_parts:
-                        if bullet_part.strip().startswith(('•', '-', '*')):
-                            bullet_text = bullet_part.lstrip('•-* ').strip()
-                            if bullet_text:
-                                sections[current_section].append(bullet_text)
+                    # Only split on • and * (NOT on - to preserve ranges like "$100M - $120M")
+                    # If starts with -, treat entire line as one bullet
+                    if line_stripped.startswith(('-', '- ')):
+                        # Don't split lines starting with - (preserves internal dashes)
+                        bullet_text = line_stripped.lstrip('- ').strip()
+                        if bullet_text:
+                            sections[current_section].append(bullet_text)
+                    else:
+                        # Split by • and * only: "• A • B • C" → ["A", "B", "C"]
+                        bullet_parts = re.split(r'(?=[•\*]\s)', line_stripped)
+                        for bullet_part in bullet_parts:
+                            if bullet_part.strip().startswith(('•', '*')):
+                                bullet_text = bullet_part.lstrip('•* ').strip()
+                                if bullet_text:
+                                    sections[current_section].append(bullet_text)
                 elif line.startswith('  ') and sections[current_section]:
                     # Indented continuation line (e.g., "  Context: ...")
                     continuation = line_stripped

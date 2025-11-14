@@ -17451,19 +17451,22 @@ CRITICAL WRITING RULES
 8. Past tense for call content - "CEO stated," "CFO reported"
 9. Present tense for ongoing conditions - "Company operates," "margin stands at"
 
-LENGTH GUIDELINES:
-Scale naturally to transcript substance:
-- Rich transcript (50+ topics, detailed Q&A): 4,500-6,000 words
-- Standard transcript (20-30 topics): 3,000-4,500 words
-- Light transcript (<15 topics): 2,000-3,000 words
+LENGTH REQUIREMENTS:
 
-Q&A section should represent 30-40% of total output.
+EARNINGS TRANSCRIPTS: Target ~5,000 words
+- Include ALL material developments, metrics, guidance updates
+- Include ALL Q&A highlights (comprehensive coverage of analyst questions)
+- Q&A section typically 1,500-2,000 words (30-40% of total)
+- If genuinely comprehensive coverage results in 4,000-6,000 words → Acceptable
+- Better to include borderline material content than miss something important
 
-PRESS RELEASES:
+PRESS RELEASES: Scale to announcement substance
 - Major M&A/earnings: 1,200-1,800 words
 - Product launch/partnership: 800-1,200 words
 - Routine update: 500-800 words
 - NEVER include Q&A section
+
+RULE: Never pad to hit word count. But never omit material content to stay brief.
 
 ---
 

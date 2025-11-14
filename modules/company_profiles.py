@@ -42,7 +42,7 @@ CRITICAL INSTRUCTIONS:
 - Extract only facts explicitly stated in the filing
 - Skip sections with no disclosed data
 - Target length: 3,000-6,000 words
-- Note: Complex filings may extend to 7,500 words. Avoid exceeding 8,000 words to prevent truncation.
+- Note: Complex filings may extend to 6,500 words. Avoid exceeding 7,000 words to prevent truncation.
 
 ---
 COMPLETE 10-K DOCUMENT:
@@ -92,7 +92,7 @@ CRITICAL INSTRUCTIONS:
 - Show QoQ and YoY comparisons with percentage changes
 - Skip sections with no disclosed data
 - Target length: 2,500-5,000 words
-- Note: Complex filings may extend to 6,500 words. Avoid exceeding 7,500 words to prevent truncation.
+- Note: Complex filings may extend to 5,500 words. Avoid exceeding 6,500 words to prevent truncation.
 
 ---
 COMPLETE 10-Q DOCUMENT:
@@ -1030,7 +1030,7 @@ def generate_sec_filing_profile_with_gemini(
 
         generation_config = {
             "temperature": 0.0,  # Maximum determinism for completely consistent extraction
-            "max_output_tokens": 32768  # Increased to 32,768 for comprehensive extraction (Oct 2025)
+            "max_output_tokens": 65536  # Official Gemini 2.5 Flash limit (increased from 32K to avoid artificial ceiling)
         }
 
         start_time = datetime.now()
@@ -1338,7 +1338,7 @@ def generate_investor_presentation_analysis_with_gemini(
 
         generation_config = {
             "temperature": 0.0,  # Maximum determinism for completely consistent extraction
-            "max_output_tokens": 32768  # Increased to 32,768 for comprehensive extraction (Oct 2025)
+            "max_output_tokens": 65536  # Official Gemini 2.5 Flash limit (increased from 32K to avoid artificial ceiling)
         }
 
         start_time = datetime.now()

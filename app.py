@@ -13784,6 +13784,176 @@ def backfill_entity_logs() -> Dict:
         return stats
 
 
+def regenerate_entity_logs_from_raw_filings() -> Dict:
+    """
+    Regenerate entity logs by fetching RAW 10-K and Transcript filings from FMP for active beta user tickers.
+
+    Process:
+    1. Get all active beta user tickers (deduplicated)
+    2. For each ticker:
+       - Fetch LATEST 10-K from FMP → Get raw HTML from SEC.gov → Extract entities
+       - Fetch LATEST Transcript from FMP → Get raw transcript text → Extract entities
+    3. Save entities to log files
+
+    Returns:
+        Dict with stats: {success: int, errors: int, skipped: int, error_list: [...]}
+    """
+    stats = {
+        "success": 0,
+        "errors": 0,
+        "skipped": 0,
+        "error_list": []
+    }
+
+    try:
+        from modules.company_profiles import fetch_sec_html_text
+        from modules.transcript_summaries import fetch_fmp_transcript_list, fetch_fmp_transcript
+
+        # Get all active beta user tickers (deduplicated)
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT ticker1 AS ticker FROM beta_users WHERE status = 'active' AND ticker1 IS NOT NULL
+                UNION
+                SELECT DISTINCT ticker2 AS ticker FROM beta_users WHERE status = 'active' AND ticker2 IS NOT NULL
+                UNION
+                SELECT DISTINCT ticker3 AS ticker FROM beta_users WHERE status = 'active' AND ticker3 IS NOT NULL
+            """)
+            tickers = [row['ticker'] for row in cur.fetchall()]
+
+        LOG.info(f"🔄 Regenerating entity logs from RAW filings for {len(tickers)} active tickers")
+
+        for ticker in tickers:
+            normalized_ticker = normalize_ticker_format(ticker)
+            config = get_ticker_config(normalized_ticker)
+            company_name = config.get('company_name', ticker) if config else ticker
+
+            LOG.info(f"[{ticker}] Starting raw filing extraction...")
+
+            # ===================================================================
+            # 1. FETCH LATEST 10-K FROM FMP
+            # ===================================================================
+            try:
+                LOG.info(f"[{ticker}] Fetching latest 10-K from FMP...")
+                fmp_url = f"https://financialmodelingprep.com/api/v3/sec_filings/{ticker}?type=10-K&page=0&apikey={FMP_API_KEY}"
+                response = requests.get(fmp_url, timeout=10)
+                filings = response.json()
+
+                if filings and isinstance(filings, list) and len(filings) > 0:
+                    latest_10k = filings[0]  # Most recent
+
+                    # Extract fiscal year and SEC HTML URL
+                    import re
+                    sec_html_url = latest_10k.get("finalLink", "")
+                    filing_date_str = latest_10k.get("fillingDate", "")
+
+                    # Extract fiscal year from URL (e.g., jpm-20241231.htm → 2024)
+                    fiscal_year = None
+                    if sec_html_url:
+                        match = re.search(r'(\d{8})\.htm$', sec_html_url)
+                        if match:
+                            date_str = match.group(1)
+                            fiscal_year = int(date_str[:4])
+
+                    if not fiscal_year and filing_date_str:
+                        fiscal_year = int(filing_date_str[:4])
+
+                    if fiscal_year and sec_html_url:
+                        LOG.info(f"[{ticker}] Fetching raw 10-K HTML from SEC.gov (FY{fiscal_year})...")
+                        raw_10k_text = fetch_sec_html_text(sec_html_url)
+
+                        LOG.info(f"[{ticker}] Extracting entities from raw 10-K ({len(raw_10k_text)} chars)...")
+                        entities = extract_entities_from_summary(
+                            ticker, raw_10k_text, '10K', fiscal_year, None, GEMINI_API_KEY
+                        )
+
+                        if entities:
+                            filing_date = filing_date_str[:10] if filing_date_str else str(fiscal_year)
+                            success = append_to_entity_log(
+                                ticker, company_name, '10K', fiscal_year, None, filing_date, entities
+                            )
+                            if success:
+                                LOG.info(f"[{ticker}] ✅ 10-K entities saved: {len(entities.get('competitors', []))} competitors, {len(entities.get('suppliers', []))} suppliers, {len(entities.get('customers', []))} customers")
+                                stats['success'] += 1
+                            else:
+                                LOG.error(f"[{ticker}] ❌ Failed to save 10-K entities to log")
+                                stats['errors'] += 1
+                                stats['error_list'].append(f"{ticker} 10-K: Failed to save log")
+                        else:
+                            LOG.warning(f"[{ticker}] ⚠️ No entities extracted from 10-K")
+                            stats['errors'] += 1
+                            stats['error_list'].append(f"{ticker} 10-K: No entities extracted")
+                    else:
+                        LOG.warning(f"[{ticker}] ⏭️ Skipped 10-K (no fiscal year or SEC URL)")
+                        stats['skipped'] += 1
+                else:
+                    LOG.warning(f"[{ticker}] ⏭️ No 10-K filings found on FMP")
+                    stats['skipped'] += 1
+
+            except Exception as e:
+                LOG.error(f"[{ticker}] Error processing 10-K: {e}", exc_info=True)
+                stats['errors'] += 1
+                stats['error_list'].append(f"{ticker} 10-K: {str(e)}")
+
+            # ===================================================================
+            # 2. FETCH LATEST TRANSCRIPT FROM FMP
+            # ===================================================================
+            try:
+                LOG.info(f"[{ticker}] Fetching latest transcript from FMP...")
+                transcripts = fetch_fmp_transcript_list(ticker, FMP_API_KEY)
+
+                if transcripts and len(transcripts) > 0:
+                    latest_transcript_info = transcripts[0]  # Most recent
+                    quarter = latest_transcript_info['quarter']
+                    year = latest_transcript_info['year']
+
+                    LOG.info(f"[{ticker}] Fetching raw transcript content (Q{quarter} {year})...")
+                    transcript_data = fetch_fmp_transcript(ticker, quarter, year, FMP_API_KEY)
+
+                    if transcript_data and transcript_data.get('content'):
+                        raw_transcript_text = transcript_data['content']
+
+                        LOG.info(f"[{ticker}] Extracting entities from raw transcript ({len(raw_transcript_text)} chars)...")
+                        entities = extract_entities_from_summary(
+                            ticker, raw_transcript_text, 'transcript', year, quarter, GEMINI_API_KEY
+                        )
+
+                        if entities:
+                            filing_date = latest_transcript_info.get('date', f"{year}-{quarter*3:02d}-01")
+                            success = append_to_entity_log(
+                                ticker, company_name, 'transcript', year, quarter, filing_date, entities
+                            )
+                            if success:
+                                LOG.info(f"[{ticker}] ✅ Transcript entities saved: {len(entities.get('competitors', []))} competitors, {len(entities.get('suppliers', []))} suppliers, {len(entities.get('customers', []))} customers")
+                                stats['success'] += 1
+                            else:
+                                LOG.error(f"[{ticker}] ❌ Failed to save transcript entities to log")
+                                stats['errors'] += 1
+                                stats['error_list'].append(f"{ticker} Transcript Q{quarter} {year}: Failed to save log")
+                        else:
+                            LOG.warning(f"[{ticker}] ⚠️ No entities extracted from transcript")
+                            stats['errors'] += 1
+                            stats['error_list'].append(f"{ticker} Transcript Q{quarter} {year}: No entities extracted")
+                    else:
+                        LOG.warning(f"[{ticker}] ⏭️ Skipped transcript (no content)")
+                        stats['skipped'] += 1
+                else:
+                    LOG.warning(f"[{ticker}] ⏭️ No transcripts found on FMP")
+                    stats['skipped'] += 1
+
+            except Exception as e:
+                LOG.error(f"[{ticker}] Error processing transcript: {e}", exc_info=True)
+                stats['errors'] += 1
+                stats['error_list'].append(f"{ticker} Transcript: {str(e)}")
+
+        LOG.info(f"✅ Raw filing extraction complete: {stats['success']} success, {stats['errors']} errors, {stats['skipped']} skipped")
+        return stats
+
+    except Exception as e:
+        LOG.error(f"Raw filing extraction failed: {e}", exc_info=True)
+        stats['error_list'].append(f"Fatal error: {str(e)}")
+        return stats
+
+
 def regenerate_all_metadata_with_logs() -> Dict:
     """
     Regenerate metadata for all active beta user tickers using entity logs.
@@ -28630,8 +28800,8 @@ async def fetch_fmp_press_releases_async(ticker: str, session: aiohttp.ClientSes
 @APP.post("/api/admin/regenerate-entity-logs")
 async def regenerate_entity_logs_api(request: Request):
     """
-    Extract entities from all existing 10-K and transcript summaries.
-    Creates/updates entity log files for all tickers.
+    Extract entities from RAW 10-K SEC filings and earnings transcripts for active beta user tickers.
+    Fetches latest filings from FMP and creates/updates entity log files.
     """
     body = await request.json()
     token = body.get('token')
@@ -28640,15 +28810,17 @@ async def regenerate_entity_logs_api(request: Request):
         return {"status": "error", "message": "Unauthorized"}
 
     try:
-        LOG.info("🔄 Starting entity log backfill...")
-        stats = backfill_entity_logs()
+        LOG.info("🔄 Starting raw filing entity extraction...")
+        stats = regenerate_entity_logs_from_raw_filings()
 
         # Format error list for display
         error_summary = "\n".join(stats['error_list'][:10]) if stats['error_list'] else ""
         if len(stats['error_list']) > 10:
             error_summary += f"\n... and {len(stats['error_list']) - 10} more errors"
 
-        message = f"✅ Created/updated {stats['success']} entity logs"
+        message = f"✅ Extracted entities from {stats['success']} raw filings (10-K + Transcript)"
+        if stats['skipped'] > 0:
+            message += f"\n⏭️ Skipped {stats['skipped']} filings (not available on FMP)"
         if stats['errors'] > 0:
             message += f"\n⚠️ {stats['errors']} errors occurred"
         if error_summary:

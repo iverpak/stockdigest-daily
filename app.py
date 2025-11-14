@@ -13510,6 +13510,13 @@ def save_entity_log_to_db(ticker: str, extraction: Dict, company_name: str = Non
         True on success, False on error
     """
     try:
+        from datetime import datetime
+
+        # Validate critical field exists (required for sorting)
+        if not extraction.get('filing_date'):
+            LOG.warning(f"[{ticker}] Extraction missing filing_date, using current date as fallback")
+            extraction['filing_date'] = datetime.now().strftime('%Y-%m-%d')
+
         with db() as conn, conn.cursor() as cur:
             # Check if ticker already has entity log
             cur.execute("SELECT entity_data FROM entity_logs WHERE ticker = %s", (ticker,))
@@ -13538,9 +13545,11 @@ def save_entity_log_to_db(ticker: str, extraction: Dict, company_name: str = Non
                 # Append new extraction
                 entity_data['extractions'].append(extraction)
 
-                # Sort chronologically (most recent first)
+                # Sort chronologically by actual filing date (most recent first)
+                # This handles all filing types (10-K, 10-Q, Transcript, 8-K) uniformly
+                # and avoids TypeError when comparing None with int (fiscal_quarter can be None for 10-K)
                 entity_data['extractions'].sort(
-                    key=lambda x: (x.get('fiscal_year', 0), x.get('fiscal_quarter', 0)),
+                    key=lambda x: x.get('filing_date', ''),
                     reverse=True
                 )
 

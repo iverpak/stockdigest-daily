@@ -128,6 +128,25 @@ Risk integration order:
 Conflicting numbers: Present both with sources
 "Debt load ($97.5B per Yahoo Finance; $93.8B per FY2024 10-K)"
 
+PRESERVE COMPLETE QUANTIFICATION (CRITICAL):
+
+When integrating metrics, forecasts, or targets, preserve BOTH absolute values AND relative changes:
+
+Examples of COMPLETE quantification:
+✅ "EIA projects prices will rise 23% to $47/MWh in 2025"
+✅ "Analyst raised target to $175 from $150 (+17%)"
+✅ "Revenue grew 15% to $12.8B from $11.1B"
+✅ "Margins expanded 200 bps to 18.2% from 16.2%"
+
+Examples of INCOMPLETE quantification (missing institutional value):
+❌ "EIA projects prices will rise 23%" (missing: to what level?)
+❌ "Analyst raised target" (missing: from what? to what?)
+❌ "Revenue grew 15%" (missing: to what absolute level?)
+❌ "Margins expanded 200 bps" (missing: to what level?)
+
+Institutional investors model absolute levels, not just changes.
+Preserve all numbers even if slightly exceeding length targets.
+
 ═══════════════════════════════════════════════════════════════════════════
 SCENARIO VALIDATION (CRITICAL)
 ═══════════════════════════════════════════════════════════════════════════

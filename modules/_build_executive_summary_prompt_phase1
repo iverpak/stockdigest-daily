@@ -225,15 +225,19 @@ Key Variables: 3-8 bullets max
 Individual bullets: No hard limit, but be information-dense - every word should add value
 
 LENGTH GUIDELINES:
-Scale naturally to total flagged article count across the full coverage period.
-Ignore day-of-week distribution when determining coverage depth.
 
-General guidance:
-- High volume (15+ flagged): Comprehensive coverage
-- Medium volume (8-14 flagged): Focused on key developments
-- Low volume (4-7 flagged): Concise reporting
-- Minimal (2-3 flagged): Brief but complete
-- Zero flagged: Bottom Line only
+Article count does not affect bullet detail level.
+
+Write each material theme with consistent detail regardless of volume:
+- 5 articles about earnings = same bullet depth as 25 articles about earnings
+- What changes: NUMBER of material themes, not DETAIL per theme
+
+Bullet length varies by complexity (40-150 words), not article volume:
+- Simple updates: 40-70 words
+- Moderate developments: 70-100 words  
+- Complex developments: 100-150 words
+
+Exception: Zero flagged articles → Use quiet day escape hatch (Bottom Line only)
 
 ═══════════════════════════════════════════════════════════════════════════════
 BULLET STRUCTURE

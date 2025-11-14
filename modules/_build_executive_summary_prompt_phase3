@@ -212,15 +212,43 @@ Never summarize away: "clearly losing share", "$17.58-$18.50 per share"
 LENGTH ENFORCEMENT
 ═══════════════════════════════════════════════════════════════════════════
 
-Bottom Line: 150 words max (HARD LIMIT)
+Bottom Line: 150 words target, 170 words absolute max
 Upside Scenario: 80-160 words
 Downside Scenario: 80-160 words
 Bullets: No limit (let content determine length)
 
-If integrated paragraph exceeds limit:
-1. Remove low-value context (general background, weak connections)
-2. Keep all Phase 1 facts (article content is priority)
-3. Trim context that doesn't answer material questions
+COMPRESSION HIERARCHY (cut in this order):
+
+TIER 1 - CUT FIRST (remove these to hit length):
+- Narrative connectors ("This is important because...", "notably", "significantly")
+- Redundant phrasing (adjectives, adverbs that don't add information)
+- Duplicate metrics (if same number appears twice, keep best placement)
+- Generic background without company-specific connection
+
+TIER 2 - PRESERVE (only cut if critically over length):
+
+DATA TYPES:
+- Quantified metrics (absolute levels, percentages, dollar amounts)
+- Breakdowns (customer class splits, regional concentration, segment detail)
+- Multi-year data (2025 AND 2026, not just current year)
+- Comparative context (vs peers, vs consensus, vs prior period)
+- Contrarian views (if source A bullish, keep source B bearish)
+
+ANALYTICAL CONTEXT:
+- Dependencies (customer concentration %, sole suppliers, single-site exposure)
+- Trends (QoQ, YoY, sequential, improving/deteriorating)
+- Risk quantification (% exposed, loss scenarios, covenant headroom)
+- Profitability context (margins, ROIC vs WACC, unit economics)
+- Timeline/milestones (on schedule, delayed, regulatory approval dates)
+
+RULE: Better 165-word Bottom Line with institutional metrics than 150-word without.
+Institutional investors pay for quantification. Preserve numbers over narratives.
+
+COMPRESSION PRIORITY WHEN OVER LENGTH:
+1. Phase 1 content (article facts) takes priority over Phase 2 context
+2. Cut Phase 2 context that doesn't answer material questions (materiality, economics, trends, dependencies)
+3. Never cut quantified metrics, breakdowns, or multi-year data to save Phase 2 context
+4. If choosing between narrative connector and number → cut narrative, keep number
 
 ═══════════════════════════════════════════════════════════════════════════
 WHAT NOT TO DO

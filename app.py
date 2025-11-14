@@ -13404,7 +13404,7 @@ def extract_entities_from_summary(ticker: str, summary_text: str, filing_type: s
         # Generation config (same pattern as 10-K/10-Q)
         generation_config = {
             "temperature": 0.0,  # Maximum determinism for consistent entity extraction
-            "max_output_tokens": 4000  # Enough for entity JSON (much smaller than 32K for profiles)
+            "max_output_tokens": 8000  # Increased from 4000 to handle long transcripts/filings
         }
 
         # Combine system prompt with user input

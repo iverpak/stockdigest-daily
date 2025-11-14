@@ -1813,15 +1813,15 @@
 
         // Format entity log JSON into HTML
         function formatEntityLogHTML(entityLog) {
-            if (!entityLog || !entityLog.log_entries) {
+            if (!entityLog || !entityLog.extractions) {
                 return '<p>No entity log data available</p>';
             }
 
-            const entries = entityLog.log_entries;
+            const entries = entityLog.extractions;
             let html = `
                 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;">
                     <p style="color: #6b7280; margin-bottom: 20px;">
-                        Last Updated: ${new Date(entityLog.last_updated).toLocaleString()} | ${entries.length} filing${entries.length !== 1 ? 's' : ''}
+                        ${entries.length} filing${entries.length !== 1 ? 's' : ''}
                     </p>
             `;
 
@@ -1842,23 +1842,18 @@
 
                 // Competitors
                 if (entry.competitors && entry.competitors.length > 0) {
-                    html += `<h4 style="margin: 12px 0 8px 0; color: #374151;">COMPETITORS (${entry.competitors.length}):</h4>`;
+                    html += `<h4 style="margin: 12px 0 8px 0; color: #374151;">🔴 COMPETITORS (${entry.competitors.length}):</h4>`;
                     entry.competitors.forEach(comp => {
-                        const badge = comp.materiality === 'high' ? '<span style="background: #10b981; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">HIGH</span>' :
-                                      comp.materiality === 'medium' ? '<span style="background: #f59e0b; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">MEDIUM</span>' :
-                                      '<span style="background: #6b7280; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">LOW</span>';
-
                         html += `
                             <div style="margin-bottom: 12px; padding: 12px; background: #f9fafb; border-radius: 6px;">
                                 <div style="font-weight: 600; margin-bottom: 4px;">
-                                    ${comp.name}${comp.ticker ? ` (${comp.ticker})` : ''} ${badge}
+                                    ${comp.name}${comp.ticker ? ` (${comp.ticker})` : ''}
                                 </div>
-                                <div style="font-size: 12px; color: #6b7280; margin-bottom: 4px;">
-                                    📍 ${comp.source_section}
+                                ${comp.context ? `
+                                <div style="font-size: 13px; color: #374151; font-style: italic; margin-top: 8px;">
+                                    "${comp.context}"
                                 </div>
-                                <div style="font-size: 13px; color: #374151; font-style: italic;">
-                                    "${comp.context_snippet}"
-                                </div>
+                                ` : ''}
                             </div>
                         `;
                     });
@@ -1866,23 +1861,18 @@
 
                 // Suppliers
                 if (entry.suppliers && entry.suppliers.length > 0) {
-                    html += `<h4 style="margin: 16px 0 8px 0; color: #374151;">SUPPLIERS (${entry.suppliers.length}):</h4>`;
+                    html += `<h4 style="margin: 16px 0 8px 0; color: #374151;">📦 SUPPLIERS (${entry.suppliers.length}):</h4>`;
                     entry.suppliers.forEach(supp => {
-                        const badge = supp.materiality === 'high' ? '<span style="background: #10b981; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">HIGH</span>' :
-                                      supp.materiality === 'medium' ? '<span style="background: #f59e0b; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">MEDIUM</span>' :
-                                      '<span style="background: #6b7280; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">LOW</span>';
-
                         html += `
                             <div style="margin-bottom: 12px; padding: 12px; background: #f9fafb; border-radius: 6px;">
                                 <div style="font-weight: 600; margin-bottom: 4px;">
-                                    ${supp.name}${supp.ticker ? ` (${supp.ticker})` : ''} ${badge}
+                                    ${supp.name}${supp.ticker ? ` (${supp.ticker})` : ''}
                                 </div>
-                                <div style="font-size: 12px; color: #6b7280; margin-bottom: 4px;">
-                                    📍 ${supp.source_section}
+                                ${supp.context ? `
+                                <div style="font-size: 13px; color: #374151; font-style: italic; margin-top: 8px;">
+                                    "${supp.context}"
                                 </div>
-                                <div style="font-size: 13px; color: #374151; font-style: italic;">
-                                    "${supp.context_snippet}"
-                                </div>
+                                ` : ''}
                             </div>
                         `;
                     });
@@ -1890,23 +1880,18 @@
 
                 // Customers
                 if (entry.customers && entry.customers.length > 0) {
-                    html += `<h4 style="margin: 16px 0 8px 0; color: #374151;">CUSTOMERS (${entry.customers.length}):</h4>`;
+                    html += `<h4 style="margin: 16px 0 8px 0; color: #374151;">👥 CUSTOMERS (${entry.customers.length}):</h4>`;
                     entry.customers.forEach(cust => {
-                        const badge = cust.materiality === 'high' ? '<span style="background: #10b981; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">HIGH</span>' :
-                                      cust.materiality === 'medium' ? '<span style="background: #f59e0b; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">MEDIUM</span>' :
-                                      '<span style="background: #6b7280; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">LOW</span>';
-
                         html += `
                             <div style="margin-bottom: 12px; padding: 12px; background: #f9fafb; border-radius: 6px;">
                                 <div style="font-weight: 600; margin-bottom: 4px;">
-                                    ${cust.name}${cust.ticker ? ` (${cust.ticker})` : ''} ${badge}
+                                    ${cust.name}${cust.ticker ? ` (${cust.ticker})` : ''}
                                 </div>
-                                <div style="font-size: 12px; color: #6b7280; margin-bottom: 4px;">
-                                    📍 ${cust.source_section}
+                                ${cust.context ? `
+                                <div style="font-size: 13px; color: #374151; font-style: italic; margin-top: 8px;">
+                                    "${cust.context}"
                                 </div>
-                                <div style="font-size: 13px; color: #374151; font-style: italic;">
-                                    "${cust.context_snippet}"
-                                </div>
+                                ` : ''}
                             </div>
                         `;
                     });

@@ -27222,62 +27222,122 @@ async def generate_transcript_summary_api(request: Request):
                 pr_title = data['title']
             fmp_url = f"https://financialmodelingprep.com/api/v3/press-releases/{ticker}"
 
-        # Summarize with automatic AI fallback (Gemini Pro → Claude Sonnet)
-        from modules.transcript_summaries import generate_transcript_summary_with_fallback
+        # Summarize with automatic AI fallback using v2 JSON system (Gemini Pro → Claude Sonnet)
+        from modules.transcript_summaries import generate_transcript_json_with_fallback
 
-        LOG.info(f"🤖 Summarizing {report_type} with AI (Gemini Pro → Claude Sonnet fallback, content: {len(content)} chars)")
-        result = generate_transcript_summary_with_fallback(
+        LOG.info(f"🤖 [ADMIN API] Summarizing {report_type} with AI v2 (Gemini Pro → Claude Sonnet fallback, content: {len(content)} chars)")
+        result = generate_transcript_json_with_fallback(
             ticker=ticker,
             content=content,
             config=config,
             content_type=report_type,
             anthropic_api_key=ANTHROPIC_API_KEY,
-            gemini_api_key=GEMINI_API_KEY,
-            anthropic_model=ANTHROPIC_MODEL,
-            anthropic_api_url=ANTHROPIC_API_URL,
-            build_prompt_func=_build_research_summary_prompt
+            gemini_api_key=GEMINI_API_KEY
         )
 
-        if not result:
-            return {"status": "error", "message": "Both Gemini and Claude summarization failed"}
+        if not result or not result.get('json_output'):
+            return {"status": "error", "message": "Both Gemini and Claude v2 summarization failed"}
 
-        summary_text = result['summary_text']
-        ai_provider = result['ai_provider']
-        ai_model = result['ai_model']
-        generation_time_seconds = result['generation_time_seconds']
-        token_count_input = result['token_count_input']
-        token_count_output = result['token_count_output']
+        json_output = result['json_output']
+        model_used = result['model_used']  # e.g., "gemini-2.5-pro" or "claude-sonnet-4-5-20250929"
+        generation_time_ms = result.get('generation_time_ms', 0)
+        prompt_tokens = result.get('prompt_tokens', 0)
+        completion_tokens = result.get('completion_tokens', 0)
 
-        # Save to database (using module function)
+        # Extract provider name from model string
+        ai_provider = "gemini" if "gemini" in model_used.lower() else "claude"
+
+        LOG.info(
+            f"[{ticker}] ✅ [ADMIN API] Generated {len(json_output.get('sections', {}))} sections "
+            f"with {model_used} ({generation_time_ms}ms, {prompt_tokens}→{completion_tokens} tokens)"
+        )
+
+        # Save to database with v2 JSON support (backward compatible)
         # Ensure quarter has Q prefix (defensive check - don't double-prefix)
         quarter_formatted = None
         if quarter:
             quarter_str = str(quarter)
             quarter_formatted = quarter_str if quarter_str.startswith('Q') else f"Q{quarter_str}"
 
-        with db() as conn:
+        # Convert JSON to text for backward compatibility
+        import json
+        summary_text_json = json.dumps(json_output)
+
+        with db() as conn, conn.cursor() as cur:
             if report_type == 'transcript':
-                # Transcripts: Save to transcript_summaries table
-                save_transcript_summary_to_database(
-                    ticker=ticker,
-                    company_name=company_name,
-                    report_type=report_type,
-                    quarter=quarter_formatted,
-                    year=year,
-                    report_date=report_date,
-                    pr_title=None,  # Not applicable for transcripts
-                    summary_text=summary_text,
-                    source_url=fmp_url,
-                    ai_provider=ai_provider,
-                    ai_model=ai_model,
-                    generation_time_seconds=generation_time_seconds,
-                    token_count_input=token_count_input,
-                    token_count_output=token_count_output,
-                    db_connection=conn
-                )
+                # Check if summary_json column exists (backward compatibility)
+                cur.execute("""
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name = 'transcript_summaries'
+                    AND column_name IN ('summary_json', 'prompt_version')
+                """)
+                rows = cur.fetchall()
+                # Handle both tuple and dict cursor types
+                if rows and isinstance(rows[0], dict):
+                    existing_columns = {row['column_name'] for row in rows}
+                else:
+                    existing_columns = {row[0] for row in rows}
+                has_json_columns = 'summary_json' in existing_columns and 'prompt_version' in existing_columns
+
+                if has_json_columns:
+                    # New schema: Save both text (for backward compat) and JSON
+                    # Use Json adapter for psycopg3 JSONB support
+                    try:
+                        from psycopg.types.json import Json
+                        json_param = Json(json_output)
+                    except ImportError:
+                        json_param = json.dumps(json_output)
+
+                    cur.execute("""
+                        INSERT INTO transcript_summaries (
+                            ticker, company_name, report_type, quarter, year,
+                            report_date, summary_text, summary_json, prompt_version,
+                            source_url, ai_provider, ai_model
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (ticker, report_type, quarter, year)
+                        DO UPDATE SET
+                            summary_text = EXCLUDED.summary_text,
+                            summary_json = EXCLUDED.summary_json,
+                            prompt_version = EXCLUDED.prompt_version,
+                            ai_provider = EXCLUDED.ai_provider,
+                            ai_model = EXCLUDED.ai_model,
+                            generated_at = NOW()
+                    """, (
+                        ticker, company_name, 'transcript',
+                        quarter_formatted, year, report_date,
+                        summary_text_json,  # Store JSON as text for backward compat
+                        json_param,         # Store as JSONB (adapter handles type)
+                        'v2',               # Mark as v2 prompt
+                        fmp_url,
+                        ai_provider,  # "gemini" or "claude"
+                        model_used    # Full model name
+                    ))
+                    LOG.info(f"[{ticker}] ✅ [ADMIN API] Saved with JSON columns (v2)")
+                else:
+                    # Old schema: Save JSON as text only (pre-migration)
+                    cur.execute("""
+                        INSERT INTO transcript_summaries (
+                            ticker, company_name, report_type, quarter, year,
+                            report_date, summary_text, source_url, ai_provider, ai_model
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (ticker, report_type, quarter, year)
+                        DO UPDATE SET
+                            summary_text = EXCLUDED.summary_text,
+                            ai_provider = EXCLUDED.ai_provider,
+                            ai_model = EXCLUDED.ai_model,
+                            generated_at = NOW()
+                    """, (
+                        ticker, company_name, 'transcript',
+                        quarter_formatted, year, report_date,
+                        summary_text_json, fmp_url, ai_provider, model_used
+                    ))
+                    LOG.warning(f"[{ticker}] ⚠️ [ADMIN API] Saved as text only (run migration to enable JSON storage)")
 
             elif report_type == 'press_release':
-                # Press releases: Save to press_releases table
+                # Press releases: Save to press_releases table (no v2 JSON support yet)
                 from modules.press_releases import save_press_release_to_database
 
                 save_press_release_to_database(
@@ -27285,39 +27345,39 @@ async def generate_transcript_summary_api(request: Request):
                     company_name=company_name,
                     report_date=report_date,
                     pr_title=pr_title,
-                    summary_text=summary_text,
+                    summary_text=summary_text_json,  # Save JSON as text
                     ai_provider=ai_provider,
-                    ai_model=ai_model,
-                    processing_duration_seconds=generation_time_seconds,
+                    ai_model=model_used,
+                    processing_duration_seconds=int(generation_time_ms / 1000),
                     job_id=None,  # No job for synchronous generation
                     db_connection=conn
                 )
 
-        LOG.info(f"💾 Saved summary to database")
+            conn.commit()
 
-        # Send email for both Gemini and Claude summaries
+        LOG.info(f"💾 [ADMIN API] Saved v2 summary to database")
+
+        # Send email with v2 JSON-to-HTML conversion
         # Get real-time stock data using unified helper (yfinance → Polygon → database → None)
         stock_data = get_filing_stock_data(ticker)
 
-        # Generate and send email (using module function)
-        # Use formatted quarter (already has Q prefix from above)
-        email_data = generate_transcript_email(
+        # Generate email from JSON output using v2 function
+        from modules.transcript_summaries import generate_transcript_email_v2
+
+        # Extract quarter integer from formatted string (remove 'Q' prefix for v2 function)
+        quarter_int = None
+        if quarter_formatted:
+            quarter_int = int(quarter_formatted.replace('Q', ''))
+
+        email_data = generate_transcript_email_v2(
             ticker=ticker,
-            company_name=company_name,
-            report_type=report_type,
-            quarter=quarter_formatted,
+            json_output=json_output,
+            config=config,
+            content_type=report_type,
+            quarter=quarter_int,
             year=year,
             report_date=report_date,
-            pr_title=pr_title,
-            summary_text=summary_text,
-            fmp_url=fmp_url,
-            stock_price=stock_data['stock_price'],
-            price_change_pct=stock_data['price_change_pct'],
-            price_change_color=stock_data['price_change_color'],
-            ytd_return_pct=stock_data['ytd_return_pct'],
-            ytd_return_color=stock_data['ytd_return_color'],
-            market_status=stock_data['market_status'],
-            return_label=stock_data['return_label']
+            stock_data=stock_data
         )
 
         # Send to admin email
@@ -27328,13 +27388,15 @@ async def generate_transcript_summary_api(request: Request):
         )
 
         if success:
-            LOG.info(f"✅ Transcript summary email sent successfully")
+            LOG.info(f"✅ [ADMIN API] Transcript v2 email sent successfully")
             return {
                 "status": "success",
-                "message": f"Summary generated and email sent to stockdigest.research@gmail.com",
+                "message": f"Summary generated with v2 prompt and email sent to stockdigest.research@gmail.com",
                 "ticker": ticker,
                 "company_name": company_name,
-                "report_type": report_type
+                "report_type": report_type,
+                "prompt_version": "v2",
+                "model_used": model_used
             }
         else:
             return {"status": "error", "message": "Email sending failed"}

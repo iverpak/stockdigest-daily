@@ -1261,11 +1261,11 @@ def generate_transcript_email_v2(
             "industry": None,  # Transcripts don't include industry
             "fiscal_period": fiscal_period,
             "date_label": date_label,
-            "filing_date": filing_date_display,
+            "filing_date": None,  # Don't show duplicate date below ticker (already at top right)
             "content_html": content_html,
             # Stock price data (3-row card)
             "stock_price": stock_data.get("stock_price") if stock_data else None,
-            "price_change_pct": stock_data.get("daily_return_pct") if stock_data else None,
+            "price_change_pct": stock_data.get("price_change_pct") if stock_data else None,  # Fixed key name
             "price_change_color": stock_data.get("price_change_color") if stock_data else "#666",
             "ytd_return_pct": stock_data.get("ytd_return_pct") if stock_data else None,
             "ytd_return_color": stock_data.get("ytd_return_color") if stock_data else "#666",

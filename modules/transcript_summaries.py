@@ -311,7 +311,7 @@ def fetch_fmp_press_release_by_date_and_title(
 # AI SUMMARIZATION
 # ==============================================================================
 
-def _build_user_content_v2(
+def _build_transcript_user_content_v2(
     ticker: str,
     content: str,
     config: Dict,

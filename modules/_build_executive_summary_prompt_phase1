@@ -271,12 +271,14 @@ Write each material theme with consistent detail regardless of volume:
 - 5 articles about earnings = same bullet depth as 25 articles about earnings
 - What changes: NUMBER of material themes, not DETAIL per theme
 
-Bullet length varies by complexity (40-150 words), not article volume:
-- Simple updates: 40-70 words
-- Moderate developments: 70-100 words  
-- Complex developments: 100-150 words
+Bullet length is determined by DATA AVAILABLE, not arbitrary complexity tiers:
+- Include ALL quantified data from articles (absolute levels, %, volumes, breakdowns, comparisons)
+- Typical range: 60-150 words when articles provide comprehensive data
+- Only use <60 words when articles genuinely provided minimal quantification
 
-Exception: Zero flagged articles → Use quiet day escape hatch (Bottom Line only)
+CRITICAL: Do not truncate bullets to hit a word count target.
+If article provided 5 key metrics, include all 5 even if bullet reaches 120+ words.
+Institutional investors need the numbers - brevity is secondary to completeness.
 
 ═══════════════════════════════════════════════════════════════════════════════
 BULLET STRUCTURE

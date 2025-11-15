@@ -1208,13 +1208,35 @@ def generate_transcript_email_v2(
         company_name = config.get("name", ticker)
         industry = config.get("industry", "")
 
-        # Build subject line
-        if content_type == 'transcript' and quarter and year:
-            subject = f"📊 Transcript: {ticker} - Q{quarter} {year}"
-        elif content_type == 'press_release' and report_date:
+        # Configure based on report type (matching old v1 function)
+        if content_type == 'transcript':
+            report_type_label = "EARNINGS CALL TRANSCRIPT"
+            quarter_str = f"Q{quarter}" if quarter else ""
+            fiscal_period = f"{quarter_str} {year}" if quarter and year else ""
+            date_label = f"Call Date: {report_date}" if report_date else ""
+            filing_date_display = f"Call Date: {report_date}" if report_date else ""
+            transition_text = f"Summary generated from {company_name} {quarter_str} {year} earnings call transcript."
+            fmp_link_text = "View full transcript on FMP"
+            subject = f"📊 Earnings Call Summary: {company_name} ({ticker}) {quarter_str} {year}"
+        else:  # press_release
+            report_type_label = "PRESS RELEASE"
+            fiscal_period = report_date if report_date else ""
+            date_label = f"Release Date: {report_date}" if report_date else ""
+            filing_date_display = f"Release Date: {report_date}" if report_date else ""
+            transition_text = f"Summary generated from {company_name} press release dated {report_date}."
+            fmp_link_text = "View original release on FMP"
             subject = f"📰 Press Release: {ticker} - {report_date}"
-        else:
-            subject = f"📊 Research Summary: {ticker}"
+
+        # Build FMP link box HTML (append to content like old function)
+        fmp_link_html = f'''
+    <div style="margin: 32px 0 20px 0; padding: 12px 16px; background-color: #eff6ff; border-left: 4px solid #1e40af; border-radius: 4px;">
+        <p style="margin: 0; font-size: 12px; color: #1e40af; font-weight: 600; line-height: 1.4;">
+            {transition_text} <a href="https://financialmodelingprep.com" style="color: #1e40af; text-decoration: none;">→ {fmp_link_text}</a>
+        </p>
+    </div>'''
+
+        # Combine summary HTML with FMP link
+        content_html = summary_html + fmp_link_html
 
         # Get stock price data if available
         if not stock_data:
@@ -1230,14 +1252,17 @@ def generate_transcript_email_v2(
                 LOG.warning(f"[{ticker}] Could not import get_filing_stock_data, stock data will be None")
                 stock_data = None
 
-        # Prepare template variables
+        # Prepare template variables (matching old v1 function)
         template_vars = {
             "report_title": f"{ticker} Research Summary",
+            "report_type_label": report_type_label,
             "company_name": company_name,
             "ticker": ticker,
-            "industry": industry,
-            "content_type": content_type,
-            "content_html": summary_html,
+            "industry": None,  # Transcripts don't include industry
+            "fiscal_period": fiscal_period,
+            "date_label": date_label,
+            "filing_date": filing_date_display,
+            "content_html": content_html,
             # Stock price data (3-row card)
             "stock_price": stock_data.get("stock_price") if stock_data else None,
             "price_change_pct": stock_data.get("daily_return_pct") if stock_data else None,
@@ -1451,7 +1476,7 @@ def convert_json_to_old_dict_format(json_output: Dict) -> Dict[str, List[str]]:
     # 11. Capital Allocation
     old_format["capital_allocation"] = convert_bullet_section("capital_allocation")
 
-    # 12. Q&A Highlights (special format: alternating Q:/A: strings)
+    # 12. Q&A Highlights (special format: Q and A on same line as content)
     qa_strings = []
     for exchange in sections_json.get("qa_highlights", []):
         analyst_name = exchange.get("analyst_name", "")
@@ -1459,11 +1484,10 @@ def convert_json_to_old_dict_format(json_output: Dict) -> Dict[str, List[str]]:
         question = exchange.get("question", "")
         answer = exchange.get("answer", "")
 
-        # Old format: "Q: Name, Firm\nQuestion\n\nA:\nAnswer"
-        qa_strings.append(f"Q: {analyst_name}, {analyst_firm}")
-        qa_strings.append(question)
-        qa_strings.append("A:")
-        qa_strings.append(answer)
+        # HTML builder expects: "Q: Name, Firm\nQuestion" and "A:\nAnswer" as single strings
+        # But HTML collapses newlines, so put content on same line
+        qa_strings.append(f"Q: {analyst_name}, {analyst_firm}\n{question}")
+        qa_strings.append(f"A:\n{answer}")
     old_format["qa_highlights"] = qa_strings
 
     # 13-14. Scenarios (paragraphs)

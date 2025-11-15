@@ -311,6 +311,9 @@ def fetch_fmp_press_release_by_date_and_title(
 # AI SUMMARIZATION
 # ==============================================================================
 
+def _build_user_content_v2(
+    ticker: str,
+    content: str,
     config: Dict,
     content_type: str
 ) -> str:
@@ -683,6 +686,7 @@ def generate_transcript_json_with_fallback(
     return None
 
 
+def generate_transcript_email_v2(
     ticker: str,
     json_output: Dict,
     config: Dict,

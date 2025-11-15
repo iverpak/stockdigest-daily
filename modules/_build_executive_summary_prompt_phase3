@@ -67,28 +67,6 @@ IBI 53 per FreightWaves (occupancy 95.3% per 10-Q, FFO $1.50 per call)
 IBI 53 with occupancy 95.3% and FFO $1.50 per FreightWaves, 10-Q, and Oct 15 call
 
 ═══════════════════════════════════════════════════════════════════════════
-CONTEXT FILTERING
-═══════════════════════════════════════════════════════════════════════════
-
-DISCARD Phase 2 context if it:
-- Duplicates facts already in Phase 1 content
-- Is tangentially related (doesn't answer material questions about the bullet)
-- Discusses different aspect without clear connection
-
-KEEP Phase 2 context if it:
-- Proves the claim (quantifies materiality: % of revenue, margins, scale)
-- Explains why it matters (dependencies, trends, economics)
-- Adds dimension (segment breakdown, QoQ/YoY trends, comparisons)
-
-Material questions Phase 2 context should answer:
-- How big is this? (% of revenue, customer ranking, concentration)
-- What's the trajectory? (QoQ, YoY, sequential changes)
-- Who matters? (customers, suppliers, concentration %)
-- How profitable? (margins, ROIC, cash generation)
-
-If context answers NONE of these → DISCARD
-
-═══════════════════════════════════════════════════════════════════════════
 BALANCE STRUCTURES - PROFESSIONAL FLOW
 ═══════════════════════════════════════════════════════════════════════════
 
@@ -144,46 +122,21 @@ Examples of INCOMPLETE quantification (missing institutional value):
 ❌ "Revenue grew 15%" (missing: to what absolute level?)
 ❌ "Margins expanded 200 bps" (missing: to what level?)
 
+DENOMINATORS & BASELINES (add when integrating):
+
+When Phase 1 has absolute number, check Phase 2/other bullets for:
+- X jobs → out of Y workforce (Z%)
+- X MW → vs. Y current capacity (Z% growth)
+- $X target → vs. competitor $Y (relative scale)
+- "Doubling" → from baseline Z% historical growth
+
+Example: "500,000 jobs" + "1.5M workforce" → "500,000 jobs (33% of 1.5M workforce)"
+
 Institutional investors model absolute levels, not just changes.
 Preserve all numbers even if slightly exceeding length targets.
 
 ═══════════════════════════════════════════════════════════════════════════
-SCENARIO VALIDATION (CRITICAL)
-═══════════════════════════════════════════════════════════════════════════
-
-IMPORTANT: The bullets below represent HIGH-QUALITY information that passed filtering.
-Low-quality bullets have been REMOVED before reaching you.
-
-Bottom Line, Upside Scenario, and Downside Scenario paragraphs (from Phase 1) may
-contain claims from removed bullets.
-
-YOUR JOB: Review scenarios and remove unsupported claims.
-
-For each scenario paragraph (Bottom Line, Upside, Downside):
-1. Read every sentence/claim in the paragraph
-2. Check: Is this claim supported by ANY bullet in the JSON below?
-3. If NO → REMOVE that sentence/claim
-4. If YES (or "close enough" - synthesized from multiple bullets) → KEEP
-5. Rewrite for coherence after removals
-6. Do NOT add new information
-
-Conservative Standard (ERR ON SIDE OF KEEPING):
-- Keep claims that are clearly synthesized from multiple bullets
-- Keep claims that are implied by the bullets (don't be overly strict)
-- Only remove claims that have NO connection to any bullet
-- If uncertain, KEEP the claim
-
-Examples:
-❌ REMOVE: "New CFO appointed" → No bullet covers executive changes
-✅ KEEP: "Pricing pressure" → Bullets show "competitor lowered prices 20%" + "margins declined"
-✅ KEEP: "Strong momentum" → Bullets show "revenue up 15%", "guidance raised", "analyst upgrades"
-✅ KEEP: "Operational challenges" → Bullets show "production delays" + "supply issues"
-
-If scenario becomes very short after removals (e.g., 1 sentence left), that's OK.
-Do NOT pad with generic statements. Quality over quantity.
-
-═══════════════════════════════════════════════════════════════════════════
-SCENARIO STRUCTURE - SEQUENCING LOGIC
+SCENARIO STRUCTURE - SEQUENCING LOGIC (Bottom Line/Upside/Downside ONLY)
 ═══════════════════════════════════════════════════════════════════════════
 
 UPSIDE - Concrete First, Speculative Second:
@@ -209,53 +162,176 @@ Management quotes: Always integrate inline with attribution
 Never summarize away: "clearly losing share", "$17.58-$18.50 per share"
 
 ═══════════════════════════════════════════════════════════════════════════
-LENGTH ENFORCEMENT
+SCENARIO VALIDATION (Bottom Line/Upside/Downside ONLY)
+═══════════════════════════════════════════════════════════════════════════
+
+IMPORTANT: The bullets below represent HIGH-QUALITY information that passed filtering.
+Low-quality bullets have been REMOVED before reaching you.
+
+Bottom Line, Upside Scenario, and Downside Scenario paragraphs (from Phase 1) may
+contain claims from removed bullets.
+
+YOUR JOB: Review scenarios and remove unsupported claims.
+
+For each scenario paragraph (Bottom Line, Upside, Downside):
+1. Read every sentence/claim in the paragraph
+2. Check: Is this claim supported by ANY bullet in the JSON below?
+3. If NO → REMOVE that sentence/claim
+4. If YES (or "close enough" - synthesized from multiple bullets) → KEEP
+5. Rewrite for coherence after removals
+6. Do NOT add new information
+
+VERIFICATION STANDARD:
+
+REMOVE claims that:
+❌ Reference facts not in any remaining bullet (e.g., "new CFO" when no executive change bullet exists)
+❌ Cite specific metrics not present in bullets (e.g., "$12B revenue" when bullets don't have this number)
+❌ Discuss themes with no corresponding bullet (e.g., "operational challenges" when no operations bullet exists)
+
+KEEP claims that:
+✅ Are directly supported by at least one bullet (cite the bullet_id mentally)
+✅ Are synthesized from multiple bullets (e.g., "competitive pressure" from competitor pricing bullet + margin compression bullet)
+✅ Are directionally consistent with bullet themes (e.g., "strong momentum" when bullets show revenue growth + guidance raise + analyst upgrades)
+
+Process:
+1. Extract each factual claim from the scenario
+2. Ask: "Which bullet_id supports this claim?"
+3. If answer is "none" → REMOVE the sentence containing that claim
+4. If answer is a bullet_id or "synthesized from bullets X, Y, Z" → KEEP
+5. Rewrite scenario for flow after removals
+
+Examples:
+
+Scenario claim: "New CFO brings restructuring experience"
+Bullet check: No bullet covers CFO appointment
+Action: REMOVE entire sentence
+
+Scenario claim: "Facing pricing pressure and margin compression"  
+Bullet check: Bullet A = "competitors lowered prices 15%", Bullet B = "gross margin declined 200 bps"
+Action: KEEP (synthesized from two bullets)
+
+Scenario claim: "Revenue grew 18% to $12B"
+Bullet check: Bullets show "revenue growth" but no specific "$12B" figure
+Action: REMOVE "$12B" metric, keep "revenue growth" if directionally supported
+
+If scenario becomes very short after removals (e.g., 1 sentence left), that's acceptable.
+Do NOT pad with generic statements. Quality over quantity.
+
+═══════════════════════════════════════════════════════════════════════════
+SCENARIO CROSS-BULLET SYNTHESIS (Bottom Line/Upside/Downside ONLY)
+═══════════════════════════════════════════════════════════════════════════
+
+Required connections when relevant bullets exist:
+✅ Competitor $X guidance + Company $Y target → "Company $Y vs. competitor $X"
+✅ Market growth in Region A + Company not in Region A → "Growth concentrated where company doesn't operate"
+✅ Portfolio X% in Geography + Geography weak trend → "X% exposure to weak market"
+✅ Absolute number + Denominator from filing/bullet → "X out of Y (Z%)"
+✅ Growth claim + Historical baseline → "vs. historical X% growth"
+
+Execute only in scenarios, not in individual bullets.
+
+Examples:
+- "Vistra $6.8-7.6B" (Competitor) + "66% growth in Texas" (Market) + "AES not in Texas" (Filing)
+  → Bottom Line: "66% of growth in Texas where AES doesn't operate, while Vistra raised guidance to $6.8-7.6B vs. AES's $400M target"
+  
+- "1,100 MW pipeline" (Bullet) + "Current peak 1,625 MW" (Filing) + "0.5% historical growth" (Article)
+  → Bottom Line: "1,100 MW pipeline (~68% vs. current peak) vs. historical 0.5% annual growth"
+
+Do NOT synthesize in individual bullets - only in Bottom Line/Upside/Downside.
+
+Where to pull synthesis data:
+✅ Facts from different bullets' Phase 1 content
+✅ Facts from different bullets' Phase 2 context
+✅ Facts from one bullet's Phase 1 + another bullet's Phase 2
+✅ Facts from Phase 2 context that don't appear in any Phase 1 content
+
+The synthesis pulls from ALL available data in the JSON (any bullet's content or context).
+
+If denominator/baseline exists in another bullet's context but not in current bullet:
+→ Pull it and integrate (e.g., Bullet A has "1,100 MW", Bullet B's context has "current peak 1,625 MW")
+
+If denominator/baseline does NOT exist anywhere in the JSON:
+→ Do not add it (cannot invent facts)
+
+═══════════════════════════════════════════════════════════════════════════
+CONTEXT FILTERING & INTEGRATION (Bullets ONLY, no length limits)
+═══════════════════════════════════════════════════════════════════════════
+
+Step 1: FILTER Phase 2 context
+Remove context that:
+❌ Duplicates Phase 1 content (same fact stated twice)
+❌ Is tangentially related (doesn't answer: How big? What trajectory? Who matters? How profitable?)
+❌ Discusses different aspect without clear connection to bullet claim
+
+Keep context that:
+✅ Quantifies materiality (% of revenue, customer ranking, concentration)
+✅ Explains trajectory (QoQ, YoY, sequential changes)
+✅ Adds scale (denominators, baselines, comparisons)
+✅ Provides dependencies (sole suppliers, customer concentration, contractual terms)
+
+Step 2: INTEGRATE what remains
+Weave Phase 1 content + filtered Phase 2 context into one cohesive paragraph.
+Preserve ALL Phase 1 facts and ALL useful Phase 2 context.
+
+Step 3: OPTIMIZE narrative flow
+Remove only:
+- Redundant transitions between integrated facts
+- Unnecessary qualifiers ("notably", "significantly" without adding info)
+- Duplicate attribution (consolidate sources at end)
+
+Never remove facts to "shorten" - bullets have no length limit.
+
+Formula: Bullet output = Phase 1 (full) + Phase 2 (filtered for relevance) - redundant connectors
+
+═══════════════════════════════════════════════════════════════════════════
+LENGTH ENFORCEMENT (Scenarios ONLY: Bottom Line/Upside/Downside)
 ═══════════════════════════════════════════════════════════════════════════
 
 Bottom Line: 150 words target, 170 words absolute max
 Upside Scenario: 80-160 words
 Downside Scenario: 80-160 words
-Bullets: No limit (let content determine length)
 
-COMPRESSION HIERARCHY (cut in this order):
+Scenarios have length limits. Apply in this order:
 
-TIER 1 - CUT FIRST (remove these to hit length):
-- Narrative connectors ("This is important because...", "notably", "significantly")
-- Redundant phrasing (adjectives, adverbs that don't add information)
-- Duplicate metrics (if same number appears twice, keep best placement)
-- Generic background without company-specific connection
+Step 1: FILTER Phase 2 context (same rules as bullets)
+Step 2: VALIDATE claims (remove unsupported per SCENARIO VALIDATION section above)
+Step 3: SYNTHESIZE cross-bullet connections (per SCENARIO CROSS-BULLET SYNTHESIS section above)
+Step 4: CHECK length
+Step 5: If under limit → Done
+Step 6: If over limit → Compress in this order:
 
-TIER 2 - PRESERVE (only cut if critically over length):
+TIER 1 - Cut narrative overhead:
+- Transition phrases ("This is important because...")
+- Qualifying adverbs ("notably", "significantly", "clearly")
+- Redundant setup ("The company stated that..." → "Company stated...")
 
-DATA TYPES:
-- Quantified metrics (absolute levels, percentages, dollar amounts)
-- Breakdowns (customer class splits, regional concentration, segment detail)
-- Multi-year data (2025 AND 2026, not just current year)
-- Comparative context (vs peers, vs consensus, vs prior period)
-- Contrarian views (if source A bullish, keep source B bearish)
+TIER 2 - Consolidate attribution:
+- Multiple sources → group at end
+- "per 10-Q... per call... per 10-K" → "per 10-Q, call, and 10-K"
 
-ANALYTICAL CONTEXT:
-- Dependencies (customer concentration %, sole suppliers, single-site exposure)
-- Trends (QoQ, YoY, sequential, improving/deteriorating)
-- Risk quantification (% exposed, loss scenarios, covenant headroom)
-- Profitability context (margins, ROIC vs WACC, unit economics)
-- Timeline/milestones (on schedule, delayed, regulatory approval dates)
+TIER 3 - Remove lower-priority context:
+- Tertiary details that don't affect thesis
+- Contrarian data points if consensus is clear
+- Background that's implied by remaining facts
 
-RULE: Better 165-word Bottom Line with institutional metrics than 150-word without.
-Institutional investors pay for quantification. Preserve numbers over narratives.
+NEVER REMOVE (even if over length):
+✅ Quantified metrics from Phase 1 (competitor $X, company Y%, region Z GW)
+✅ Cross-bullet synthesis you added (Company $X vs. Competitor $Y)
+✅ Geographic/competitive positioning facts
+✅ Material dependencies (X% of revenue, sole supplier)
 
-COMPRESSION PRIORITY WHEN OVER LENGTH:
-1. Phase 1 content (article facts) takes priority over Phase 2 context
-2. Cut Phase 2 context that doesn't answer material questions (materiality, economics, trends, dependencies)
-3. Never cut quantified metrics, breakdowns, or multi-year data to save Phase 2 context
-4. If choosing between narrative connector and number → cut narrative, keep number
+If you cannot hit 170 words without removing protected facts:
+→ Output at 171-180 words
+→ Institutional metrics > arbitrary word count
 
 ═══════════════════════════════════════════════════════════════════════════
 WHAT NOT TO DO
 ═══════════════════════════════════════════════════════════════════════════
 
-❌ Don't add new information
-❌ Don't create new connections
+❌ Don't add new information EXCEPT in scenarios:
+   ✅ Cross-bullet synthesis (connecting facts from multiple bullets)
+   ✅ Denominators/baselines from other bullets' context
+❌ Don't create new connections IN BULLETS (synthesis only allowed in scenarios)
 ❌ Don't restructure (keep paragraphs as paragraphs, bullets as bullets)
 ❌ Don't add article publication dates (post-processing appends these from date_range field)
 ❌ Don't return metadata fields (impact, sentiment, etc. already in Phase 2)
@@ -350,3 +426,7 @@ Before outputting, verify:
 □ Valid JSON (parseable by json.loads())
 □ All filing dates PRESERVED (per Oct 15 call, per Q3 10-Q, per 10-K remain in content)
 □ NO article dates added to content (those come from date_range field)
+□ Bottom Line contains cross-bullet synthesis (competitive scale, geographic positioning, baselines)
+□ Scenarios connect facts from different bullets/themes
+□ Absolute numbers have denominators when available
+□ Growth claims show historical baseline when relevant

@@ -81,28 +81,22 @@ You MUST output valid JSON with this EXACT structure:
       {
         "bullet_id": "string (lowercase topic_label with underscores, no special chars)",
         "topic_label": "string (2-5 words)",
-        "content": "string (full sentence with attribution)",
-        "impact": "high impact|medium impact|low impact",
-        "sentiment": "bullish|bearish|neutral|mixed",
-        "reason": "string (2-4 words describing impact type)"
+        "content": "string (full sentence with attribution)"
       }
     ],
     "operational_metrics": [
       {
         "bullet_id": "string",
         "topic_label": "string (2-5 words)",
-        "content": "string (full sentence with attribution)",
-        "impact": "high impact|medium impact|low impact",
-        "sentiment": "bullish|bearish|neutral|mixed",
-        "reason": "string (2-4 words)"
+        "content": "string (full sentence with attribution)"
       }
     ],
     "major_developments": [...same structure as financial_results...],
     "guidance": [...same structure, NO sentiment tags...],
     "strategic_initiatives": [...same structure, NO sentiment tags...],
     "management_sentiment_tone": [...same structure, NO sentiment tags...],
-    "risk_factors": [...same structure with sentiment tags...],
-    "industry_competitive": [...same structure with sentiment tags...],
+    "risk_factors": [...same structure, NO sentiment tags...],
+    "industry_competitive": [...same structure, NO sentiment tags...],
     "related_entities": [
       {
         "bullet_id": "string",
@@ -142,8 +136,6 @@ SECTION STRUCTURE NOTES:
 Bullet sections (financial_results, operational_metrics, major_developments, risk_factors, industry_competitive):
 - Array of bullet objects
 - Each bullet has: bullet_id, topic_label, content
-- Sentiment tags (impact, sentiment, reason) ONLY for: major_developments, risk_factors, industry_competitive
-- NO sentiment tags for: financial_results, operational_metrics, guidance, strategic_initiatives, management_sentiment_tone, capital_allocation
 
 Related Entities section:
 - Special structure with entity_type and company_name fields
@@ -327,35 +319,6 @@ Each bullet in sections (financial_results, operational_metrics, major_developme
    ❌ "Positions company for growth" (who said this?)
    ❌ "Could impact margins" (who concluded this?)
 
-4. SENTIMENT TAGS (impact, sentiment, reason) - SECTION-SPECIFIC
-
-   Include sentiment tags for:
-   ✓ major_developments
-   ✓ risk_factors
-   ✓ industry_competitive
-
-   NO sentiment tags for:
-   ✗ financial_results (pure reporting)
-   ✗ operational_metrics (pure reporting)
-   ✗ guidance (pure reporting)
-   ✗ strategic_initiatives (pure reporting)
-   ✗ management_sentiment_tone (pure reporting)
-   ✗ capital_allocation (pure reporting)
-
-   Impact: high impact | medium impact | low impact
-   Sentiment: bullish | bearish | neutral | mixed
-   Reason: 2-4 words describing impact type (not topic restatement)
-
-   SENTIMENT TAG GUIDANCE (TIER 1 INFERENCE - See inference framework below):
-   Use SINGLE-STEP inference only.
-
-   Single-step examples:
-   - Capacity expansion → (bullish, capacity growth) ✅
-   - Revenue miss vs guidance → (bearish, financial underperformance) ✅
-   - Leadership change → (neutral, organizational change) ✅
-
-   DEFAULT TO NEUTRAL: If management doesn't frame impact or requires multi-step reasoning → Use (neutral, [descriptive reason])
-
 ═══════════════════════════════════════════════════════════════════════════════
 ATTRIBUTION REQUIREMENTS - APPLIES TO ALL SECTIONS
 ═══════════════════════════════════════════════════════════════════════════════
@@ -424,11 +387,10 @@ THE RULE: If you cannot attribute a connection to management/analyst → Do not 
 ✅ CORRECT: "CEO stated acquisition positions company to capture data center demand growth"
 ❌ WRONG: "Acquisition positions company to capture data center demand growth" (who says this?)
 
-TIER 1 - SINGLE-STEP INFERENCE (Allowed for sentiment tags and section assignment)
+TIER 1 - SINGLE-STEP INFERENCE (Allowed for section assignment)
 Draw direct, one-step logical connections from facts in transcript.
 
 Allowed in this transcript summary for:
-- Sentiment tags (impact/sentiment/reason): Understanding direct implications
 - Section assignment: Determining which section a development belongs to
 
 Allowed single-step inferences:
@@ -504,18 +466,18 @@ When CEO/CFO statements contradict analyst questions or each other, preserve BOT
 PURPOSE: Surface tensions between management narrative and analyst concerns. Let reader assess credibility.
 
 FORMAT:
-- Topic (impact, sentiment, reason): [Management statement]; however, [contradiction with attribution]
+- Topic: [Management statement]; however, [contradiction with attribution]
 
 EXAMPLES:
 
 Share buyback execution contradiction:
-- Share buyback execution (medium impact, bearish, credibility concern): Management reaffirmed $500M annual buyback commitment; however, actual pace $100M YTD vs $250M pro-rata target per CFO; CEO attributed shortfall to MNPI restrictions
+- Share Buyback Execution: Management reaffirmed $500M annual buyback commitment; however, actual pace $100M YTD vs $250M pro-rata target per CFO; CEO attributed shortfall to MNPI restrictions
 
 Demand strength vs inventory build contradiction:
-- Demand assessment (high impact, neutral, mixed signals): CEO emphasized "strong demand across all segments" in prepared remarks; however, Analyst [John Smith, Morgan Stanley] noted 40% inventory increase YoY; CFO attributed to "tactical tariff-related stocking" rather than demand weakness
+- Demand Assessment: CEO emphasized "strong demand across all segments" in prepared remarks; however, Analyst [John Smith, Morgan Stanley] noted 40% inventory increase YoY; CFO attributed to "tactical tariff-related stocking" rather than demand weakness
 
 Margin sustainability contradiction:
-- Margin sustainability (high impact, neutral, analyst skepticism): CEO stated margin expansion "structural and sustainable" driven by automation; however, Analyst [Jane Doe, Goldman Sachs] questioned whether 42.3% margin achievable without one-time benefits; CFO defended structural thesis citing $140M annual automation savings
+- Margin Sustainability: CEO stated margin expansion "structural and sustainable" driven by automation; however, Analyst [Jane Doe, Goldman Sachs] questioned whether 42.3% margin achievable without one-time benefits; CFO defended structural thesis citing $140M annual automation savings
 
 RULE: Preserve BOTH views when they conflict. Use "however" to separate contradicting statements. Never resolve the contradiction or pick sides.
 
@@ -779,24 +741,18 @@ Include:
 - Strategic initiatives: New products, market entries, operational changes
 - Capital allocation: Buyback authorizations, dividend changes, major capex programs
 
-Format (WITH sentiment tags):
+Format (NO sentiment tags):
 {
   "bullet_id": "aws_contract_expansion",
   "topic_label": "AWS Contract Expansion",
-  "content": "Topic Label (impact, sentiment, reason): [What management announced with details, amounts, dates, attribution for implications]",
-  "impact": "high impact",
-  "sentiment": "bullish",
-  "reason": "revenue growth"
+  "content": "AWS Contract Expansion: [What management announced with details, amounts, dates, attribution]"
 }
 
 Example:
 {
   "bullet_id": "aws_contract_expansion",
   "topic_label": "AWS Contract Expansion",
-  "content": "AWS contract expansion (high impact, bullish, revenue growth): CEO announced 1.9 GW arrangement doubling original contract through 2042; CFO stated contract valued at $XXM annually",
-  "impact": "high impact",
-  "sentiment": "bullish",
-  "reason": "revenue growth"
+  "content": "AWS Contract Expansion: CEO announced 1.9 GW arrangement doubling original contract through 2042; CFO stated contract valued at $XXM annually"
 }
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -969,47 +925,31 @@ Include risks/headwinds that management OR analysts explicitly identified:
 
 CRITICAL: Report what was discussed. Do NOT infer risks management didn't mention.
 
-Format (WITH sentiment tags):
+Format (NO sentiment tags):
 {
   "bullet_id": "aluminum_supply_disruption",
   "topic_label": "Aluminum Supply Risk",
-  "content": "[Topic Label] (impact, sentiment, reason): [Factual description]. [Management's response if challenged]",
-  "impact": "high impact",
-  "sentiment": "bearish",
-  "reason": "production risk"
+  "content": "Aluminum Supply Risk: [Factual description]. [Management's response if challenged]"
 }
-
-Impact: high impact | medium impact | low impact
-Sentiment: bearish (most common) | neutral (risk update) | bullish (risk resolved)
-Reason: 2-4 words describing risk type
 
 Examples:
 {
   "bullet_id": "aluminum_supply_disruption",
   "topic_label": "Aluminum Supply Risk",
-  "content": "Aluminum supply disruption (high impact, bearish, production risk): Management stated Novelis declared force majeure affecting F-150 production; CEO noted exploring alternatives; expects resolution by Q1 2026",
-  "impact": "high impact",
-  "sentiment": "bearish",
-  "reason": "production risk"
+  "content": "Aluminum Supply Risk: Management stated Novelis declared force majeure affecting F-150 production; CEO noted exploring alternatives; expects resolution by Q1 2026"
 }
 
 {
   "bullet_id": "customer_concentration",
   "topic_label": "Customer Concentration",
-  "content": "Customer concentration (high impact, neutral, dependency risk): Analyst questioned top customer at 34% revenue; CEO acknowledged but stated '15-year relationship with strong renewal history'",
-  "impact": "high impact",
-  "sentiment": "neutral",
-  "reason": "dependency risk"
+  "content": "Customer Concentration: Analyst questioned top customer at 34% revenue; CEO acknowledged but stated '15-year relationship with strong renewal history'"
 }
 
 If analysts question risk but management dismisses:
 {
   "bullet_id": "margin_concerns",
   "topic_label": "Margin Concerns",
-  "content": "Margin concerns: Analyst [Name, Firm] questioned sustainability; however, CEO stated structural expansion driven by automation; management maintained guidance",
-  "impact": "medium impact",
-  "sentiment": "neutral",
-  "reason": "analyst concern"
+  "content": "Margin Concerns: Analyst [Name, Firm] questioned sustainability; however, CEO stated structural expansion driven by automation; management maintained guidance"
 }
 
 If no risks discussed:
@@ -1032,14 +972,11 @@ Include:
 - Pricing environment: Commodity prices, product pricing, pricing power
 - Regulatory changes: New rules, policy shifts affecting sector
 
-Format (WITH sentiment tags):
+Format (NO sentiment tags):
 {
   "bullet_id": "pjm_capacity_pricing",
   "topic_label": "PJM Capacity Pricing",
-  "content": "[Topic Label] (impact, sentiment, reason): [What management stated]. [Supporting data]",
-  "impact": "high impact",
-  "sentiment": "bullish",
-  "reason": "industry tailwind"
+  "content": "PJM Capacity Pricing: [What management stated]. [Supporting data]"
 }
 
 CRITICAL: Only include competitor information if management explicitly discussed it.
@@ -1048,20 +985,14 @@ Examples:
 {
   "bullet_id": "pjm_capacity_pricing",
   "topic_label": "PJM Capacity Pricing",
-  "content": "PJM capacity pricing (high impact, bullish, industry tailwind): Management noted PJM capacity prices increased from $50/MW-day (2024/2025) to $270/MW-day (2025/2026); CEO stated price environment supports strong margin outlook",
-  "impact": "high impact",
-  "sentiment": "bullish",
-  "reason": "industry tailwind"
+  "content": "PJM Capacity Pricing: Management noted PJM capacity prices increased from $50/MW-day (2024/2025) to $270/MW-day (2025/2026); CEO stated price environment supports strong margin outlook"
 }
 
 If management discusses competitor specifically:
 {
   "bullet_id": "competitor_capacity",
   "topic_label": "Competitor Capacity",
-  "content": "Competitor capacity expansion: Analyst asked about [Competitor]'s facility announcement; CEO stated 'not concerned' citing differentiated customer relationships",
-  "impact": "medium impact",
-  "sentiment": "neutral",
-  "reason": "competitive context"
+  "content": "Competitor Capacity: Analyst asked about [Competitor]'s facility announcement; CEO stated 'not concerned' citing differentiated customer relationships"
 }
 
 If no industry/competitive discussion:
@@ -1239,10 +1170,7 @@ Major Developments (first mention - FULL DETAIL):
 {
   "bullet_id": "aws_contract_expansion",
   "topic_label": "AWS Contract Expansion",
-  "content": "AWS contract expansion (high impact, bullish, revenue growth): CEO announced 1.9 GW arrangement doubling original contract through 2042; CFO stated contract valued at $180M annually",
-  "impact": "high impact",
-  "sentiment": "bullish",
-  "reason": "revenue growth"
+  "content": "AWS Contract Expansion: CEO announced 1.9 GW arrangement doubling original contract through 2042; CFO stated contract valued at $180M annually"
 }
 
 Q&A Highlights (subsequent mention - BRIEF REFERENCE):
@@ -1604,7 +1532,6 @@ Before finalizing output, verify these critical requirements:
 □ All strings properly escaped (quotes, newlines)
 □ No trailing commas in arrays or objects
 □ Each bullet has required fields: bullet_id, topic_label, content
-□ Sentiment tags (impact, sentiment, reason) present only where required
 
 2. SECTION COMPLETENESS
 ═══════════════════════════════════════════════════════════════════════════════
@@ -1621,8 +1548,8 @@ Before finalizing output, verify these critical requirements:
 □ Related Entities: All mentioned entities captured
 □ Capital Allocation: 2-4 bullets (if discussed)
 □ Q&A Highlights: 8-15 exchanges (transcripts only - 30-40% of word count)
-□ Upside Scenario: Present if 1+ bullish tags exist
-□ Downside Scenario: Present if 1+ bearish tags exist
+□ Upside Scenario: Present if management made bullish statements
+□ Downside Scenario: Present if management/analysts raised concerns or risks
 □ Key Variables: 3-5 bullets
 
 3. ATTRIBUTION QUALITY
@@ -1645,12 +1572,11 @@ Before finalizing output, verify these critical requirements:
 5. INFERENCE BOUNDARIES
 ═══════════════════════════════════════════════════════════════════════════════
 □ Tier 0 (bullet content): Only direct statements from transcript with attribution
-□ Tier 1 (sentiment tags): Single-step logical connections only (no multi-hop chains)
+□ Tier 1 (section assignment): Single-step logical connections only for categorization
 □ Tier 2 (synthesis): Combined only related statements from same topic
 □ No multi-hop causal chains (X → Y → Z forbidden)
 □ Did I create any prohibited multi-step inferences? (Should be NO)
 □ Did I attribute every implication to management/analyst? (Should be YES)
-□ Did I use only single-step logic for sentiment tags? (Should be YES)
 
 6. LANGUAGE PRESERVATION
 ═══════════════════════════════════════════════════════════════════════════════

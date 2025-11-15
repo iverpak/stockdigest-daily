@@ -20014,9 +20014,10 @@ async def process_transcript_phase(job: dict):
         quarter_str = str(quarter)
         quarter_formatted = quarter_str if quarter_str.startswith('Q') else f"Q{quarter_str}"
 
-        # Save JSON to database (with backward compatibility)
+        # Generate markdown for research page display (summary_text column)
+        from modules.transcript_summaries import convert_json_to_markdown
         import json
-        summary_text_json = json.dumps(json_output)  # Convert JSON to text for summary_text column
+        summary_text_markdown = convert_json_to_markdown(json_output, 'transcript')
 
         with db() as conn, conn.cursor() as cur:
             # Check if summary_json column exists (backward compatibility)
@@ -20066,9 +20067,9 @@ async def process_transcript_phase(job: dict):
                     quarter_formatted,
                     year,
                     data[0].get('date'),
-                    summary_text_json,  # Store JSON as text for backward compat
-                    json_param,         # Store as JSONB (adapter handles type)
-                    'v2',               # Mark as v2 prompt
+                    summary_text_markdown,  # Clean markdown for research page
+                    json_param,             # Structured JSON (summary_json column)
+                    'v2',                   # Mark as v2 prompt
                     fmp_url,
                     ai_provider,  # "gemini" or "claude"
                     model_used    # Full model name
@@ -20095,7 +20096,7 @@ async def process_transcript_phase(job: dict):
                     quarter_formatted,
                     year,
                     data[0].get('date'),
-                    summary_text_json,  # Store JSON as text
+                    summary_text_markdown,  # Clean markdown for research page
                     fmp_url,
                     ai_provider,  # "gemini" or "claude"
                     model_used    # Full model name
@@ -27259,9 +27260,10 @@ async def generate_transcript_summary_api(request: Request):
             quarter_str = str(quarter)
             quarter_formatted = quarter_str if quarter_str.startswith('Q') else f"Q{quarter_str}"
 
-        # Convert JSON to text for backward compatibility
+        # Generate markdown for research page display (summary_text column)
+        from modules.transcript_summaries import convert_json_to_markdown
         import json
-        summary_text_json = json.dumps(json_output)
+        summary_text_markdown = convert_json_to_markdown(json_output, report_type)
 
         with db() as conn, conn.cursor() as cur:
             if report_type == 'transcript':
@@ -27307,9 +27309,9 @@ async def generate_transcript_summary_api(request: Request):
                     """, (
                         ticker, company_name, 'transcript',
                         quarter_formatted, year, report_date,
-                        summary_text_json,  # Store JSON as text for backward compat
-                        json_param,         # Store as JSONB (adapter handles type)
-                        'v2',               # Mark as v2 prompt
+                        summary_text_markdown,  # Clean markdown for research page
+                        json_param,             # Structured JSON (summary_json column)
+                        'v2',                   # Mark as v2 prompt
                         fmp_url,
                         ai_provider,  # "gemini" or "claude"
                         model_used    # Full model name
@@ -27332,7 +27334,7 @@ async def generate_transcript_summary_api(request: Request):
                     """, (
                         ticker, company_name, 'transcript',
                         quarter_formatted, year, report_date,
-                        summary_text_json, fmp_url, ai_provider, model_used
+                        summary_text_markdown, fmp_url, ai_provider, model_used
                     ))
                     LOG.warning(f"[{ticker}] ⚠️ [ADMIN API] Saved as text only (run migration to enable JSON storage)")
 
@@ -27345,7 +27347,7 @@ async def generate_transcript_summary_api(request: Request):
                     company_name=company_name,
                     report_date=report_date,
                     pr_title=pr_title,
-                    summary_text=summary_text_json,  # Save JSON as text
+                    summary_text=summary_text_markdown,  # Clean markdown for research page
                     ai_provider=ai_provider,
                     ai_model=model_used,
                     processing_duration_seconds=int(generation_time_ms / 1000),

@@ -1200,8 +1200,9 @@ def generate_transcript_email_v2(
             - subject: Email subject line
     """
     try:
-        # Convert JSON to HTML
-        summary_html = convert_transcript_json_to_html(json_output, content_type)
+        # Convert JSON to old dict format, then use proven old HTML builder
+        sections_dict = convert_json_to_old_dict_format(json_output)
+        summary_html = build_transcript_summary_html(sections_dict, content_type)
 
         # Get company metadata
         company_name = config.get("name", ticker)
@@ -1266,6 +1267,216 @@ def generate_transcript_email_v2(
         LOG.error(f"[{ticker}] ❌ Failed to generate email v2: {str(e)[:200]}")
         LOG.error(traceback.format_exc())
         raise
+
+
+# ==============================================================================
+# MARKDOWN CONVERSION (For Research Page Display)
+# ==============================================================================
+
+def convert_json_to_markdown(
+    json_output: Dict,
+    content_type: str
+) -> str:
+    """
+    Convert v2 JSON to clean markdown text for research page display.
+
+    Format matches v1 output:
+    - No bold markers (plain text)
+    - Clean section headers (## SECTION NAME)
+    - Simple bullets (- Topic: Content)
+    - Q&A format: "Q: Name, Firm\\nQuestion\\n\\nA:\\nAnswer"
+
+    This markdown is:
+    1. Displayed in research page (summary_text column)
+    2. Combined with 10-K/10-Q markdown elsewhere in app
+
+    Args:
+        json_output: Full JSON with 15 sections
+        content_type: 'transcript' or 'press_release'
+
+    Returns:
+        Clean markdown string
+    """
+    sections_json = json_output.get("sections", {})
+    md_parts = []
+
+    # 1. Bottom Line (paragraph)
+    if sections_json.get("bottom_line", {}).get("content"):
+        md_parts.append("## BOTTOM LINE\n")
+        md_parts.append(sections_json["bottom_line"]["content"] + "\n")
+
+    # Helper for bullet sections
+    def add_bullet_section(section_key: str, title: str):
+        bullets = sections_json.get(section_key, [])
+        if bullets:
+            md_parts.append(f"\n## {title}\n\n")
+            for bullet in bullets:
+                topic = bullet.get("topic_label", "")
+                content = bullet.get("content", "")
+                # No bold: "- Topic: Content" (not "- **Topic:** Content")
+                md_parts.append(f"- {topic}: {content}\n")
+
+    # 2. Financial Results
+    add_bullet_section("financial_results", "FINANCIAL RESULTS")
+
+    # 3. Operational Metrics
+    add_bullet_section("operational_metrics", "OPERATIONAL METRICS")
+
+    # 4. Major Developments
+    add_bullet_section("major_developments", "MAJOR DEVELOPMENTS")
+
+    # 5. Guidance & Outlook
+    add_bullet_section("guidance", "GUIDANCE & OUTLOOK")
+
+    # 6. Strategic Initiatives
+    add_bullet_section("strategic_initiatives", "STRATEGIC INITIATIVES")
+
+    # 7. Management Sentiment & Tone
+    add_bullet_section("management_sentiment_tone", "MANAGEMENT SENTIMENT & TONE")
+
+    # 8. Risk Factors & Headwinds
+    add_bullet_section("risk_factors", "RISK FACTORS & HEADWINDS")
+
+    # 9. Industry & Competitive Landscape
+    add_bullet_section("industry_competitive", "INDUSTRY & COMPETITIVE LANDSCAPE")
+
+    # 10. Related Entities (special format: entity_type - company_name)
+    entities = sections_json.get("related_entities", [])
+    if entities:
+        md_parts.append("\n## RELATED ENTITIES\n\n")
+        for entity in entities:
+            entity_type = entity.get("entity_type", "")
+            company_name = entity.get("company_name", "")
+            content = entity.get("content", "")
+            # Format: "- Customer - Tesla: Signed 10-year offtake..."
+            md_parts.append(f"- {entity_type} - {company_name}: {content}\n")
+
+    # 11. Capital Allocation & Balance Sheet
+    add_bullet_section("capital_allocation", "CAPITAL ALLOCATION & BALANCE SHEET")
+
+    # 12. Q&A Highlights (special format, transcripts only)
+    if content_type == 'transcript':
+        qa_exchanges = sections_json.get("qa_highlights", [])
+        if qa_exchanges:
+            md_parts.append("\n## Q&A HIGHLIGHTS\n")
+            for exchange in qa_exchanges:
+                analyst_name = exchange.get("analyst_name", "")
+                analyst_firm = exchange.get("analyst_firm", "")
+                question = exchange.get("question", "")
+                answer = exchange.get("answer", "")
+
+                # V1 format (no bold in markdown):
+                # Q: Name, Firm
+                # Question text
+                #
+                # A:
+                # Answer text
+                md_parts.append(f"\nQ: {analyst_name}, {analyst_firm}\n")
+                md_parts.append(f"{question}\n")
+                md_parts.append(f"\nA:\n")
+                md_parts.append(f"{answer}\n")
+
+    # 13. Upside Scenario (paragraph)
+    if sections_json.get("upside_scenario", {}).get("content"):
+        md_parts.append("\n## UPSIDE SCENARIO\n\n")
+        md_parts.append(sections_json["upside_scenario"]["content"] + "\n")
+
+    # 14. Downside Scenario (paragraph)
+    if sections_json.get("downside_scenario", {}).get("content"):
+        md_parts.append("\n## DOWNSIDE SCENARIO\n\n")
+        md_parts.append(sections_json["downside_scenario"]["content"] + "\n")
+
+    # 15. Key Variables to Monitor
+    add_bullet_section("key_variables", "KEY VARIABLES TO MONITOR")
+
+    return "".join(md_parts)
+
+
+def convert_json_to_old_dict_format(json_output: Dict) -> Dict[str, List[str]]:
+    """
+    Convert v2 JSON structure to old dict format for build_transcript_summary_html().
+
+    JSON format:
+      {"topic_label": "Revenue", "content": "$500M, up 20% YoY per CEO"}
+
+    Old dict format:
+      "Revenue: $500M, up 20% YoY per CEO"
+
+    The old HTML builder's bold_bullet_labels() function will automatically
+    bold the "Revenue:" part when rendering.
+
+    Args:
+        json_output: Full JSON with 15 sections
+
+    Returns:
+        Dict[str, List[str]] matching old format
+    """
+    sections_json = json_output.get("sections", {})
+    old_format = {}
+
+    # 1. Bottom Line (paragraph)
+    bottom_line_content = sections_json.get("bottom_line", {}).get("content", "")
+    old_format["bottom_line"] = [bottom_line_content] if bottom_line_content else []
+
+    # Helper for bullet sections
+    def convert_bullet_section(section_key: str) -> List[str]:
+        bullets = []
+        for bullet in sections_json.get(section_key, []):
+            topic = bullet.get("topic_label", "")
+            content = bullet.get("content", "")
+            # Combine: "Topic: Content"
+            bullets.append(f"{topic}: {content}")
+        return bullets
+
+    # 2-9. Standard bullet sections
+    old_format["financial_results"] = convert_bullet_section("financial_results")
+    old_format["operational_metrics"] = convert_bullet_section("operational_metrics")
+    old_format["major_developments"] = convert_bullet_section("major_developments")
+    old_format["guidance"] = convert_bullet_section("guidance")
+    old_format["strategic_initiatives"] = convert_bullet_section("strategic_initiatives")
+    old_format["management_sentiment"] = convert_bullet_section("management_sentiment_tone")
+    old_format["risk_factors"] = convert_bullet_section("risk_factors")
+    old_format["industry_competitive"] = convert_bullet_section("industry_competitive")
+
+    # 10. Related Entities (special format: entity_type - company_name: content)
+    entities = []
+    for entity in sections_json.get("related_entities", []):
+        entity_type = entity.get("entity_type", "")
+        company_name = entity.get("company_name", "")
+        content = entity.get("content", "")
+        # Format: "Customer - Tesla: Signed 10-year offtake..."
+        entities.append(f"{entity_type} - {company_name}: {content}")
+    old_format["related_entities"] = entities
+
+    # 11. Capital Allocation
+    old_format["capital_allocation"] = convert_bullet_section("capital_allocation")
+
+    # 12. Q&A Highlights (special format: alternating Q:/A: strings)
+    qa_strings = []
+    for exchange in sections_json.get("qa_highlights", []):
+        analyst_name = exchange.get("analyst_name", "")
+        analyst_firm = exchange.get("analyst_firm", "")
+        question = exchange.get("question", "")
+        answer = exchange.get("answer", "")
+
+        # Old format: "Q: Name, Firm\nQuestion\n\nA:\nAnswer"
+        qa_strings.append(f"Q: {analyst_name}, {analyst_firm}")
+        qa_strings.append(question)
+        qa_strings.append("A:")
+        qa_strings.append(answer)
+    old_format["qa_highlights"] = qa_strings
+
+    # 13-14. Scenarios (paragraphs)
+    upside_content = sections_json.get("upside_scenario", {}).get("content", "")
+    old_format["upside_scenario"] = [upside_content] if upside_content else []
+
+    downside_content = sections_json.get("downside_scenario", {}).get("content", "")
+    old_format["downside_scenario"] = [downside_content] if downside_content else []
+
+    # 15. Key Variables
+    old_format["key_variables"] = convert_bullet_section("key_variables")
+
+    return old_format
 
 
 # ==============================================================================

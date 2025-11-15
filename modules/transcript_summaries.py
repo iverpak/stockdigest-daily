@@ -7,6 +7,7 @@ Handles earnings call transcripts and press release summarization using FMP API 
 Extracted from app.py for better modularity.
 """
 
+import json
 import requests
 import logging
 import traceback
@@ -17,6 +18,46 @@ import pytz
 from jinja2 import Environment, FileSystemLoader
 
 LOG = logging.getLogger(__name__)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TRANSCRIPT PROMPT V2 - JSON OUTPUT (Added 2025-01-15)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def load_transcript_prompt_v2() -> str:
+    """
+    Load transcript v2 prompt from file (static for optimal prompt caching).
+
+    Returns the v2 prompt which outputs structured JSON with 15 sections.
+    Pattern copied from executive_summary_phase1.get_phase1_system_prompt().
+
+    The prompt is ticker-agnostic for optimal prompt caching. Ticker context
+    is provided in user_content instead.
+
+    Returns:
+        str: Full system prompt text
+
+    Raises:
+        Exception: If prompt file cannot be loaded
+    """
+    try:
+        import os
+        # Prompt is in same directory as this module
+        prompt_path = os.path.join(
+            os.path.dirname(__file__),
+            '_build_research_summary_prompt_v2'
+        )
+
+        with open(prompt_path, 'r', encoding='utf-8') as f:
+            prompt_template = f.read()
+
+        LOG.info(f"Loaded transcript prompt v2 ({len(prompt_template)} chars)")
+        return prompt_template
+
+    except Exception as e:
+        LOG.error(f"Failed to load transcript prompt v2 from {prompt_path}: {e}")
+        LOG.error(traceback.format_exc())
+        raise
 
 
 def strip_emoji(text: str) -> str:
@@ -548,6 +589,683 @@ def generate_transcript_summary_with_fallback(
     # Both failed
     LOG.error(f"[{ticker}] ❌ Transcript: Both Gemini and Claude failed")
     return None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TRANSCRIPT V2 - JSON OUTPUT WITH GEMINI/CLAUDE FALLBACK (Added 2025-01-15)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _build_transcript_user_content_v2(
+    ticker: str,
+    content: str,
+    config: Dict,
+    content_type: str
+) -> str:
+    """
+    Build user content for transcript v2 prompt (ticker-specific context).
+
+    Args:
+        ticker: Company ticker symbol
+        content: Transcript or press release text
+        config: Ticker configuration with company metadata
+        content_type: 'transcript' or 'press_release'
+
+    Returns:
+        str: Formatted user content with ticker context
+    """
+    company_name = config.get("name", ticker)
+    industry = config.get("industry", "Unknown")
+
+    user_content = f"""# COMPANY CONTEXT
+
+**Ticker:** {ticker}
+**Company Name:** {company_name}
+**Industry:** {industry}
+**Document Type:** {content_type.upper()}
+
+# CONTENT TO ANALYZE
+
+{content}
+
+---
+
+Generate comprehensive JSON summary following all instructions in the system prompt.
+Output must be valid, parseable JSON matching the schema exactly.
+Include all 15 sections with complete data.
+"""
+
+    return user_content
+
+
+def _generate_transcript_gemini_v2(
+    ticker: str,
+    content: str,
+    config: Dict,
+    content_type: str,
+    gemini_api_key: str,
+    max_retries: int = 2
+) -> Optional[Dict]:
+    """
+    Generate transcript JSON summary using Gemini 2.5 Pro with v2 prompt.
+
+    Pattern copied from executive_summary_phase1._generate_phase1_gemini().
+
+    Args:
+        ticker: Company ticker symbol
+        content: Transcript or press release text
+        config: Ticker configuration dict
+        content_type: 'transcript' or 'press_release'
+        gemini_api_key: Gemini API key
+        max_retries: Maximum retry attempts (default: 2)
+
+    Returns:
+        Dict with:
+            - json_output: Parsed 15-section JSON
+            - model_used: 'gemini-2.5-pro'
+            - prompt_tokens: Input token count
+            - completion_tokens: Output token count
+            - generation_time_ms: Processing time in milliseconds
+        Or None if generation fails
+    """
+    import time
+    import google.generativeai as genai
+
+    try:
+        # Configure Gemini
+        genai.configure(api_key=gemini_api_key)
+
+        # Load v2 prompt (static, cacheable)
+        system_prompt = load_transcript_prompt_v2()
+
+        # Build ticker-specific user content
+        user_content = _build_transcript_user_content_v2(
+            ticker, content, config, content_type
+        )
+
+        # Create model with system instruction
+        model = genai.GenerativeModel(
+            'gemini-2.5-pro',
+            system_instruction=system_prompt
+        )
+
+        # Retry logic for transient errors
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                start_time = time.time()
+
+                response = model.generate_content(
+                    user_content,
+                    generation_config={
+                        'temperature': 0.0,  # Deterministic output
+                        'max_output_tokens': 16000  # Support comprehensive transcripts
+                    }
+                )
+
+                generation_time_ms = int((time.time() - start_time) * 1000)
+
+                # Extract response text
+                response_text = response.text
+
+                # Get token counts
+                try:
+                    prompt_tokens = response.usage_metadata.prompt_token_count
+                    completion_tokens = response.usage_metadata.candidates_token_count
+                except AttributeError:
+                    prompt_tokens = 0
+                    completion_tokens = 0
+
+                LOG.info(
+                    f"[{ticker}] Gemini 2.5 Pro generated response "
+                    f"({generation_time_ms}ms, {prompt_tokens}→{completion_tokens} tokens)"
+                )
+
+                # Parse JSON using shared utility
+                from modules.json_utils import extract_json_from_claude_response
+                json_output = extract_json_from_claude_response(response_text, ticker)
+
+                if not json_output:
+                    raise ValueError("Failed to extract valid JSON from Gemini response")
+
+                # Verify required structure
+                if "sections" not in json_output:
+                    raise ValueError("JSON missing 'sections' key")
+
+                LOG.info(f"[{ticker}] ✅ Gemini 2.5 Pro: Valid JSON with {len(json_output.get('sections', {}))} sections")
+
+                return {
+                    "json_output": json_output,
+                    "model_used": "gemini-2.5-pro",
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "generation_time_ms": generation_time_ms
+                }
+
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries:
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s
+                    LOG.warning(
+                        f"[{ticker}] Gemini attempt {attempt + 1}/{max_retries + 1} failed: {str(e)[:200]}. "
+                        f"Retrying in {wait_time}s..."
+                    )
+                    time.sleep(wait_time)
+                else:
+                    LOG.error(f"[{ticker}] ❌ Gemini failed after {max_retries + 1} attempts: {str(e)[:200]}")
+                    LOG.error(traceback.format_exc())
+
+        # All retries exhausted
+        return None
+
+    except Exception as e:
+        LOG.error(f"[{ticker}] ❌ Gemini setup error: {str(e)[:200]}")
+        LOG.error(traceback.format_exc())
+        return None
+
+
+def _generate_transcript_claude_v2(
+    ticker: str,
+    content: str,
+    config: Dict,
+    content_type: str,
+    anthropic_api_key: str,
+    max_retries: int = 2
+) -> Optional[Dict]:
+    """
+    Generate transcript JSON summary using Claude Sonnet 4.5 with v2 prompt.
+
+    Pattern copied from executive_summary_phase1._generate_phase1_claude().
+    Includes prompt caching for cost optimization.
+
+    Args:
+        ticker: Company ticker symbol
+        content: Transcript or press release text
+        config: Ticker configuration dict
+        content_type: 'transcript' or 'press_release'
+        anthropic_api_key: Anthropic API key
+        max_retries: Maximum retry attempts (default: 2)
+
+    Returns:
+        Dict with same structure as Gemini, or None if generation fails
+    """
+    import time
+    import anthropic
+
+    try:
+        # Initialize Claude client
+        client = anthropic.Anthropic(api_key=anthropic_api_key)
+
+        # Load v2 prompt (static, cacheable)
+        system_prompt = load_transcript_prompt_v2()
+
+        # Build ticker-specific user content
+        user_content = _build_transcript_user_content_v2(
+            ticker, content, config, content_type
+        )
+
+        # Retry logic for transient errors
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                start_time = time.time()
+
+                # Call Claude with prompt caching
+                response = client.messages.create(
+                    model="claude-sonnet-4-5-20250929",
+                    max_tokens=16000,
+                    temperature=0.0,
+                    system=[
+                        {
+                            "type": "text",
+                            "text": system_prompt,
+                            "cache_control": {"type": "ephemeral"}  # Enable prompt caching
+                        }
+                    ],
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": user_content
+                        }
+                    ]
+                )
+
+                generation_time_ms = int((time.time() - start_time) * 1000)
+
+                # Extract response text
+                response_text = response.content[0].text
+
+                # Get token counts
+                prompt_tokens = response.usage.input_tokens
+                completion_tokens = response.usage.output_tokens
+
+                # Log cache performance
+                cache_read_tokens = getattr(response.usage, 'cache_read_input_tokens', 0)
+                cache_creation_tokens = getattr(response.usage, 'cache_creation_input_tokens', 0)
+
+                if cache_read_tokens > 0:
+                    LOG.info(
+                        f"[{ticker}] Claude cache HIT: {cache_read_tokens} tokens read "
+                        f"(~${cache_read_tokens * 0.0003 / 1000:.4f} saved)"
+                    )
+
+                LOG.info(
+                    f"[{ticker}] Claude Sonnet 4.5 generated response "
+                    f"({generation_time_ms}ms, {prompt_tokens}→{completion_tokens} tokens)"
+                )
+
+                # Parse JSON using shared utility
+                from modules.json_utils import extract_json_from_claude_response
+                json_output = extract_json_from_claude_response(response_text, ticker)
+
+                if not json_output:
+                    raise ValueError("Failed to extract valid JSON from Claude response")
+
+                # Verify required structure
+                if "sections" not in json_output:
+                    raise ValueError("JSON missing 'sections' key")
+
+                LOG.info(f"[{ticker}] ✅ Claude Sonnet 4.5: Valid JSON with {len(json_output.get('sections', {}))} sections")
+
+                return {
+                    "json_output": json_output,
+                    "model_used": "claude-sonnet-4-5-20250929",
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "generation_time_ms": generation_time_ms
+                }
+
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries:
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s
+                    LOG.warning(
+                        f"[{ticker}] Claude attempt {attempt + 1}/{max_retries + 1} failed: {str(e)[:200]}. "
+                        f"Retrying in {wait_time}s..."
+                    )
+                    time.sleep(wait_time)
+                else:
+                    LOG.error(f"[{ticker}] ❌ Claude failed after {max_retries + 1} attempts: {str(e)[:200]}")
+                    LOG.error(traceback.format_exc())
+
+        # All retries exhausted
+        return None
+
+    except Exception as e:
+        LOG.error(f"[{ticker}] ❌ Claude setup error: {str(e)[:200]}")
+        LOG.error(traceback.format_exc())
+        return None
+
+
+def generate_transcript_json_with_fallback(
+    ticker: str,
+    content: str,
+    config: Dict,
+    content_type: str,
+    anthropic_api_key: str,
+    gemini_api_key: str = None
+) -> Optional[Dict]:
+    """
+    Generate transcript JSON with Gemini 2.5 Pro (primary) and Claude Sonnet 4.5 (fallback).
+
+    This is the main entry point for v2 transcript generation. Pattern copied from
+    executive_summary_phase1.generate_executive_summary_phase1().
+
+    Args:
+        ticker: Company ticker symbol
+        content: Transcript or press release text
+        config: Ticker configuration dict
+        content_type: 'transcript' or 'press_release'
+        anthropic_api_key: Anthropic API key (required for fallback)
+        gemini_api_key: Gemini API key (optional, but recommended)
+
+    Returns:
+        Dict with:
+            - json_output: Full 15-section JSON structure
+            - model_used: 'gemini-2.5-pro' or 'claude-sonnet-4-5-20250929'
+            - prompt_tokens: Input token count
+            - completion_tokens: Output token count
+            - generation_time_ms: Processing time in milliseconds
+        Or None if both providers fail
+    """
+    # Try Gemini first (if key provided)
+    if gemini_api_key:
+        LOG.info(f"[{ticker}] Transcript v2: Attempting Gemini 2.5 Pro (primary)")
+        gemini_result = _generate_transcript_gemini_v2(
+            ticker=ticker,
+            content=content,
+            config=config,
+            content_type=content_type,
+            gemini_api_key=gemini_api_key
+        )
+
+        if gemini_result and gemini_result.get("json_output"):
+            LOG.info(f"[{ticker}] ✅ Transcript v2: Gemini 2.5 Pro succeeded")
+            return gemini_result
+        else:
+            LOG.warning(f"[{ticker}] ⚠️ Transcript v2: Gemini 2.5 Pro failed, falling back to Claude Sonnet")
+    else:
+        LOG.warning(f"[{ticker}] ⚠️ No Gemini API key provided, using Claude Sonnet only")
+
+    # Fall back to Claude (if key provided)
+    if anthropic_api_key:
+        LOG.info(f"[{ticker}] Transcript v2: Attempting Claude Sonnet 4.5 (fallback)")
+        claude_result = _generate_transcript_claude_v2(
+            ticker=ticker,
+            content=content,
+            config=config,
+            content_type=content_type,
+            anthropic_api_key=anthropic_api_key
+        )
+
+        if claude_result and claude_result.get("json_output"):
+            LOG.info(f"[{ticker}] ✅ Transcript v2: Claude Sonnet 4.5 succeeded (fallback)")
+            return claude_result
+        else:
+            LOG.error(f"[{ticker}] ❌ Transcript v2: Claude Sonnet also failed")
+    else:
+        LOG.error(f"[{ticker}] ❌ No Anthropic API key provided for fallback")
+
+    # Both failed
+    LOG.error(f"[{ticker}] ❌ Transcript v2: Both Gemini and Claude failed")
+    return None
+
+
+def convert_transcript_json_to_html(
+    json_output: Dict,
+    content_type: str
+) -> str:
+    """
+    Convert Phase 1-style JSON to transcript email HTML.
+
+    Similar to executive_summary_phase1.convert_phase1_to_sections_dict()
+    but adapted for transcript's 15 sections and simpler formatting (no filing hints).
+
+    Args:
+        json_output: Full JSON with 15 sections
+        content_type: 'transcript' or 'press_release'
+
+    Returns:
+        HTML string for email body
+    """
+    sections_json = json_output.get("sections", {})
+    html_parts = []
+
+    # Helper to build section HTML
+    def build_section_html(title: str, content_list: List[str]) -> str:
+        if not content_list:
+            return ""
+
+        html = f'<h2 style="color: #1a472a; margin-top: 30px; margin-bottom: 15px; font-size: 20px; border-bottom: 2px solid #2e7d32; padding-bottom: 8px;">{title}</h2>\n'
+        html += '<ul style="margin: 0; padding-left: 20px; line-height: 1.8;">\n'
+        for item in content_list:
+            html += f'<li style="margin-bottom: 12px; color: #333;">{item}</li>\n'
+        html += '</ul>\n'
+        return html
+
+    # 1. Bottom Line (paragraph, no bullets)
+    if "bottom_line" in sections_json:
+        content = sections_json["bottom_line"].get("content", "")
+        if content:
+            html_parts.append(
+                f'<h2 style="color: #1a472a; margin-top: 30px; margin-bottom: 15px; font-size: 20px; border-bottom: 2px solid #2e7d32; padding-bottom: 8px;">Bottom Line</h2>\n'
+                f'<p style="line-height: 1.8; color: #333; margin-bottom: 20px;">{content}</p>\n'
+            )
+
+    # 2. Financial Results (bullets, NO sentiment tags)
+    if "financial_results" in sections_json:
+        bullets = []
+        for bullet in sections_json["financial_results"]:
+            topic = bullet.get("topic_label", "")
+            content = bullet.get("content", "")
+            bullets.append(f"<strong>{topic}:</strong> {content}")
+        if bullets:
+            html_parts.append(build_section_html("Financial Results", bullets))
+
+    # 3. Operational Metrics (bullets, NO sentiment tags)
+    if "operational_metrics" in sections_json:
+        bullets = []
+        for bullet in sections_json["operational_metrics"]:
+            topic = bullet.get("topic_label", "")
+            content = bullet.get("content", "")
+            bullets.append(f"<strong>{topic}:</strong> {content}")
+        if bullets:
+            html_parts.append(build_section_html("Operational Metrics", bullets))
+
+    # 4. Major Developments (bullets WITH sentiment tags)
+    if "major_developments" in sections_json:
+        bullets = []
+        for bullet in sections_json["major_developments"]:
+            topic = bullet.get("topic_label", "")
+            content = bullet.get("content", "")
+            # Extract sentiment from content (it's already formatted in the content)
+            bullets.append(f"<strong>{topic}:</strong> {content}")
+        if bullets:
+            html_parts.append(build_section_html("Major Developments", bullets))
+
+    # 5. Guidance
+    if "guidance" in sections_json:
+        bullets = []
+        for bullet in sections_json["guidance"]:
+            topic = bullet.get("topic_label", "")
+            content = bullet.get("content", "")
+            bullets.append(f"<strong>{topic}:</strong> {content}")
+        if bullets:
+            html_parts.append(build_section_html("Guidance & Outlook", bullets))
+
+    # 6. Strategic Initiatives
+    if "strategic_initiatives" in sections_json:
+        bullets = []
+        for bullet in sections_json["strategic_initiatives"]:
+            topic = bullet.get("topic_label", "")
+            content = bullet.get("content", "")
+            bullets.append(f"<strong>{topic}:</strong> {content}")
+        if bullets:
+            html_parts.append(build_section_html("Strategic Initiatives", bullets))
+
+    # 7. Management Sentiment & Tone (NO sentiment tags)
+    if "management_sentiment_tone" in sections_json:
+        bullets = []
+        for bullet in sections_json["management_sentiment_tone"]:
+            topic = bullet.get("topic_label", "")
+            content = bullet.get("content", "")
+            bullets.append(f"<strong>{topic}:</strong> {content}")
+        if bullets:
+            html_parts.append(build_section_html("Management Sentiment & Tone", bullets))
+
+    # 8. Risk Factors
+    if "risk_factors" in sections_json:
+        bullets = []
+        for bullet in sections_json["risk_factors"]:
+            topic = bullet.get("topic_label", "")
+            content = bullet.get("content", "")
+            bullets.append(f"<strong>{topic}:</strong> {content}")
+        if bullets:
+            html_parts.append(build_section_html("Risk Factors & Headwinds", bullets))
+
+    # 9. Industry & Competitive
+    if "industry_competitive" in sections_json:
+        bullets = []
+        for bullet in sections_json["industry_competitive"]:
+            topic = bullet.get("topic_label", "")
+            content = bullet.get("content", "")
+            bullets.append(f"<strong>{topic}:</strong> {content}")
+        if bullets:
+            html_parts.append(build_section_html("Industry & Competitive Landscape", bullets))
+
+    # 10. Related Entities
+    if "related_entities" in sections_json:
+        bullets = []
+        for bullet in sections_json["related_entities"]:
+            entity_type = bullet.get("entity_type", "")
+            company_name = bullet.get("company_name", "")
+            content = bullet.get("content", "")
+            bullets.append(f"<strong>{entity_type} - {company_name}:</strong> {content}")
+        if bullets:
+            html_parts.append(build_section_html("Related Entities", bullets))
+
+    # 11. Capital Allocation
+    if "capital_allocation" in sections_json:
+        bullets = []
+        for bullet in sections_json["capital_allocation"]:
+            topic = bullet.get("topic_label", "")
+            content = bullet.get("content", "")
+            bullets.append(f"<strong>{topic}:</strong> {content}")
+        if bullets:
+            html_parts.append(build_section_html("Capital Allocation", bullets))
+
+    # 12. Q&A Highlights (special formatting - only for transcripts)
+    if content_type == 'transcript' and "qa_highlights" in sections_json:
+        exchanges = sections_json["qa_highlights"]
+        if exchanges:
+            html = '<h2 style="color: #1a472a; margin-top: 30px; margin-bottom: 15px; font-size: 20px; border-bottom: 2px solid #2e7d32; padding-bottom: 8px;">Q&A Highlights</h2>\n'
+
+            for exchange in exchanges:
+                analyst_name = exchange.get("analyst_name", "Unknown")
+                analyst_firm = exchange.get("analyst_firm", "")
+                question = exchange.get("question", "")
+                answer = exchange.get("answer", "")
+
+                # Format Q&A exchange
+                html += f'<div style="margin-bottom: 25px;">\n'
+                html += f'<p style="margin: 5px 0; color: #1a472a;"><strong>Q: {analyst_name}'
+                if analyst_firm:
+                    html += f', {analyst_firm}'
+                html += '</strong></p>\n'
+                html += f'<p style="margin: 5px 0 5px 20px; color: #666; line-height: 1.6;">{question}</p>\n'
+                html += f'<p style="margin: 5px 0; color: #1a472a;"><strong>A:</strong></p>\n'
+                html += f'<p style="margin: 5px 0 15px 20px; color: #333; line-height: 1.6;">{answer}</p>\n'
+                html += '</div>\n'
+
+            html_parts.append(html)
+
+    # 13. Upside Scenario (paragraph)
+    if "upside_scenario" in sections_json:
+        content = sections_json["upside_scenario"].get("content", "")
+        if content:
+            html_parts.append(
+                f'<h2 style="color: #1a472a; margin-top: 30px; margin-bottom: 15px; font-size: 20px; border-bottom: 2px solid #2e7d32; padding-bottom: 8px;">Upside Scenario</h2>\n'
+                f'<p style="line-height: 1.8; color: #333; margin-bottom: 20px;">{content}</p>\n'
+            )
+
+    # 14. Downside Scenario (paragraph)
+    if "downside_scenario" in sections_json:
+        content = sections_json["downside_scenario"].get("content", "")
+        if content:
+            html_parts.append(
+                f'<h2 style="color: #1a472a; margin-top: 30px; margin-bottom: 15px; font-size: 20px; border-bottom: 2px solid #2e7d32; padding-bottom: 8px;">Downside Scenario</h2>\n'
+                f'<p style="line-height: 1.8; color: #333; margin-bottom: 20px;">{content}</p>\n'
+            )
+
+    # 15. Key Variables (bullets)
+    if "key_variables" in sections_json:
+        bullets = []
+        for bullet in sections_json["key_variables"]:
+            topic = bullet.get("topic_label", "")
+            content = bullet.get("content", "")
+            bullets.append(f"<strong>{topic}:</strong> {content}")
+        if bullets:
+            html_parts.append(build_section_html("Key Variables to Monitor", bullets))
+
+    return "\n".join(html_parts)
+
+
+def generate_transcript_email_v2(
+    ticker: str,
+    json_output: Dict,
+    config: Dict,
+    content_type: str,
+    quarter: int = None,
+    year: int = None,
+    report_date: str = None,
+    stock_data: Dict = None
+) -> Dict:
+    """
+    Generate email HTML from transcript JSON (v2 format).
+
+    Uses same Jinja2 template as v1, but converts JSON to HTML instead of parsing markdown.
+
+    Args:
+        ticker: Company ticker symbol
+        json_output: Full 15-section JSON from v2 generation
+        config: Ticker configuration dict
+        content_type: 'transcript' or 'press_release'
+        quarter: Quarter number (1-4) for transcripts
+        year: Year for transcripts
+        report_date: Date string for press releases
+        stock_data: Optional stock price data dict
+
+    Returns:
+        Dict with:
+            - html: Full email HTML
+            - subject: Email subject line
+    """
+    try:
+        # Convert JSON to HTML
+        summary_html = convert_transcript_json_to_html(json_output, content_type)
+
+        # Get company metadata
+        company_name = config.get("name", ticker)
+        industry = config.get("industry", "")
+
+        # Build subject line
+        if content_type == 'transcript' and quarter and year:
+            subject = f"📊 Transcript: {ticker} - Q{quarter} {year}"
+        elif content_type == 'press_release' and report_date:
+            subject = f"📰 Press Release: {ticker} - {report_date}"
+        else:
+            subject = f"📊 Research Summary: {ticker}"
+
+        # Get stock price data if available
+        if not stock_data:
+            # Import from app.py where the function is defined
+            import sys
+            import os
+            # Add parent directory to path to import from app
+            sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+            try:
+                from app import get_filing_stock_data
+                stock_data = get_filing_stock_data(ticker)
+            except ImportError:
+                LOG.warning(f"[{ticker}] Could not import get_filing_stock_data, stock data will be None")
+                stock_data = None
+
+        # Prepare template variables
+        template_vars = {
+            "report_title": f"{ticker} Research Summary",
+            "company_name": company_name,
+            "ticker": ticker,
+            "industry": industry,
+            "content_type": content_type,
+            "content_html": summary_html,
+            # Stock price data (3-row card)
+            "stock_price": stock_data.get("stock_price") if stock_data else None,
+            "price_change_pct": stock_data.get("daily_return_pct") if stock_data else None,
+            "price_change_color": stock_data.get("price_change_color") if stock_data else "#666",
+            "ytd_return_pct": stock_data.get("ytd_return_pct") if stock_data else None,
+            "ytd_return_color": stock_data.get("ytd_return_color") if stock_data else "#666",
+            "market_status": stock_data.get("market_status", "closed") if stock_data else "closed",
+            "return_label": stock_data.get("return_label", "1D") if stock_data else "1D",
+        }
+
+        # Load and render template
+        import os
+        template_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'templates')
+        env = Environment(loader=FileSystemLoader(template_dir))
+        template = env.get_template('email_research_report.html')
+
+        html = template.render(**template_vars)
+
+        LOG.info(f"[{ticker}] ✅ Generated email v2 ({len(html)} chars)")
+
+        return {
+            "html": html,
+            "subject": subject
+        }
+
+    except Exception as e:
+        LOG.error(f"[{ticker}] ❌ Failed to generate email v2: {str(e)[:200]}")
+        LOG.error(traceback.format_exc())
+        raise
 
 
 # ==============================================================================

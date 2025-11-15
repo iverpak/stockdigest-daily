@@ -19974,61 +19974,134 @@ async def process_transcript_phase(job: dict):
 
         # Progress: 30% - Generating summary with AI (Gemini Pro → Claude Sonnet fallback)
         update_job_status(job_id, progress=30)
-        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating summary with AI (30-60s)...")
+        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating summary with AI v2 (JSON output, 30-60s)...")
 
         ticker_config = get_ticker_config(ticker)
-        result = generate_transcript_summary_with_fallback(
+
+        # Use v2 JSON generation (Gemini-first, Claude-fallback)
+        from modules.transcript_summaries import generate_transcript_json_with_fallback
+        result = generate_transcript_json_with_fallback(
             ticker=ticker,
             content=content,
             config=ticker_config,
             content_type='transcript',
             anthropic_api_key=ANTHROPIC_API_KEY,
-            gemini_api_key=GEMINI_API_KEY,
-            anthropic_model=ANTHROPIC_MODEL,
-            anthropic_api_url=ANTHROPIC_API_URL,
-            build_prompt_func=_build_research_summary_prompt
+            gemini_api_key=GEMINI_API_KEY
         )
 
-        if not result:
-            raise ValueError("Both Gemini and Claude transcript summarization failed")
+        if not result or not result.get('json_output'):
+            raise ValueError("Both Gemini and Claude transcript v2 summarization failed")
 
-        summary_text = result['summary_text']
-        ai_provider = result['ai_provider']
-        ai_model = result['ai_model']
+        json_output = result['json_output']
+        model_used = result['model_used']  # e.g., "gemini-2.5-pro" or "claude-sonnet-4-5-20250929"
+        generation_time_ms = result.get('generation_time_ms', 0)
+        prompt_tokens = result.get('prompt_tokens', 0)
+        completion_tokens = result.get('completion_tokens', 0)
+
+        # Extract provider name from model string
+        ai_provider = "gemini" if "gemini" in model_used.lower() else "claude"
+
+        LOG.info(
+            f"[{ticker}] ✅ [JOB {job_id}] Generated {len(json_output.get('sections', {}))} sections "
+            f"with {model_used} ({generation_time_ms}ms, {prompt_tokens}→{completion_tokens} tokens)"
+        )
 
         # Progress: 80% - Saving to database
         update_job_status(job_id, progress=80)
-        LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving summary to database...")
+        LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving summary v2 (JSON) to database...")
 
         # Ensure quarter has Q prefix (defensive check - don't double-prefix)
         quarter_str = str(quarter)
         quarter_formatted = quarter_str if quarter_str.startswith('Q') else f"Q{quarter_str}"
 
+        # Save JSON to database (with backward compatibility)
+        import json
+        summary_text_json = json.dumps(json_output)  # Convert JSON to text for summary_text column
+
         with db() as conn, conn.cursor() as cur:
+            # Check if summary_json column exists (backward compatibility)
             cur.execute("""
-                INSERT INTO transcript_summaries (
-                    ticker, company_name, report_type, quarter, year,
-                    report_date, summary_text, source_url, ai_provider, ai_model
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (ticker, report_type, quarter, year)
-                DO UPDATE SET
-                    summary_text = EXCLUDED.summary_text,
-                    ai_provider = EXCLUDED.ai_provider,
-                    ai_model = EXCLUDED.ai_model,
-                    generated_at = NOW()
-            """, (
-                ticker,
-                ticker_config.get('company_name'),
-                'transcript',
-                quarter_formatted,
-                year,
-                data[0].get('date'),
-                summary_text,
-                fmp_url,
-                ai_provider,  # Dynamic: 'gemini' or 'claude'
-                ai_model      # Dynamic: 'gemini-2.5-pro' or 'claude-sonnet-4-5-20250929'
-            ))
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'transcript_summaries'
+                AND column_name IN ('summary_json', 'prompt_version')
+            """)
+            rows = cur.fetchall()
+            # Handle both tuple and dict cursor types
+            if rows and isinstance(rows[0], dict):
+                existing_columns = {row['column_name'] for row in rows}
+            else:
+                existing_columns = {row[0] for row in rows}
+            has_json_columns = 'summary_json' in existing_columns and 'prompt_version' in existing_columns
+
+            if has_json_columns:
+                # New schema: Save both text (for backward compat) and JSON
+                # Use Json adapter for psycopg3 JSONB support
+                try:
+                    from psycopg.types.json import Json
+                    json_param = Json(json_output)
+                except ImportError:
+                    # psycopg2 fallback - pass dict directly
+                    json_param = json.dumps(json_output)
+
+                cur.execute("""
+                    INSERT INTO transcript_summaries (
+                        ticker, company_name, report_type, quarter, year,
+                        report_date, summary_text, summary_json, prompt_version,
+                        source_url, ai_provider, ai_model
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (ticker, report_type, quarter, year)
+                    DO UPDATE SET
+                        summary_text = EXCLUDED.summary_text,
+                        summary_json = EXCLUDED.summary_json,
+                        prompt_version = EXCLUDED.prompt_version,
+                        ai_provider = EXCLUDED.ai_provider,
+                        ai_model = EXCLUDED.ai_model,
+                        generated_at = NOW()
+                """, (
+                    ticker,
+                    ticker_config.get('company_name'),
+                    'transcript',
+                    quarter_formatted,
+                    year,
+                    data[0].get('date'),
+                    summary_text_json,  # Store JSON as text for backward compat
+                    json_param,         # Store as JSONB (adapter handles type)
+                    'v2',               # Mark as v2 prompt
+                    fmp_url,
+                    ai_provider,  # "gemini" or "claude"
+                    model_used    # Full model name
+                ))
+                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Saved with JSON columns (v2)")
+            else:
+                # Old schema: Save JSON as text only (pre-migration)
+                cur.execute("""
+                    INSERT INTO transcript_summaries (
+                        ticker, company_name, report_type, quarter, year,
+                        report_date, summary_text, source_url, ai_provider, ai_model
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (ticker, report_type, quarter, year)
+                    DO UPDATE SET
+                        summary_text = EXCLUDED.summary_text,
+                        ai_provider = EXCLUDED.ai_provider,
+                        ai_model = EXCLUDED.ai_model,
+                        generated_at = NOW()
+                """, (
+                    ticker,
+                    ticker_config.get('company_name'),
+                    'transcript',
+                    quarter_formatted,
+                    year,
+                    data[0].get('date'),
+                    summary_text_json,  # Store JSON as text
+                    fmp_url,
+                    ai_provider,  # "gemini" or "claude"
+                    model_used    # Full model name
+                ))
+                LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Saved as text only (run migration to enable JSON columns)")
+
             conn.commit()
 
         # Progress: 95% - Sending email
@@ -20037,34 +20110,26 @@ async def process_transcript_phase(job: dict):
             LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending email notification...")
 
             try:
-                # Import email generation function
-                from modules.transcript_summaries import generate_transcript_email
+                # Import v2 email generation function
+                from modules.transcript_summaries import generate_transcript_email_v2
 
                 # Get real-time stock data (yfinance → Polygon → database → None)
                 stock_data = get_filing_stock_data(ticker)
 
-                # Generate email using unified Jinja2 template
-                email_data = generate_transcript_email(
+                # Generate email v2 from JSON
+                email_data = generate_transcript_email_v2(
                     ticker=ticker,
-                    company_name=ticker_config.get('company_name', ticker),
-                    report_type='transcript',
-                    quarter=quarter_formatted,
+                    json_output=json_output,
+                    config=ticker_config,
+                    content_type='transcript',
+                    quarter=quarter,
                     year=year,
                     report_date=data[0].get('date'),
-                    pr_title=None,
-                    summary_text=summary_text,
-                    fmp_url=fmp_url,
-                    stock_price=stock_data['stock_price'],
-                    price_change_pct=stock_data['price_change_pct'],
-                    price_change_color=stock_data['price_change_color'],
-                    ytd_return_pct=stock_data['ytd_return_pct'],
-                    ytd_return_color=stock_data['ytd_return_color'],
-                    market_status=stock_data['market_status'],
-                    return_label=stock_data['return_label']
+                    stock_data=stock_data
                 )
 
                 send_email(subject=email_data['subject'], html_body=email_data['html'], to=DIGEST_TO)
-                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email sent to {DIGEST_TO}")
+                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email v2 sent to {DIGEST_TO}")
 
             except Exception as email_error:
                 LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send email: {email_error}")

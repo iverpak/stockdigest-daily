@@ -17867,12 +17867,12 @@ async def process_ticker_job(job: dict):
                         # Track Phase 3 cost based on which model was used
                         if phase3_usage:
                             phase3_model = phase3_usage.get("model", "")
-                            if "gemini" in phase3_model.lower():
-                                # Gemini primary succeeded (uses Pro for Phase 3)
-                                calculate_gemini_api_cost(phase3_usage, "executive_summary_phase3", model="pro", model_name=phase3_model)
-                            elif "claude" in phase3_model.lower():
-                                # Claude fallback succeeded
+                            if "claude" in phase3_model.lower():
+                                # Claude primary succeeded (uses Sonnet 4.5 for Phase 3)
                                 calculate_claude_api_cost(phase3_usage, "executive_summary_phase3", model_name=phase3_model)
+                            elif "gemini" in phase3_model.lower():
+                                # Gemini fallback succeeded (uses Pro for Phase 3)
+                                calculate_gemini_api_cost(phase3_usage, "executive_summary_phase3", model="pro", model_name=phase3_model)
                             else:
                                 # Unknown or missing model (shouldn't happen, but log warning)
                                 LOG.warning(f"[{ticker}] Phase 3 cost tracking: Unknown model '{phase3_model}', skipping cost tracking")
@@ -17979,12 +17979,12 @@ async def process_ticker_job(job: dict):
                             # Track Phase 3 cost based on which model was used
                             if phase3_usage:
                                 phase3_model = phase3_usage.get("model", "")
-                                if "gemini" in phase3_model.lower():
-                                    # Gemini primary succeeded (uses Pro for Phase 3)
-                                    calculate_gemini_api_cost(phase3_usage, "executive_summary_phase3", model="pro", model_name=phase3_model)
-                                elif "claude" in phase3_model.lower():
-                                    # Claude fallback succeeded
+                                if "claude" in phase3_model.lower():
+                                    # Claude primary succeeded (uses Sonnet 4.5 for Phase 3)
                                     calculate_claude_api_cost(phase3_usage, "executive_summary_phase3", model_name=phase3_model)
+                                elif "gemini" in phase3_model.lower():
+                                    # Gemini fallback succeeded (uses Pro for Phase 3)
+                                    calculate_gemini_api_cost(phase3_usage, "executive_summary_phase3", model="pro", model_name=phase3_model)
                                 else:
                                     # Unknown or missing model (shouldn't happen, but log warning)
                                     LOG.warning(f"[{ticker}] Phase 3 cost tracking: Unknown model '{phase3_model}', skipping cost tracking")
@@ -28195,12 +28195,12 @@ async def regenerate_email_api(request: Request):
                 # Track Phase 3 cost based on which model was used
                 if phase3_usage:
                     phase3_model = phase3_usage.get("model", "")
-                    if "gemini" in phase3_model.lower():
-                        # Gemini primary succeeded (uses Pro for Phase 3)
-                        calculate_gemini_api_cost(phase3_usage, "executive_summary_phase3", model="pro", model_name=phase3_model)
-                    elif "claude" in phase3_model.lower():
-                        # Claude fallback succeeded
+                    if "claude" in phase3_model.lower():
+                        # Claude primary succeeded (uses Sonnet 4.5 for Phase 3)
                         calculate_claude_api_cost(phase3_usage, "executive_summary_phase3", model_name=phase3_model)
+                    elif "gemini" in phase3_model.lower():
+                        # Gemini fallback succeeded (uses Pro for Phase 3)
+                        calculate_gemini_api_cost(phase3_usage, "executive_summary_phase3", model="pro", model_name=phase3_model)
                     else:
                         # Unknown or missing model (shouldn't happen, but log warning)
                         LOG.warning(f"[{ticker}] Phase 3 cost tracking: Unknown model '{phase3_model}', skipping cost tracking")

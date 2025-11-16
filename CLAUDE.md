@@ -2033,6 +2033,8 @@ python app.py check_filings
 - Output: JSON with only (bullet_id, topic_label, content_integrated)
 - Scope: Context weaving + length enforcement ONLY
 - No restructuring, no thesis extraction, no new content
+- **AI Provider:** Claude Sonnet 4.5 (primary) with Gemini 2.5 Pro fallback
+- **Cost Impact:** +$135-210/month vs Gemini-primary (acceptable for quality improvement)
 
 **Unified Bullet Format (All Emails):**
 ```
@@ -2072,12 +2074,13 @@ Integrated paragraph with Phase 1 + Phase 2 context woven together (Nov 04)
 
 **Phase 3 Generation** (`modules/executive_summary_phase3.py:107-210`)
 ```python
-def generate_executive_summary_phase3(ticker, phase2_merged_json, anthropic_api_key):
+def generate_executive_summary_phase3(ticker, phase2_merged_json, anthropic_api_key, gemini_api_key):
     # 1. Load simplified prompt
-    # 2. Call Claude API
-    # 3. Parse JSON response (handles 3 formats: plain, markdown blocks, text+JSON)
-    # 4. merge_phase3_with_phase2(phase2_json, phase3_json)  # bullet_id matching
-    # 5. Return final merged JSON
+    # 2. Call Claude API (primary) - with prompt caching for cost savings
+    # 3. If Claude fails: Fall back to Gemini 2.5 Pro
+    # 4. Parse JSON response (handles 3 formats: plain, markdown blocks, text+JSON)
+    # 5. merge_phase3_with_phase2(phase2_json, phase3_json)  # bullet_id matching
+    # 6. Return final merged JSON
 ```
 
 **Merge Function** (`modules/executive_summary_phase2.py:865-922`)

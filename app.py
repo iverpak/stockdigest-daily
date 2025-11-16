@@ -14371,65 +14371,6 @@ def generate_email_html_core(
         "article_count": analyzed_count
     }
 
-def save_email_to_queue(ticker: str, recipients: List[str], hours: int = 24, flagged_article_ids: List[int] = None, mode: str = 'daily'):
-    """Save Email #3 to email_queue table for daily workflow
-
-    Args:
-        mode: 'daily' (production) or 'test' (test run)
-    """
-    is_production = (mode == 'daily')
-    LOG.info(f"[{ticker}] 💾 Saving Email #3 to queue for {len(recipients)} recipients (mode={mode}, is_production={is_production})")
-
-    # Generate HTML using unified core function
-    email_data = generate_email_html_core(
-        ticker=ticker,
-        hours=hours,
-        flagged_article_ids=flagged_article_ids,
-        recipient_email=None  # Use placeholder {{UNSUBSCRIBE_TOKEN}} for production
-    )
-    if not email_data:
-        LOG.error(f"[{ticker}] ❌ Failed to generate email HTML")
-        return False
-
-    html = email_data['html']
-    subject = email_data['subject']
-    company_name = email_data['company_name']
-    article_count = email_data['article_count']
-
-    # Save to email_queue table
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            INSERT INTO email_queue (
-                ticker, company_name, recipients, email_html, email_subject,
-                article_count, status, is_production, heartbeat, created_at
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
-            ON CONFLICT (ticker) DO UPDATE
-            SET company_name = EXCLUDED.company_name,
-                recipients = EXCLUDED.recipients,
-                email_html = EXCLUDED.email_html,
-                email_subject = EXCLUDED.email_subject,
-                article_count = EXCLUDED.article_count,
-                status = 'ready',
-                error_message = NULL,
-                is_production = EXCLUDED.is_production,
-                heartbeat = NOW(),
-                updated_at = NOW()
-        """, (ticker, company_name, recipients, html, subject, article_count, 'ready', is_production))
-        conn.commit()
-
-    LOG.info(f"[{ticker}] ✅ Email #3 saved to queue (status=ready)")
-
-    # Send preview to admin
-    try:
-        preview_subject = f"[PREVIEW] {subject}"
-        send_email(preview_subject, html, to=DIGEST_TO)
-        LOG.info(f"[{ticker}] ✅ Preview sent to admin")
-    except Exception as e:
-        LOG.error(f"[{ticker}] ❌ Failed to send preview to admin: {e}")
-
-    return True
-
 
 def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
                                    flagged_article_ids: List[int] = None,
@@ -16953,20 +16894,8 @@ async def process_ticker_job(job: dict):
 
         try:
             if mode == 'daily':
-                # DAILY WORKFLOW: Send Email #3 (Phase 2 Enrichment QA) to admin only
-                LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #3 (Phase 2 QA) to admin...")
-                user_report_result = send_user_intelligence_report(
-                    hours=int(minutes/60),
-                    tickers=[ticker],
-                    flagged_article_ids=flagged_article_ids,
-                    recipient_email=DIGEST_TO  # Admin only
-                )
-                if user_report_result:
-                    LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #3 (Phase 2 QA) sent to admin")
-                else:
-                    LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Email #3 send failed (non-fatal)")
-
-                # ========== Phase 3 Generation + Email #4 (DAILY MODE) ==========
+                # DAILY WORKFLOW: Generate Phase 3 and queue Email #3 for users
+                # ========== Phase 3 Generation + Email #3 (DAILY MODE) ==========
                 LOG.info(f"[{ticker}] 🎨 [JOB {job_id}] Generating Phase 3 context-integrated JSON...")
 
                 try:
@@ -17045,21 +16974,21 @@ async def process_ticker_job(job: dict):
                             if success:
                                 LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 3 content saved to database")
 
-                                # Queue Email #4 (user-facing) for 8:30 AM send
+                                # Queue Email #3 (user-facing) for 8:30 AM send
                                 if not recipients:
-                                    LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No recipients for Email #4, skipping queue save")
+                                    LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No recipients for Email #3, skipping queue save")
                                 else:
-                                    LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving Email #4 to queue ({len(recipients)} recipients)...")
+                                    LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving Email #3 to queue ({len(recipients)} recipients)...")
 
-                                    # Generate Email #4 HTML with placeholder token
-                                    email4_data = generate_email_html_core_editorial(
+                                    # Generate Email #3 HTML with placeholder token
+                                    email3_data = generate_email_html_core_editorial(
                                         ticker=ticker,
                                         hours=int(minutes/60),
                                         recipient_email=None  # Use {{UNSUBSCRIBE_TOKEN}} placeholder
                                     )
 
-                                    if email4_data:
-                                        # Save Email #4 to email_queue table
+                                    if email3_data:
+                                        # Save Email #3 to email_queue table
                                         config = get_ticker_config(ticker)
                                         company_name = config.get('company_name', ticker) if config else ticker
                                         is_production = (mode == 'daily')
@@ -17084,14 +17013,24 @@ async def process_ticker_job(job: dict):
                                                     updated_at = NOW()
                                             """, (
                                                 ticker, company_name, recipients,
-                                                email4_data['html'], email4_data['subject'],
-                                                email4_data['article_count'], 'ready', is_production
+                                                email3_data['html'], email3_data['subject'],
+                                                email3_data['article_count'], 'ready', is_production
                                             ))
                                             conn.commit()
 
-                                        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #4 saved to queue (status=ready, {email4_data['article_count']} articles)")
+                                        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #3 saved to queue (status=ready, {email3_data['article_count']} articles)")
+
+                                        # Send preview to admin
+                                        admin_email = os.getenv("ADMIN_EMAIL", DIGEST_TO)
+                                        if admin_email:
+                                            try:
+                                                preview_subject = f"[PREVIEW] {email3_data['subject']}"
+                                                send_email(preview_subject, email3_data['html'], to=admin_email)
+                                                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #3 preview sent to admin")
+                                            except Exception as e:
+                                                LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send Email #3 preview: {e}")
                                     else:
-                                        LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Failed to generate Email #4 HTML")
+                                        LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Failed to generate Email #3 HTML")
                             else:
                                 LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Failed to update database with Phase 3")
                         else:
@@ -17101,119 +17040,104 @@ async def process_ticker_job(job: dict):
 
                 except Exception as e:
                     LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Phase 3 generation/queue failed: {e}", exc_info=True)
-                    # Non-fatal - Email #3 sent to admin, continue to GitHub commit
+                    # Non-fatal - Email #2 already sent to admin, continue to GitHub commit
                 # ========== END Phase 3 ==========
             else:
-                # TEST WORKFLOW: Send Email #3 (Phase 2 Enrichment QA) immediately to admin
-                LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #3 (Phase 2 Enrichment QA) to admin (test mode)...")
-                user_report_result = send_user_intelligence_report(
-                    hours=int(minutes/60),
-                    tickers=[ticker],
-                    flagged_article_ids=flagged_article_ids,
-                    recipient_email=DIGEST_TO
-                )
-                if user_report_result:
-                    LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #3 (Phase 2 Enrichment QA) sent to admin")
-                    if isinstance(user_report_result, dict):
-                        LOG.info(f"   Status: {user_report_result.get('status', 'unknown')}")
+                # TEST WORKFLOW: Generate Phase 3 and send Email #3 to admin
+                # ========== Phase 3 Generation + Email #3 (TEST MODE) ==========
+                LOG.info(f"[{ticker}] 🎨 [JOB {job_id}] Generating Phase 3 context-integrated JSON...")
 
-                    # ========== Phase 3 Generation + Email #4 (TEST MODE) ==========
-                    LOG.info(f"[{ticker}] 🎨 [JOB {job_id}] Generating Phase 3 context-integrated JSON...")
+                try:
+                    from modules.executive_summary_phase3 import generate_executive_summary_phase3
+                    from modules.executive_summary_utils import filter_bullets_for_email3
 
-                    try:
-                        from modules.executive_summary_phase3 import generate_executive_summary_phase3
-                        from modules.executive_summary_utils import filter_bullets_for_email3
+                    # Fetch Phase 2 merged JSON from database
+                    with db() as conn, conn.cursor() as cur:
+                        cur.execute("""
+                            SELECT summary_text FROM executive_summaries
+                            WHERE ticker = %s AND summary_date = CURRENT_DATE
+                            ORDER BY generated_at DESC LIMIT 1
+                        """, (ticker,))
+                        result = cur.fetchone()
 
-                        # Fetch Phase 2 merged JSON from database
-                        with db() as conn, conn.cursor() as cur:
-                            cur.execute("""
-                                SELECT summary_text FROM executive_summaries
-                                WHERE ticker = %s AND summary_date = CURRENT_DATE
-                                ORDER BY generated_at DESC LIMIT 1
-                            """, (ticker,))
-                            result = cur.fetchone()
+                    if result and result['summary_text']:
+                        # Parse Phase 2 merged JSON
+                        phase2_merged_json = json.loads(result['summary_text'])
 
-                        if result and result['summary_text']:
-                            # Parse Phase 2 merged JSON
-                            phase2_merged_json = json.loads(result['summary_text'])
+                        # FILTER bullets before Phase 3 (remove relevance='none' or low impact + indirect)
+                        LOG.info(f"[{ticker}] 🔍 [JOB {job_id}] Filtering bullets before Phase 3...")
+                        filtered_json_for_phase3 = filter_bullets_for_email3(phase2_merged_json)
 
-                            # FILTER bullets before Phase 3 (remove relevance='none' or low impact + indirect)
-                            LOG.info(f"[{ticker}] 🔍 [JOB {job_id}] Filtering bullets before Phase 3...")
-                            filtered_json_for_phase3 = filter_bullets_for_email3(phase2_merged_json)
+                        # Get Phase 3 primary model from system config
+                        primary_model = get_phase3_primary_model()
+                        LOG.info(f"[{ticker}] Phase 3 primary model: {primary_model}")
 
-                            # Get Phase 3 primary model from system config
-                            primary_model = get_phase3_primary_model()
-                            LOG.info(f"[{ticker}] Phase 3 primary model: {primary_model}")
+                        # Generate Phase 3 with FILTERED JSON (returns merged JSON with integrated content)
+                        phase3_merged_json, phase3_usage = generate_executive_summary_phase3(
+                            ticker=ticker,
+                            phase2_merged_json=filtered_json_for_phase3,
+                            anthropic_api_key=ANTHROPIC_API_KEY,
+                            gemini_api_key=GEMINI_API_KEY,
+                            primary_model=primary_model
+                        )
 
-                            # Generate Phase 3 with FILTERED JSON (returns merged JSON with integrated content)
-                            phase3_merged_json, phase3_usage = generate_executive_summary_phase3(
+                        # Track Phase 3 cost based on which model was used
+                        if phase3_usage:
+                            phase3_model = phase3_usage.get("model", "")
+                            if "claude" in phase3_model.lower():
+                                # Claude primary succeeded (uses Sonnet 4.5 for Phase 3)
+                                calculate_claude_api_cost(phase3_usage, "executive_summary_phase3", model_name=phase3_model)
+                            elif "gemini" in phase3_model.lower():
+                                # Gemini fallback succeeded (uses Pro for Phase 3)
+                                calculate_gemini_api_cost(phase3_usage, "executive_summary_phase3", model="pro", model_name=phase3_model)
+                            else:
+                                # Unknown or missing model (shouldn't happen, but log warning)
+                                LOG.warning(f"[{ticker}] Phase 3 cost tracking: Unknown model '{phase3_model}', skipping cost tracking")
+
+                        if phase3_merged_json:
+                            # Update database with Phase 3 content
+                            success = update_executive_summary_with_phase3(
                                 ticker=ticker,
-                                phase2_merged_json=filtered_json_for_phase3,
-                                anthropic_api_key=ANTHROPIC_API_KEY,
-                                gemini_api_key=GEMINI_API_KEY,
-                                primary_model=primary_model
+                                phase3_merged_json=phase3_merged_json
                             )
 
-                            # Track Phase 3 cost based on which model was used
-                            if phase3_usage:
-                                phase3_model = phase3_usage.get("model", "")
-                                if "claude" in phase3_model.lower():
-                                    # Claude primary succeeded (uses Sonnet 4.5 for Phase 3)
-                                    calculate_claude_api_cost(phase3_usage, "executive_summary_phase3", model_name=phase3_model)
-                                elif "gemini" in phase3_model.lower():
-                                    # Gemini fallback succeeded (uses Pro for Phase 3)
-                                    calculate_gemini_api_cost(phase3_usage, "executive_summary_phase3", model="pro", model_name=phase3_model)
-                                else:
-                                    # Unknown or missing model (shouldn't happen, but log warning)
-                                    LOG.warning(f"[{ticker}] Phase 3 cost tracking: Unknown model '{phase3_model}', skipping cost tracking")
+                            if success:
+                                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 3 content saved to database")
 
-                            if phase3_merged_json:
-                                # Update database with Phase 3 content
-                                success = update_executive_summary_with_phase3(
-                                    ticker=ticker,
-                                    phase3_merged_json=phase3_merged_json
+                                # Send Email #3 (Stock Intelligence) immediately to admin (test mode)
+                                LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #3 (Stock Intelligence) to admin (test mode)...")
+                                editorial_result = send_editorial_intelligence_report(
+                                    hours=int(minutes/60),
+                                    tickers=[ticker],
+                                    recipient_email=DIGEST_TO,
+                                    summary_date=datetime.now().date()
                                 )
 
-                                if success:
-                                    LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 3 content saved to database")
-
-                                    # Send Email #4 (Official Stock Intelligence) immediately to admin (test mode)
-                                    LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #4 (Official Stock Intelligence) to admin (test mode)...")
-                                    editorial_result = send_editorial_intelligence_report(
-                                        hours=int(minutes/60),
-                                        tickers=[ticker],
-                                        recipient_email=DIGEST_TO,
-                                        summary_date=datetime.now().date()
-                                    )
-
-                                    if editorial_result and editorial_result.get('status') == 'sent':
-                                        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #4 (Official Stock Intelligence) sent to admin")
-                                    else:
-                                        LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Email #4 send failed (non-fatal)")
+                                if editorial_result and editorial_result.get('status') == 'sent':
+                                    LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #3 (Stock Intelligence) sent to admin")
                                 else:
-                                    LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Failed to update database with Phase 3")
+                                    LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Email #3 send failed (non-fatal)")
                             else:
-                                LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Phase 3 returned no merged JSON")
+                                LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Failed to update database with Phase 3")
                         else:
-                            LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No Phase 2 JSON found for Phase 3 processing")
+                            LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Phase 3 returned no merged JSON")
+                    else:
+                        LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No Phase 2 JSON found for Phase 3 processing")
 
-                    except Exception as e:
-                        LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Phase 3 generation/send failed: {e}", exc_info=True)
-                        # Non-fatal - Email #3 already sent, continue to GitHub commit
-                    # ========== END Phase 3 ==========
-
-                else:
-                    LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Email #3 returned no result")
+                except Exception as e:
+                    LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Phase 3 generation/send failed: {e}", exc_info=True)
+                    # Non-fatal - Email #2 already sent to admin, continue to GitHub commit
+                # ========== END Phase 3 ==========
         except Exception as e:
-            LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Email #3 failed: {e}")
-            # Continue to GitHub commit even if Email #3 fails (Option A)
+            LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Digest phase failed: {e}")
+            # Continue to GitHub commit even if digest fails (Option A)
 
         # Check if cancelled after Phase 3
         with db() as conn, conn.cursor() as cur:
             cur.execute("SELECT status FROM ticker_processing_jobs WHERE job_id = %s", (job_id,))
             current_status = cur.fetchone()
             if current_status and current_status['status'] == 'cancelled':
-                LOG.warning(f"[{ticker}] 🚫 [JOB {job_id}] Job cancelled after Email #3, exiting")
+                LOG.warning(f"[{ticker}] 🚫 [JOB {job_id}] Job cancelled after digest, exiting")
                 return
 
         # COMMIT METADATA TO GITHUB after all emails sent
@@ -26812,16 +26736,16 @@ async def rerun_ticker_api(request: Request):
 @APP.post("/api/regenerate-email")
 async def regenerate_email_api(request: Request):
     """
-    Regenerate Email #3 for a ticker using the SAME articles from the original run.
+    Regenerate user-facing Email #3 for a ticker using the SAME articles from the original run.
 
     This endpoint:
     1. Fetches original article IDs from executive_summaries table
     2. Fetches those exact articles with AI summaries
-    3. Regenerates executive summary using Claude AI
+    3. Regenerates executive summary using AI (Phase 1 + Phase 2 + Phase 3)
     4. Saves new summary to database
-    5. Generates new Email #3 HTML
+    5. Generates new Email #3 HTML (user-facing)
     6. Updates email_queue
-    7. Sends preview to admin
+    7. Sends Email #2 (Content QA) + Email #3 preview to admin
 
     Key: Uses article IDs as source of truth (not date filters).
     """
@@ -26837,7 +26761,7 @@ async def regenerate_email_api(request: Request):
         return {"status": "error", "message": "Ticker required"}
 
     try:
-        LOG.info(f"🔄 [{ticker}] Regenerating Email #3 for CURRENT_DATE (UTC)")
+        LOG.info(f"🔄 [{ticker}] Regenerating user-facing Email #3 for CURRENT_DATE (UTC)")
 
         # Step 1: Fetch ticker config
         config = get_ticker_config(ticker)
@@ -27129,32 +27053,9 @@ async def regenerate_email_api(request: Request):
             LOG.error(f"Stacktrace: {traceback.format_exc()}")
             LOG.info(f"[{ticker}] Continuing with Email #3 generation despite Email #2 failure")
 
-        # Step 8: Generate Email #3 (Phase 2 Enrichment QA) - FOR ADMIN ONLY
-        email3_data = generate_email_html_core(
-            ticker=ticker,
-            hours=hours,
-            flagged_article_ids=flagged_article_ids,
-            recipient_email=None  # Use placeholder
-        )
-
         admin_email = os.getenv("ADMIN_EMAIL")
 
-        # Step 9: Send Email #3 preview to admin (DON'T queue it)
-        if email3_data and admin_email:
-            send_success = send_email(
-                subject=email3_data['subject'],
-                html_body=email3_data['html'],
-                to=admin_email
-            )
-
-            if send_success:
-                LOG.info(f"✅ [{ticker}] Email #3 (Phase 2 QA) sent to admin")
-            else:
-                LOG.warning(f"⚠️ [{ticker}] Failed to send Email #3 preview")
-        else:
-            LOG.warning(f"⚠️ [{ticker}] Skipping Email #3 send (no data or no admin email)")
-
-        # Step 10: Generate Phase 3 context-integrated JSON and queue Email #4
+        # Step 8: Generate Phase 3 context-integrated JSON and queue Email #3
         LOG.info(f"[{ticker}] 🎨 Generating Phase 3 context-integrated JSON...")
         try:
             from modules.executive_summary_phase3 import generate_executive_summary_phase3
@@ -27213,16 +27114,16 @@ async def regenerate_email_api(request: Request):
                     if success:
                         LOG.info(f"✅ [{ticker}] Phase 3 content saved to database")
 
-                        # Generate Email #4 HTML and queue it
-                        LOG.info(f"[{ticker}] 💾 Generating and queueing Email #4...")
-                        email4_data = generate_email_html_core_editorial(
+                        # Generate Email #3 HTML and queue it
+                        LOG.info(f"[{ticker}] 💾 Generating and queueing Email #3...")
+                        email3_data = generate_email_html_core_editorial(
                             ticker=ticker,
                             hours=hours,
                             recipient_email=None  # Use {{UNSUBSCRIBE_TOKEN}} placeholder
                         )
 
-                        if email4_data:
-                            # Update email_queue with Email #4
+                        if email3_data:
+                            # Update email_queue with Email #3
                             with db() as conn, conn.cursor() as cur:
                                 cur.execute("""
                                     UPDATE email_queue
@@ -27234,25 +27135,25 @@ async def regenerate_email_api(request: Request):
                                         error_message = NULL
                                     WHERE ticker = %s
                                 """, (
-                                    email4_data['html'],
-                                    email4_data['subject'],
-                                    email4_data['article_count'],
+                                    email3_data['html'],
+                                    email3_data['subject'],
+                                    email3_data['article_count'],
                                     ticker
                                 ))
                                 rows_updated = cur.rowcount
                                 conn.commit()
 
                             if rows_updated > 0:
-                                LOG.info(f"✅ [{ticker}] Email #4 updated in queue")
+                                LOG.info(f"✅ [{ticker}] Email #3 updated in queue")
 
-                                # Send Email #4 preview to admin
+                                # Send Email #3 preview to admin
                                 if admin_email:
-                                    send_email(email4_data['subject'], email4_data['html'], to=admin_email)
-                                    LOG.info(f"✅ [{ticker}] Email #4 preview sent to admin")
+                                    send_email(email3_data['subject'], email3_data['html'], to=admin_email)
+                                    LOG.info(f"✅ [{ticker}] Email #3 preview sent to admin")
                             else:
-                                LOG.warning(f"⚠️ [{ticker}] Ticker not found in queue, unable to update Email #4")
+                                LOG.warning(f"⚠️ [{ticker}] Ticker not found in queue, unable to update Email #3")
                         else:
-                            LOG.error(f"❌ [{ticker}] Failed to generate Email #4 HTML")
+                            LOG.error(f"❌ [{ticker}] Failed to generate Email #3 HTML")
                     else:
                         LOG.error(f"❌ [{ticker}] Failed to update database with Phase 3")
                 else:
@@ -27261,11 +27162,11 @@ async def regenerate_email_api(request: Request):
                 LOG.warning(f"⚠️ [{ticker}] No Phase 2 JSON found for Phase 3 processing")
 
         except Exception as e:
-            LOG.error(f"❌ [{ticker}] Phase 3 generation/send failed: {e}", exc_info=True)
-            # Non-fatal - Email #3 sent to admin
+            LOG.error(f"❌ [{ticker}] Phase 3 generation/queue failed: {e}", exc_info=True)
+            # Non-fatal - Email #2 sent to admin
 
         # Return data from Email #3 (for article count in UI message)
-        article_count = email3_data.get('article_count', 0) if email3_data else 0
+        article_count = email3_data.get('article_count', 0) if 'email3_data' in locals() and email3_data else 0
 
         return {
             "status": "success",

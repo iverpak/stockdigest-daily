@@ -17854,12 +17854,17 @@ async def process_ticker_job(job: dict):
                         else:
                             LOG.info(f"[{ticker}] ✅ [JOB {job_id}] No bullets filtered (all {original_count} are high quality)")
 
+                        # Get Phase 3 primary model from system config
+                        primary_model = get_phase3_primary_model()
+                        LOG.info(f"[{ticker}] Phase 3 primary model: {primary_model}")
+
                         # Generate Phase 3 with FILTERED JSON (returns merged JSON with integrated content)
                         phase3_merged_json, phase3_usage = generate_executive_summary_phase3(
                             ticker=ticker,
                             phase2_merged_json=filtered_json_for_phase3,
                             anthropic_api_key=ANTHROPIC_API_KEY,
-                            gemini_api_key=GEMINI_API_KEY
+                            gemini_api_key=GEMINI_API_KEY,
+                            primary_model=primary_model
                         )
 
                         # Track Phase 3 cost based on which model was used
@@ -17966,12 +17971,17 @@ async def process_ticker_job(job: dict):
                             LOG.info(f"[{ticker}] 🔍 [JOB {job_id}] Filtering bullets before Phase 3...")
                             filtered_json_for_phase3 = filter_bullets_for_email3(phase2_merged_json)
 
+                            # Get Phase 3 primary model from system config
+                            primary_model = get_phase3_primary_model()
+                            LOG.info(f"[{ticker}] Phase 3 primary model: {primary_model}")
+
                             # Generate Phase 3 with FILTERED JSON (returns merged JSON with integrated content)
                             phase3_merged_json, phase3_usage = generate_executive_summary_phase3(
                                 ticker=ticker,
                                 phase2_merged_json=filtered_json_for_phase3,
                                 anthropic_api_key=ANTHROPIC_API_KEY,
-                                gemini_api_key=GEMINI_API_KEY
+                                gemini_api_key=GEMINI_API_KEY,
+                                primary_model=primary_model
                             )
 
                             # Track Phase 3 cost based on which model was used
@@ -23653,6 +23663,31 @@ def get_lookback_minutes() -> int:
         LOG.error(f"Failed to fetch lookback_minutes: {e}, using default 1440")
         return 1440  # 1 day default
 
+def get_phase3_primary_model() -> str:
+    """
+    Get Phase 3 primary model from system_config.
+
+    Returns:
+        'claude' or 'gemini' (defaults to 'claude' if not found)
+    """
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("SELECT value FROM system_config WHERE key = 'phase3_primary_model'")
+            row = cur.fetchone()
+            if row:
+                value = row['value']
+                if value in ['claude', 'gemini']:
+                    return value
+                else:
+                    LOG.warning(f"Invalid phase3_primary_model value: {value}, defaulting to 'claude'")
+                    return 'claude'
+            else:
+                LOG.info("No phase3_primary_model in system_config, using default 'claude'")
+                return 'claude'  # Default
+    except Exception as e:
+        LOG.error(f"Failed to fetch phase3_primary_model: {e}, using default 'claude'")
+        return 'claude'  # Default
+
 @APP.get("/admin")
 def admin_dashboard(request: Request, token: str = Query(...)):
     """Admin dashboard landing page"""
@@ -28182,12 +28217,17 @@ async def regenerate_email_api(request: Request):
                 LOG.info(f"[{ticker}] 🔍 Filtering bullets before Phase 3...")
                 filtered_json_for_phase3 = filter_bullets_for_email3(phase2_merged_json)
 
+                # Get Phase 3 primary model from system config
+                primary_model = get_phase3_primary_model()
+                LOG.info(f"[{ticker}] Phase 3 primary model: {primary_model}")
+
                 # Generate Phase 3 with FILTERED JSON (returns merged JSON with integrated content)
                 phase3_merged_json, phase3_usage = generate_executive_summary_phase3(
                     ticker=ticker,
                     phase2_merged_json=filtered_json_for_phase3,
                     anthropic_api_key=ANTHROPIC_API_KEY,
-                    gemini_api_key=GEMINI_API_KEY
+                    gemini_api_key=GEMINI_API_KEY,
+                    primary_model=primary_model
                 )
 
                 # Track Phase 3 cost based on which model was used
@@ -29240,6 +29280,72 @@ async def set_lookback_window_api(
 
     except Exception as e:
         LOG.error(f"Failed to update lookback window: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.get("/api/get-phase3-model")
+async def get_phase3_model_api(token: str = Query(...)):
+    """Get current Phase 3 primary model setting"""
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        model = get_phase3_primary_model()
+
+        if model == 'claude':
+            label = "Claude Sonnet 4.5 (primary) with Gemini 2.5 Pro fallback"
+        else:  # gemini
+            label = "Gemini 2.5 Pro (primary) with Claude Sonnet 4.5 fallback"
+
+        return {
+            "status": "success",
+            "primary_model": model,
+            "label": label
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to get Phase 3 model: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/set-phase3-model")
+async def set_phase3_model_api(request: Request):
+    """Update Phase 3 primary model setting"""
+    # Check admin token from header
+    token = request.headers.get('X-Admin-Token')
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        body = await request.json()
+        model = body.get('model')
+
+        if not model:
+            return {"status": "error", "message": "Missing 'model' parameter"}
+
+        if model not in ['claude', 'gemini']:
+            return {"status": "error", "message": "Invalid model. Must be 'claude' or 'gemini'"}
+
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO system_config (key, value, description, updated_by, updated_at)
+                VALUES ('phase3_primary_model', %s, 'Phase 3 primary AI model: claude or gemini', 'admin_dashboard', NOW())
+                ON CONFLICT (key) DO UPDATE SET value = %s, updated_at = NOW(), updated_by = 'admin_dashboard'
+            """, (model, model))
+            conn.commit()
+
+        if model == 'claude':
+            message = "Phase 3 model updated to Claude Sonnet 4.5 (primary) with Gemini 2.5 Pro fallback"
+        else:
+            message = "Phase 3 model updated to Gemini 2.5 Pro (primary) with Claude Sonnet 4.5 fallback"
+
+        LOG.info(f"✅ Phase 3 model setting updated to: {model} via admin dashboard")
+
+        return {
+            "status": "success",
+            "message": message
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to set Phase 3 model: {e}")
         return {"status": "error", "message": str(e)}
 
 @APP.post("/api/cancel-ready-emails")

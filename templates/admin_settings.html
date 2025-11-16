@@ -284,6 +284,43 @@
             </div>
         </div>
 
+        <!-- Phase 3 AI Model Selection -->
+        <div class="settings-card">
+            <h2>⚡ Phase 3 AI Model</h2>
+
+            <div class="setting-group">
+                <label class="setting-label">Primary AI Model for Phase 3</label>
+                <div class="setting-description">
+                    Select primary AI model for Phase 3 context integration.
+                    Fallback model activates automatically if primary fails.
+                </div>
+
+                <div class="radio-group" style="margin: 20px 0;">
+                    <label style="display: block; margin-bottom: 15px; cursor: pointer; padding: 12px; border: 1px solid #e2e8f0; border-radius: 6px;">
+                        <input type="radio" name="phase3Model" value="claude" checked style="margin-right: 8px;">
+                        <strong>Claude Sonnet 4.5</strong> (primary) with Gemini 2.5 Pro fallback
+                    </label>
+                    <label style="display: block; cursor: pointer; padding: 12px; border: 1px solid #e2e8f0; border-radius: 6px;">
+                        <input type="radio" name="phase3Model" value="gemini" style="margin-right: 8px;">
+                        <strong>Gemini 2.5 Pro</strong> (primary) with Claude Sonnet 4.5 fallback
+                    </label>
+                </div>
+
+                <div class="button-group">
+                    <button class="btn btn-primary" onclick="savePhase3Model()">
+                        💾 Save Phase 3 Model
+                    </button>
+                </div>
+
+                <div id="phase3-model-status" class="status-message"></div>
+
+                <div class="info-box">
+                    <strong>ℹ️ Changes apply immediately</strong> to new jobs (no deployment needed).
+                    Useful for A/B testing model performance.
+                </div>
+            </div>
+        </div>
+
         <!-- Entity Management -->
         <div class="settings-card">
             <h2>🏢 Entity Management</h2>
@@ -508,8 +545,61 @@
             }
         }
 
+        // Phase 3 Model Selection Functions
+        async function loadPhase3Model() {
+            try {
+                const response = await fetch(`/api/get-phase3-model?token=${getToken()}`);
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    // Set radio button
+                    const radioButton = document.querySelector(`input[name="phase3Model"][value="${data.primary_model}"]`);
+                    if (radioButton) {
+                        radioButton.checked = true;
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading Phase 3 model:', error);
+            }
+        }
+
+        async function savePhase3Model() {
+            const statusDiv = document.getElementById('phase3-model-status');
+            const selectedModel = document.querySelector('input[name="phase3Model"]:checked').value;
+
+            try {
+                const response = await fetch('/api/set-phase3-model', {
+                    method: 'POST',
+                    headers: {
+                        'X-Admin-Token': getToken(),
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ model: selectedModel })
+                });
+
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    statusDiv.textContent = '✅ ' + result.message;
+                    statusDiv.className = 'status-message status-success';
+                    statusDiv.style.display = 'block';
+                } else {
+                    statusDiv.textContent = '❌ ' + (result.message || 'Failed to update setting');
+                    statusDiv.className = 'status-message status-error';
+                    statusDiv.style.display = 'block';
+                }
+            } catch (error) {
+                statusDiv.textContent = '❌ Error: ' + error.message;
+                statusDiv.className = 'status-message status-error';
+                statusDiv.style.display = 'block';
+            }
+        }
+
         // Load on page load
-        document.addEventListener('DOMContentLoaded', loadCurrentLookback);
+        document.addEventListener('DOMContentLoaded', function() {
+            loadCurrentLookback();
+            loadPhase3Model();
+        });
     </script>
 </body>
 </html>

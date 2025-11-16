@@ -312,13 +312,14 @@ def generate_executive_summary_phase3(
     ticker: str,
     phase2_merged_json: Dict,
     anthropic_api_key: str,
-    gemini_api_key: str = None
+    gemini_api_key: str = None,
+    primary_model: str = 'claude'
 ) -> Tuple[Optional[Dict], Optional[Dict]]:
     """
-    Generate Phase 3 integrated content with Claude Sonnet 4.5 (primary) and Gemini 2.5 Pro fallback.
+    Generate Phase 3 integrated content with configurable primary model and fallback.
 
-    This is the main entry point for Phase 3 generation. It attempts Claude first,
-    then falls back to Gemini 2.5 Pro if Claude fails.
+    This is the main entry point for Phase 3 generation. Primary model is determined
+    by the primary_model parameter ('claude' or 'gemini').
 
     NEW: Phase 3 returns JSON (not markdown) with only integrated content.
     Result is merged with Phase 2 using bullet_id matching.
@@ -326,59 +327,106 @@ def generate_executive_summary_phase3(
     Args:
         ticker: Stock ticker
         phase2_merged_json: Complete merged JSON from Phase 1+2
-        anthropic_api_key: Anthropic API key for Claude fallback
+        anthropic_api_key: Anthropic API key
         gemini_api_key: Google Gemini API key (optional)
+        primary_model: Primary AI model ('claude' or 'gemini', defaults to 'claude')
 
     Returns:
         Tuple of (final_merged_json, usage_dict) where:
             - final_merged_json: Phase 2 metadata + Phase 3 integrated content (or None if failed)
             - usage_dict: {"input_tokens": X, "output_tokens": Y} or {"prompt_tokens": X, "completion_tokens": Y} or None
     """
-    # Try Claude Sonnet 4.5 first (primary)
-    if anthropic_api_key:
-        LOG.info(f"[{ticker}] Phase 3: Attempting Claude Sonnet 4.5 (primary)")
-        claude_result = _generate_phase3_claude(
-            ticker=ticker,
-            phase2_merged_json=phase2_merged_json,
-            anthropic_api_key=anthropic_api_key
-        )
+    # Choose provider order based on primary_model setting
+    if primary_model == 'gemini':
+        # Try Gemini 2.5 Pro first (primary)
+        if gemini_api_key:
+            LOG.info(f"[{ticker}] Phase 3: Attempting Gemini 2.5 Pro (primary)")
+            gemini_result = _generate_phase3_gemini(
+                ticker=ticker,
+                phase2_merged_json=phase2_merged_json,
+                gemini_api_key=gemini_api_key
+            )
 
-        final_merged, usage = claude_result
-        if final_merged and usage:
-            LOG.info(f"[{ticker}] ✅ Phase 3: Claude Sonnet 4.5 succeeded")
-            return final_merged, usage
+            final_merged, usage = gemini_result
+            if final_merged and usage:
+                LOG.info(f"[{ticker}] ✅ Phase 3: Gemini 2.5 Pro succeeded")
+                # Convert Gemini usage format to match Claude format for compatibility
+                if "prompt_tokens" in usage:
+                    usage = {
+                        "input_tokens": usage["prompt_tokens"],
+                        "output_tokens": usage["completion_tokens"],
+                        "model": usage.get("model", "gemini-2.5-pro")  # Preserve model info
+                    }
+                return final_merged, usage
+            else:
+                LOG.warning(f"[{ticker}] ⚠️ Phase 3: Gemini 2.5 Pro failed, falling back to Claude Sonnet 4.5")
         else:
-            LOG.warning(f"[{ticker}] ⚠️ Phase 3: Claude Sonnet 4.5 failed, falling back to Gemini 2.5 Pro")
-    else:
-        LOG.warning(f"[{ticker}] ⚠️ No Anthropic API key provided, using Gemini 2.5 Pro only")
+            LOG.warning(f"[{ticker}] ⚠️ No Gemini API key provided, using Claude Sonnet 4.5 only")
 
-    # Fall back to Gemini 2.5 Pro
-    if gemini_api_key:
-        LOG.info(f"[{ticker}] Phase 3: Using Gemini 2.5 Pro (fallback)")
-        gemini_result = _generate_phase3_gemini(
-            ticker=ticker,
-            phase2_merged_json=phase2_merged_json,
-            gemini_api_key=gemini_api_key
-        )
+        # Fall back to Claude Sonnet 4.5
+        if anthropic_api_key:
+            LOG.info(f"[{ticker}] Phase 3: Using Claude Sonnet 4.5 (fallback)")
+            claude_result = _generate_phase3_claude(
+                ticker=ticker,
+                phase2_merged_json=phase2_merged_json,
+                anthropic_api_key=anthropic_api_key
+            )
 
-        final_merged, usage = gemini_result
-        if final_merged and usage:
-            LOG.info(f"[{ticker}] ✅ Phase 3: Gemini 2.5 Pro succeeded (fallback)")
-            # Convert Gemini usage format to match Claude format for compatibility
-            if "prompt_tokens" in usage:
-                usage = {
-                    "input_tokens": usage["prompt_tokens"],
-                    "output_tokens": usage["completion_tokens"],
-                    "model": usage.get("model", "gemini-2.5-pro")  # Preserve model info
-                }
-            return final_merged, usage
+            final_merged, usage = claude_result
+            if final_merged and usage:
+                LOG.info(f"[{ticker}] ✅ Phase 3: Claude Sonnet 4.5 succeeded (fallback)")
+                return final_merged, usage
+            else:
+                LOG.error(f"[{ticker}] ❌ Phase 3: Claude Sonnet 4.5 also failed")
         else:
-            LOG.error(f"[{ticker}] ❌ Phase 3: Gemini 2.5 Pro also failed")
-    else:
-        LOG.error(f"[{ticker}] ❌ No Gemini API key provided for fallback")
+            LOG.error(f"[{ticker}] ❌ No Anthropic API key provided for fallback")
+
+    else:  # primary_model == 'claude' (default)
+        # Try Claude Sonnet 4.5 first (primary)
+        if anthropic_api_key:
+            LOG.info(f"[{ticker}] Phase 3: Attempting Claude Sonnet 4.5 (primary)")
+            claude_result = _generate_phase3_claude(
+                ticker=ticker,
+                phase2_merged_json=phase2_merged_json,
+                anthropic_api_key=anthropic_api_key
+            )
+
+            final_merged, usage = claude_result
+            if final_merged and usage:
+                LOG.info(f"[{ticker}] ✅ Phase 3: Claude Sonnet 4.5 succeeded")
+                return final_merged, usage
+            else:
+                LOG.warning(f"[{ticker}] ⚠️ Phase 3: Claude Sonnet 4.5 failed, falling back to Gemini 2.5 Pro")
+        else:
+            LOG.warning(f"[{ticker}] ⚠️ No Anthropic API key provided, using Gemini 2.5 Pro only")
+
+        # Fall back to Gemini 2.5 Pro
+        if gemini_api_key:
+            LOG.info(f"[{ticker}] Phase 3: Using Gemini 2.5 Pro (fallback)")
+            gemini_result = _generate_phase3_gemini(
+                ticker=ticker,
+                phase2_merged_json=phase2_merged_json,
+                gemini_api_key=gemini_api_key
+            )
+
+            final_merged, usage = gemini_result
+            if final_merged and usage:
+                LOG.info(f"[{ticker}] ✅ Phase 3: Gemini 2.5 Pro succeeded (fallback)")
+                # Convert Gemini usage format to match Claude format for compatibility
+                if "prompt_tokens" in usage:
+                    usage = {
+                        "input_tokens": usage["prompt_tokens"],
+                        "output_tokens": usage["completion_tokens"],
+                        "model": usage.get("model", "gemini-2.5-pro")  # Preserve model info
+                    }
+                return final_merged, usage
+            else:
+                LOG.error(f"[{ticker}] ❌ Phase 3: Gemini 2.5 Pro also failed")
+        else:
+            LOG.error(f"[{ticker}] ❌ No Gemini API key provided for fallback")
 
     # Both failed
-    LOG.error(f"[{ticker}] ❌ Phase 3: Both Claude and Gemini failed - cannot integrate context")
+    LOG.error(f"[{ticker}] ❌ Phase 3: Both providers failed for Phase 3 - cannot integrate context")
     return None, None
 
 

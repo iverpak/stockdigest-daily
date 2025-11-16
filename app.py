@@ -14657,7 +14657,7 @@ def generate_email_html_core_editorial(
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{ticker} Editorial Intelligence Report</title>
+    <title>{ticker} Stock Intelligence Report</title>
     <style>
         @media only screen and (max-width: 600px) {{
             .content-padding {{ padding: 16px !important; }}

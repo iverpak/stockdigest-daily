@@ -628,7 +628,7 @@
                                 ${ticker.status === 'ready' ? `<button class="btn btn-warning btn-sm" onclick="cancelTicker('${ticker.ticker}')">❌ Cancel</button>` : ''}
                                 ${ticker.status === 'failed' || ticker.status === 'cancelled' ? `<button class="btn btn-primary btn-sm" onclick="rerunTicker('${ticker.ticker}')">🔄 Retry</button>` : ''}
                                 ${ticker.status !== 'processing' ? `
-                                    <button class="btn btn-warning btn-sm" onclick="regenerateEmail('${ticker.ticker}')" title="Regenerate executive summary and Email #3">♻️ Regenerate Email #3</button>
+                                    <button class="btn btn-warning btn-sm" onclick="regenerateEmail('${ticker.ticker}')" title="Regenerate user-facing email report">♻️ Regenerate User Report</button>
                                     <button class="btn btn-info btn-sm" onclick="reviewQuality('${ticker.ticker}')" title="Review summary quality against articles and filings">🔍 Review All</button>
                                     <button class="btn btn-secondary btn-sm btn-wrapped" onclick="viewEmail1('${ticker.ticker}')">
                                         <span class="btn-wrapped-line1">QA:</span>
@@ -640,7 +640,7 @@
                                     </button>
                                     <button class="btn btn-secondary btn-sm btn-wrapped" onclick="viewEmail('${ticker.ticker}')">
                                         <span class="btn-wrapped-line1">VIEW</span>
-                                        <span class="btn-wrapped-line2">Email</span>
+                                        <span class="btn-wrapped-line2">User Email</span>
                                     </button>
                                 ` : ''}
                             </div>
@@ -1048,7 +1048,7 @@
         }
 
         async function regenerateEmail(ticker) {
-            if (!confirm(`♻️ Regenerate Email #3 for ${ticker}?\n\nThis will:\n• Re-generate executive summary using existing articles\n• Update Email #3 HTML in queue\n• Send preview to your inbox\n\nEstimated time: 30-60 seconds\n\nContinue?`)) return;
+            if (!confirm(`♻️ Regenerate User Report for ${ticker}?\n\nThis will:\n• Re-generate Phase 1+2+3 executive summary\n• Update user-facing email in queue\n• Send QA + preview emails to your inbox\n\nEstimated time: 30-60 seconds\n\nContinue?`)) return;
 
             try {
                 // Show loading state
@@ -1070,7 +1070,7 @@
                 btn.disabled = false;
 
                 if (result.status === 'success') {
-                    alert(`✅ Email #3 regenerated for ${ticker}\n\n• ${result.article_count} articles analyzed\n• Preview sent to your inbox\n• Email queue updated\n\nRefresh the page to see updated content.`);
+                    alert(`✅ User report regenerated for ${ticker}\n\n• ${result.article_count} articles analyzed\n• Preview emails sent to your inbox\n• Email queue updated\n\nRefresh the page to see updated content.`);
                     fetchQueueStatus();
                 } else {
                     alert('Error: ' + result.message);

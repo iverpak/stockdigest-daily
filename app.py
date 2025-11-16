@@ -14269,7 +14269,7 @@ def generate_email_html_core(
                             <table role="presentation" style="width: 100%; border-collapse: collapse;">
                                 <tr>
                                     <td style="width: 58%;">
-                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">STOCK INTELLIGENCE</div>
+                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">PHASE 2 ENRICHMENT QA</div>
                                     </td>
                                     <td align="right" style="width: 42%;">
                                         <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">{current_date} • {market_status}</div>
@@ -14362,7 +14362,7 @@ def generate_email_html_core(
 </body>
 </html>'''
 
-    subject = f"📊 Stock Intelligence: {company_name} ({ticker}) - {analyzed_count} articles analyzed"
+    subject = f"📋 Phase 2 Enrichment QA: {company_name} ({ticker}) - Pre-Integration Summary"
 
     return {
         "html": html,
@@ -14681,7 +14681,7 @@ def generate_email_html_core_editorial(
                             <table role="presentation" style="width: 100%; border-collapse: collapse;">
                                 <tr>
                                     <td style="width: 58%;">
-                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">EDITORIAL STOCK INTELLIGENCE</div>
+                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">STOCK INTELLIGENCE</div>
                                     </td>
                                     <td align="right" style="width: 42%;">
                                         <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">{current_date} • {market_status}</div>
@@ -14774,8 +14774,8 @@ def generate_email_html_core_editorial(
 </body>
 </html>'''
 
-    # ========== DIFFERENT: Change subject line ==========
-    subject = f"📝 [EDITORIAL BETA] Stock Intelligence: {company_name} ({ticker})"
+    # ========== Official user-facing email subject ==========
+    subject = f"📊 Stock Intelligence: {company_name} ({ticker}) - {analyzed_count} articles analyzed"
 
     return {
         "html": html,
@@ -16953,19 +16953,18 @@ async def process_ticker_job(job: dict):
 
         try:
             if mode == 'daily':
-                # DAILY WORKFLOW: Save Email #3 to queue for admin review
-                LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving Email #3 to queue ({len(recipients)} recipients)...")
-                success = save_email_to_queue(
-                    ticker=ticker,
-                    recipients=recipients,
+                # DAILY WORKFLOW: Send Email #3 (Phase 2 Enrichment QA) to admin only
+                LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #3 (Phase 2 QA) to admin...")
+                user_report_result = send_user_intelligence_report(
                     hours=int(minutes/60),
+                    tickers=[ticker],
                     flagged_article_ids=flagged_article_ids,
-                    mode=mode
+                    recipient_email=DIGEST_TO  # Admin only
                 )
-                if success:
-                    LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #3 saved to queue (status=ready)")
+                if user_report_result:
+                    LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #3 (Phase 2 QA) sent to admin")
                 else:
-                    LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Failed to save Email #3 to queue")
+                    LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Email #3 send failed (non-fatal)")
 
                 # ========== Phase 3 Generation + Email #4 (DAILY MODE) ==========
                 LOG.info(f"[{ticker}] 🎨 [JOB {job_id}] Generating Phase 3 context-integrated JSON...")
@@ -17046,38 +17045,53 @@ async def process_ticker_job(job: dict):
                             if success:
                                 LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 3 content saved to database")
 
-                                # Send Email #4 immediately to all users (daily mode - A/B testing phase)
+                                # Queue Email #4 (user-facing) for 8:30 AM send
                                 if not recipients:
-                                    LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No recipients for Email #4, skipping")
+                                    LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No recipients for Email #4, skipping queue save")
                                 else:
-                                    LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #4 (Editorial) to {len(recipients)} recipients...")
+                                    LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving Email #4 to queue ({len(recipients)} recipients)...")
 
-                                    sent_count = 0
-                                    failed_count = 0
+                                    # Generate Email #4 HTML with placeholder token
+                                    email4_data = generate_email_html_core_editorial(
+                                        ticker=ticker,
+                                        hours=int(minutes/60),
+                                        recipient_email=None  # Use {{UNSUBSCRIBE_TOKEN}} placeholder
+                                    )
 
-                                    for recipient in recipients:
-                                        try:
-                                            # Only BCC admin if recipient is NOT admin (avoid duplicate)
-                                            bcc = DIGEST_TO if recipient != DIGEST_TO else None
+                                    if email4_data:
+                                        # Save Email #4 to email_queue table
+                                        config = get_ticker_config(ticker)
+                                        company_name = config.get('company_name', ticker) if config else ticker
+                                        is_production = (mode == 'daily')
 
-                                            editorial_result = send_editorial_intelligence_report(
-                                                hours=int(minutes/60),
-                                                tickers=[ticker],
-                                                recipient_email=recipient,
-                                                bcc=bcc  # BCC admin for monitoring (unless admin is recipient)
-                                            )
+                                        with db() as conn, conn.cursor() as cur:
+                                            cur.execute("""
+                                                INSERT INTO email_queue (
+                                                    ticker, company_name, recipients, email_html, email_subject,
+                                                    article_count, status, is_production, heartbeat, created_at
+                                                )
+                                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                                                ON CONFLICT (ticker) DO UPDATE
+                                                SET company_name = EXCLUDED.company_name,
+                                                    recipients = EXCLUDED.recipients,
+                                                    email_html = EXCLUDED.email_html,
+                                                    email_subject = EXCLUDED.email_subject,
+                                                    article_count = EXCLUDED.article_count,
+                                                    status = 'ready',
+                                                    error_message = NULL,
+                                                    is_production = EXCLUDED.is_production,
+                                                    heartbeat = NOW(),
+                                                    updated_at = NOW()
+                                            """, (
+                                                ticker, company_name, recipients,
+                                                email4_data['html'], email4_data['subject'],
+                                                email4_data['article_count'], 'ready', is_production
+                                            ))
+                                            conn.commit()
 
-                                            if editorial_result and editorial_result.get('status') == 'sent':
-                                                sent_count += 1
-                                                LOG.info(f"[{ticker}] ✅ Email #4 sent to {recipient}")
-                                            else:
-                                                failed_count += 1
-                                                LOG.warning(f"[{ticker}] ⚠️ Email #4 failed for {recipient}")
-                                        except Exception as e:
-                                            failed_count += 1
-                                            LOG.error(f"[{ticker}] ❌ Email #4 send error for {recipient}: {e}")
-
-                                    LOG.info(f"[{ticker}] 📊 [JOB {job_id}] Email #4 delivery: {sent_count} sent, {failed_count} failed")
+                                        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #4 saved to queue (status=ready, {email4_data['article_count']} articles)")
+                                    else:
+                                        LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Failed to generate Email #4 HTML")
                             else:
                                 LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Failed to update database with Phase 3")
                         else:
@@ -17086,12 +17100,12 @@ async def process_ticker_job(job: dict):
                         LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No Phase 2 JSON found for Phase 3 processing")
 
                 except Exception as e:
-                    LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Phase 3 generation/send failed: {e}", exc_info=True)
-                    # Non-fatal - Email #3 already queued, continue to GitHub commit
+                    LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Phase 3 generation/queue failed: {e}", exc_info=True)
+                    # Non-fatal - Email #3 sent to admin, continue to GitHub commit
                 # ========== END Phase 3 ==========
             else:
-                # TEST WORKFLOW: Send Email #3 immediately to admin
-                LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #3 immediately (test mode)...")
+                # TEST WORKFLOW: Send Email #3 (Phase 2 Enrichment QA) immediately to admin
+                LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #3 (Phase 2 Enrichment QA) to admin (test mode)...")
                 user_report_result = send_user_intelligence_report(
                     hours=int(minutes/60),
                     tickers=[ticker],
@@ -17099,7 +17113,7 @@ async def process_ticker_job(job: dict):
                     recipient_email=DIGEST_TO
                 )
                 if user_report_result:
-                    LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #3 sent successfully")
+                    LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #3 (Phase 2 Enrichment QA) sent to admin")
                     if isinstance(user_report_result, dict):
                         LOG.info(f"   Status: {user_report_result.get('status', 'unknown')}")
 
@@ -17163,8 +17177,8 @@ async def process_ticker_job(job: dict):
                                 if success:
                                     LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 3 content saved to database")
 
-                                    # Send Email #4 immediately to admin (test mode)
-                                    LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #4 (Editorial)...")
+                                    # Send Email #4 (Official Stock Intelligence) immediately to admin (test mode)
+                                    LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #4 (Official Stock Intelligence) to admin (test mode)...")
                                     editorial_result = send_editorial_intelligence_report(
                                         hours=int(minutes/60),
                                         tickers=[ticker],
@@ -17173,7 +17187,7 @@ async def process_ticker_job(job: dict):
                                     )
 
                                     if editorial_result and editorial_result.get('status') == 'sent':
-                                        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #4 sent successfully")
+                                        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #4 (Official Stock Intelligence) sent to admin")
                                     else:
                                         LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Email #4 send failed (non-fatal)")
                                 else:
@@ -27115,63 +27129,32 @@ async def regenerate_email_api(request: Request):
             LOG.error(f"Stacktrace: {traceback.format_exc()}")
             LOG.info(f"[{ticker}] Continuing with Email #3 generation despite Email #2 failure")
 
-        # Step 8: Generate new Email #3 HTML
-        email_data = generate_email_html_core(
+        # Step 8: Generate Email #3 (Phase 2 Enrichment QA) - FOR ADMIN ONLY
+        email3_data = generate_email_html_core(
             ticker=ticker,
             hours=hours,
             flagged_article_ids=flagged_article_ids,
-            recipient_email=None  # Use placeholder for multi-recipient
+            recipient_email=None  # Use placeholder
         )
 
-        if not email_data:
-            return {"status": "error", "message": "Failed to generate Email #3 HTML"}
-
-        # Step 9: Update email_queue with new HTML
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                UPDATE email_queue
-                SET email_html = %s,
-                    email_subject = %s,
-                    article_count = %s,
-                    updated_at = NOW(),
-                    error_message = NULL
-                WHERE ticker = %s
-            """, (
-                email_data['html'],
-                email_data['subject'],
-                email_data['article_count'],
-                ticker
-            ))
-
-            rows_updated = cur.rowcount
-            conn.commit()
-
-        if rows_updated == 0:
-            return {
-                "status": "error",
-                "message": f"Ticker {ticker} not found in email queue"
-            }
-
-        LOG.info(f"✅ [{ticker}] Email queue updated")
-
-        # Step 10: Send preview to admin
         admin_email = os.getenv("ADMIN_EMAIL")
-        if admin_email:
-            preview_subject = email_data['subject']
-            preview_html = email_data['html']
 
+        # Step 9: Send Email #3 preview to admin (DON'T queue it)
+        if email3_data and admin_email:
             send_success = send_email(
-                subject=preview_subject,
-                html_body=preview_html,
+                subject=email3_data['subject'],
+                html_body=email3_data['html'],
                 to=admin_email
             )
 
             if send_success:
-                LOG.info(f"✅ [{ticker}] Preview email sent to {admin_email}")
+                LOG.info(f"✅ [{ticker}] Email #3 (Phase 2 QA) sent to admin")
             else:
-                LOG.warning(f"⚠️ [{ticker}] Failed to send preview email")
+                LOG.warning(f"⚠️ [{ticker}] Failed to send Email #3 preview")
+        else:
+            LOG.warning(f"⚠️ [{ticker}] Skipping Email #3 send (no data or no admin email)")
 
-        # Step 11: Generate Phase 3 context-integrated JSON and send Email #4
+        # Step 10: Generate Phase 3 context-integrated JSON and queue Email #4
         LOG.info(f"[{ticker}] 🎨 Generating Phase 3 context-integrated JSON...")
         try:
             from modules.executive_summary_phase3 import generate_executive_summary_phase3
@@ -27230,18 +27213,46 @@ async def regenerate_email_api(request: Request):
                     if success:
                         LOG.info(f"✅ [{ticker}] Phase 3 content saved to database")
 
-                        # Send Email #4 immediately
-                        LOG.info(f"[{ticker}] 📧 Sending Email #4 (Editorial)...")
-                        editorial_result = send_editorial_intelligence_report(
+                        # Generate Email #4 HTML and queue it
+                        LOG.info(f"[{ticker}] 💾 Generating and queueing Email #4...")
+                        email4_data = generate_email_html_core_editorial(
+                            ticker=ticker,
                             hours=hours,
-                            tickers=[ticker],
-                            recipient_email=admin_email
+                            recipient_email=None  # Use {{UNSUBSCRIBE_TOKEN}} placeholder
                         )
 
-                        if editorial_result and editorial_result.get('status') == 'sent':
-                            LOG.info(f"✅ [{ticker}] Email #4 sent successfully")
+                        if email4_data:
+                            # Update email_queue with Email #4
+                            with db() as conn, conn.cursor() as cur:
+                                cur.execute("""
+                                    UPDATE email_queue
+                                    SET email_html = %s,
+                                        email_subject = %s,
+                                        article_count = %s,
+                                        status = 'ready',
+                                        updated_at = NOW(),
+                                        error_message = NULL
+                                    WHERE ticker = %s
+                                """, (
+                                    email4_data['html'],
+                                    email4_data['subject'],
+                                    email4_data['article_count'],
+                                    ticker
+                                ))
+                                rows_updated = cur.rowcount
+                                conn.commit()
+
+                            if rows_updated > 0:
+                                LOG.info(f"✅ [{ticker}] Email #4 updated in queue")
+
+                                # Send Email #4 preview to admin
+                                if admin_email:
+                                    send_email(email4_data['subject'], email4_data['html'], to=admin_email)
+                                    LOG.info(f"✅ [{ticker}] Email #4 preview sent to admin")
+                            else:
+                                LOG.warning(f"⚠️ [{ticker}] Ticker not found in queue, unable to update Email #4")
                         else:
-                            LOG.warning(f"⚠️ [{ticker}] Email #4 send failed (non-fatal)")
+                            LOG.error(f"❌ [{ticker}] Failed to generate Email #4 HTML")
                     else:
                         LOG.error(f"❌ [{ticker}] Failed to update database with Phase 3")
                 else:
@@ -27251,13 +27262,16 @@ async def regenerate_email_api(request: Request):
 
         except Exception as e:
             LOG.error(f"❌ [{ticker}] Phase 3 generation/send failed: {e}", exc_info=True)
-            # Non-fatal - Email #3 already sent
+            # Non-fatal - Email #3 sent to admin
+
+        # Return data from Email #3 (for article count in UI message)
+        article_count = email3_data.get('article_count', 0) if email3_data else 0
 
         return {
             "status": "success",
-            "message": f"Email #3 regenerated for {ticker} ({generation_phase.upper()})",
+            "message": f"User report regenerated for {ticker} ({generation_phase.upper()})",
             "ticker": ticker,
-            "article_count": email_data['article_count'],
+            "article_count": article_count,
             "preview_sent": bool(admin_email),
             "phase": generation_phase
         }
@@ -28577,7 +28591,7 @@ async def send_ticker_api(request: Request):
 
 @APP.get("/api/view-email/{ticker}")
 def view_email_api(ticker: str, token: str = Query(...)):
-    """View Email #3 (Final User Email) preview"""
+    """View Email #4 (Final User Email) preview"""
     if not check_admin_token(token):
         return HTMLResponse("Unauthorized", status_code=401)
 

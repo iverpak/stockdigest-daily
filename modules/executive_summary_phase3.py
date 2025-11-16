@@ -32,7 +32,7 @@ def _generate_phase3_gemini(
     gemini_api_key: str
 ) -> Tuple[Optional[Dict], Optional[Dict]]:
     """
-    Generate Phase 3 integrated content using Gemini 2.5 Pro (fallback).
+    Generate Phase 3 integrated content using Gemini 2.5 Pro (primary).
 
     Args:
         ticker: Stock ticker
@@ -160,7 +160,7 @@ def _generate_phase3_claude(
     anthropic_api_key: str
 ) -> Tuple[Optional[Dict], Optional[Dict]]:
     """
-    Generate Phase 3 integrated content using Claude Sonnet 4.5 (primary).
+    Generate Phase 3 integrated content using Claude Sonnet 4.5 (fallback).
 
     Args:
         ticker: Stock ticker
@@ -315,10 +315,10 @@ def generate_executive_summary_phase3(
     gemini_api_key: str = None
 ) -> Tuple[Optional[Dict], Optional[Dict]]:
     """
-    Generate Phase 3 integrated content with Claude Sonnet 4.5 (primary) and Gemini 2.5 Pro fallback.
+    Generate Phase 3 integrated content with Gemini 2.5 Pro (primary) and Claude Sonnet 4.5 fallback.
 
-    This is the main entry point for Phase 3 generation. It attempts Claude first
-    for better quality, then falls back to Gemini if Claude fails.
+    This is the main entry point for Phase 3 generation. It attempts Gemini first
+    for better quality, then falls back to Claude if Gemini fails.
 
     NEW: Phase 3 returns JSON (not markdown) with only integrated content.
     Result is merged with Phase 2 using bullet_id matching.
@@ -334,27 +334,9 @@ def generate_executive_summary_phase3(
             - final_merged_json: Phase 2 metadata + Phase 3 integrated content (or None if failed)
             - usage_dict: {"input_tokens": X, "output_tokens": Y} or {"prompt_tokens": X, "completion_tokens": Y} or None
     """
-    # Try Claude Sonnet 4.5 first (primary)
-    if anthropic_api_key:
-        LOG.info(f"[{ticker}] Phase 3: Attempting Claude Sonnet 4.5 (primary)")
-        claude_result = _generate_phase3_claude(
-            ticker=ticker,
-            phase2_merged_json=phase2_merged_json,
-            anthropic_api_key=anthropic_api_key
-        )
-
-        final_merged, usage = claude_result
-        if final_merged and usage:
-            LOG.info(f"[{ticker}] ✅ Phase 3: Claude Sonnet 4.5 succeeded")
-            return final_merged, usage
-        else:
-            LOG.warning(f"[{ticker}] ⚠️ Phase 3: Claude Sonnet 4.5 failed, falling back to Gemini 2.5 Pro")
-    else:
-        LOG.warning(f"[{ticker}] ⚠️ No Anthropic API key provided, using Gemini 2.5 Pro only")
-
-    # Fall back to Gemini 2.5 Pro
+    # Try Gemini 2.5 Pro first (primary)
     if gemini_api_key:
-        LOG.info(f"[{ticker}] Phase 3: Using Gemini 2.5 Pro (fallback)")
+        LOG.info(f"[{ticker}] Phase 3: Attempting Gemini 2.5 Pro (primary)")
         gemini_result = _generate_phase3_gemini(
             ticker=ticker,
             phase2_merged_json=phase2_merged_json,
@@ -363,7 +345,7 @@ def generate_executive_summary_phase3(
 
         final_merged, usage = gemini_result
         if final_merged and usage:
-            LOG.info(f"[{ticker}] ✅ Phase 3: Gemini 2.5 Pro succeeded (fallback)")
+            LOG.info(f"[{ticker}] ✅ Phase 3: Gemini 2.5 Pro succeeded")
             # Convert Gemini usage format to match Claude format for compatibility
             if "prompt_tokens" in usage:
                 usage = {
@@ -373,12 +355,30 @@ def generate_executive_summary_phase3(
                 }
             return final_merged, usage
         else:
-            LOG.error(f"[{ticker}] ❌ Phase 3: Gemini 2.5 Pro also failed")
+            LOG.warning(f"[{ticker}] ⚠️ Phase 3: Gemini 2.5 Pro failed, falling back to Claude Sonnet 4.5")
     else:
-        LOG.error(f"[{ticker}] ❌ No Gemini API key provided for fallback")
+        LOG.warning(f"[{ticker}] ⚠️ No Gemini API key provided, using Claude Sonnet 4.5 only")
+
+    # Fall back to Claude Sonnet 4.5
+    if anthropic_api_key:
+        LOG.info(f"[{ticker}] Phase 3: Using Claude Sonnet 4.5 (fallback)")
+        claude_result = _generate_phase3_claude(
+            ticker=ticker,
+            phase2_merged_json=phase2_merged_json,
+            anthropic_api_key=anthropic_api_key
+        )
+
+        final_merged, usage = claude_result
+        if final_merged and usage:
+            LOG.info(f"[{ticker}] ✅ Phase 3: Claude Sonnet 4.5 succeeded (fallback)")
+            return final_merged, usage
+        else:
+            LOG.error(f"[{ticker}] ❌ Phase 3: Claude Sonnet 4.5 also failed")
+    else:
+        LOG.error(f"[{ticker}] ❌ No Anthropic API key provided for fallback")
 
     # Both failed
-    LOG.error(f"[{ticker}] ❌ Phase 3: Both Claude and Gemini failed - cannot integrate context")
+    LOG.error(f"[{ticker}] ❌ Phase 3: Both Gemini and Claude failed - cannot integrate context")
     return None, None
 
 

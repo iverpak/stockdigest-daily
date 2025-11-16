@@ -901,6 +901,7 @@ SPAM_DOMAINS = {
     # General spam/low-quality aggregators (Oct 2025)
     "barchart.com", "www.barchart.com",  # Anti-bot issues, promoted from ANTIBOT_DOMAINS
     "aol.com", "www.aol.com",  # Low-quality news aggregator
+    "tradingnews.com", "www.tradingnews.com",  # Low-quality trading news aggregator
     # Retail stock picking sites - automated content and listicles (Nov 2025)
     "tradingview.com", "www.tradingview.com",  # "Why [Stock] Is Up Today" automated daily content, multi-ticker noise
     "theglobeandmail.com", "www.theglobeandmail.com",  # "X Stocks to Buy/Avoid" retail listicles, multi-stock roundups

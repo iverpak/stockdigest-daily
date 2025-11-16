@@ -14068,367 +14068,19 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
     return html
 
 
+
+# ------------------------------------------------------------------------------
+# Email #3: Stock Intelligence (Phase 3)
+# ------------------------------------------------------------------------------
 def generate_email_html_core(
     ticker: str,
     hours: int = 24,
-    flagged_article_ids: List[int] = None,
     recipient_email: str = None
 ) -> Dict[str, any]:
     """
-    CORE Email #3 generation function - shared by both test and production workflows.
+    Email #3 generation - Stock Intelligence Report with Phase 3 context integration.
 
-    Generates Premium Stock Intelligence Report HTML with executive summary and article links.
-    Articles are pre-sorted by SQL (ORDER BY published_at DESC) within each category.
-
-    Args:
-        ticker: Stock ticker symbol
-        hours: Lookback window in hours (default: 24)
-        flagged_article_ids: List of article IDs flagged by AI triage
-        recipient_email:
-            - If provided: Generate real unsubscribe token (for test/immediate send)
-            - If None: Use placeholder {{UNSUBSCRIBE_TOKEN}} (for production multi-recipient)
-
-    Returns:
-        {
-            "html": Full HTML email string,
-            "subject": Email subject line,
-            "company_name": Company name,
-            "article_count": Number of articles analyzed
-        }
-    """
-    LOG.info(f"Generating Email #3 for {ticker} (recipient: {recipient_email or 'placeholder'})")
-
-    # Fetch ticker config
-    config = get_ticker_config(ticker)
-    if not config:
-        LOG.error(f"No config found for {ticker}")
-        return None
-
-    company_name = config.get("company_name", ticker)
-    sector = config.get("sector")
-    sector_display = f" • {sector}" if sector and sector.strip() else ""
-
-    # Fetch stock price from ticker_reference (cached)
-    stock_price = "$0.00"
-    price_change_pct = None  # Changed to None for fallback logic
-    price_change_color = "#4ade80"  # Green default
-    ytd_return_pct = None  # New: YTD return
-    ytd_return_color = "#4ade80"  # Green default
-
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT financial_last_price, financial_price_change_pct, financial_ytd_return_pct
-            FROM ticker_reference
-            WHERE ticker = %s
-        """, (ticker,))
-        price_data = cur.fetchone()
-
-        if price_data and price_data['financial_last_price']:
-            stock_price = f"${price_data['financial_last_price']:.2f}"
-
-            # Daily return (price change)
-            if price_data['financial_price_change_pct'] is not None:
-                pct = price_data['financial_price_change_pct']
-                price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
-                price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
-
-            # YTD return
-            if price_data['financial_ytd_return_pct'] is not None:
-                ytd = price_data['financial_ytd_return_pct']
-                ytd_return_pct = f"{'+' if ytd >= 0 else ''}{ytd:.2f}%"
-                ytd_return_color = "#4ade80" if ytd >= 0 else "#ef4444"
-
-    # Fetch executive summary from database (Phase 1 JSON)
-    executive_summary_text = ""
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT summary_text FROM executive_summaries
-            WHERE ticker = %s AND summary_date = CURRENT_DATE
-            ORDER BY generated_at DESC LIMIT 1
-        """, (ticker,))
-        result = cur.fetchone()
-        if result:
-            executive_summary_text = result['summary_text']
-        else:
-            LOG.warning(f"No executive summary found for {ticker}")
-
-    # Parse Phase 1 JSON and show SIMPLE bullets (no metadata)
-    from modules.executive_summary_phase1 import convert_phase1_to_sections_dict
-    try:
-        json_output = json.loads(executive_summary_text)
-        sections = convert_phase1_to_sections_dict(json_output)
-    except json.JSONDecodeError as e:
-        LOG.error(f"[{ticker}] Failed to parse Phase 1 JSON in Email #3: {e}")
-        sections = {}  # Empty sections
-
-    # Fetch flagged articles (already sorted by SQL)
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-    articles_by_category = {"company": [], "industry": [], "competitor": [], "value_chain": []}
-
-    with db() as conn, conn.cursor() as cur:
-        if flagged_article_ids is not None and len(flagged_article_ids) > 0:
-            # Use flagged list (normal case) - FILTER: Only quality articles (analyzed + paywalled)
-            # Excludes: spam, skipped retail, failed scrapes
-            cur.execute("""
-                SELECT a.id, a.title, a.resolved_url, a.domain, a.published_at,
-                       ta.category, ta.ticker, ta.search_keyword, ta.competitor_ticker, ta.value_chain_type,
-                       ta.relevance_score, ta.relevance_reason, ta.is_rejected
-                FROM articles a
-                JOIN ticker_articles ta ON a.id = ta.article_id
-                WHERE ta.ticker = %s
-                AND a.id = ANY(%s)
-                AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
-                AND ta.ai_summary IS NOT NULL
-                AND (ta.ai_model IS NULL OR ta.ai_model != 'spam')
-                ORDER BY a.published_at DESC NULLS LAST
-            """, (ticker, flagged_article_ids))
-        else:
-            # No flagged articles - quiet news day
-            LOG.info(f"[{ticker}] ℹ️ No flagged articles for Email #3 - executive summary will generate 'no material developments' report")
-            # Return empty result (executive summary will handle this gracefully)
-            articles = []
-
-        if flagged_article_ids is not None and len(flagged_article_ids) > 0:
-            articles = cur.fetchall()
-        # else: articles already set to [] above
-
-        # Group articles by category (preserves SQL sort order: newest first)
-        for article in articles:
-            category = article['category']
-            if category in articles_by_category:
-                articles_by_category[category].append(article)
-
-    # Calculate metrics
-    analyzed_count = sum(len(arts) for arts in articles_by_category.values())
-    paywall_count = sum(
-        1 for articles in articles_by_category.values()
-        for a in articles
-        if is_paywall_article(a.get('domain', ''))
-    )
-
-    # Current date and market status
-    eastern = pytz.timezone('US/Eastern')
-    current_date = datetime.now(timezone.utc).astimezone(eastern).strftime("%b %d, %Y")
-
-    # Determine market status for dynamic labels
-    market_is_open = is_market_open()
-    market_status = "INTRADAY" if market_is_open else "LAST CLOSE"
-    return_label = "TODAY" if market_is_open else "1D"
-
-    # Build HTML sections
-    # Email #3 is user-facing, so strip emojis from section headers
-    summary_html = build_executive_summary_html(sections, strip_emojis=True)
-    articles_html = build_articles_html(articles_by_category)
-
-    # Analysis message
-    lookback_days = hours // 24 if hours >= 24 else 1
-    analysis_message = f"Analysis based on {analyzed_count} articles from the past {lookback_days} {'days' if lookback_days > 1 else 'day'}."
-    if paywall_count > 0:
-        analysis_message += f" {paywall_count} {'article' if paywall_count == 1 else 'articles'} behind paywalls (titles shown)."
-
-    # Unsubscribe URL - real token for test, placeholder for production
-    if recipient_email:
-        # TEST MODE: Generate real token for immediate send
-        unsubscribe_token = get_or_create_unsubscribe_token(recipient_email)
-        if unsubscribe_token:
-            unsubscribe_url = f"https://stockdigest.app/unsubscribe?token={unsubscribe_token}"
-        else:
-            unsubscribe_url = "https://stockdigest.app/unsubscribe"
-            LOG.warning(f"No unsubscribe token for {recipient_email}, using generic link")
-    else:
-        # PRODUCTION MODE: Use placeholder for multi-recipient sending later
-        unsubscribe_url = "{{UNSUBSCRIBE_TOKEN}}"
-
-    # Build full HTML (same template for both test and production)
-    html = f'''<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{ticker} Intelligence Report</title>
-    <style>
-        @media only screen and (max-width: 600px) {{
-            .content-padding {{ padding: 16px !important; }}
-            .header-padding {{ padding: 16px 20px 25px 20px !important; }}
-            .price-box {{ padding: 8px 10px !important; }}
-            .company-name {{ font-size: 20px !important; }}
-        }}
-    </style>
-</head>
-<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8f9fa; color: #212529;">
-
-    <table role="presentation" style="width: 100%; border-collapse: collapse;">
-        <tr>
-            <td align="center" style="padding: 40px 20px;">
-
-                <table role="presentation" style="max-width: 700px; width: 100%; background-color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-collapse: collapse; border-radius: 8px; overflow: visible;">
-
-                    <!-- Header -->
-                    <tr>
-                        <td class="header-padding" style="padding: 18px 24px 30px 24px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff; border-radius: 8px 8px 0 0;">
-                            <table role="presentation" style="width: 100%; border-collapse: collapse;">
-                                <tr>
-                                    <td style="width: 58%;">
-                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">PHASE 2 ENRICHMENT QA</div>
-                                    </td>
-                                    <td align="right" style="width: 42%;">
-                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">{current_date} • {market_status}</div>
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td style="width: 58%; vertical-align: top;">
-                                        <h1 class="company-name" style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; line-height: 1; color: #ffffff;">{company_name}</h1>
-                                        <div style="margin-top: 10px; font-size: 13px; opacity: 0.9; font-weight: 500; color: #ffffff;">{ticker}{sector_display}</div>
-                                    </td>
-                                    <td align="right" style="vertical-align: top; width: 42%;">
-                                        <div style="display: inline-block; text-align: right;">
-                                            <div style="font-size: 28px; font-weight: 700; line-height: 1; margin: 0; color: #ffffff;">{stock_price}</div>
-                                            {f'<div style="font-size: 14px; color: {price_change_color}; font-weight: 600; margin-top: 10px;">{return_label}: {price_change_pct}</div>' if price_change_pct else ''}
-                                            {f'<div style="font-size: 14px; color: {ytd_return_color}; font-weight: 600; margin-top: 4px;">YTD: {ytd_return_pct}</div>' if ytd_return_pct else ''}
-                                        </div>
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
-
-                    <!-- Content -->
-                    <tr>
-                        <td class="content-padding" style="padding: 24px 24px 24px 24px;">
-
-                            <!-- Executive Summary -->
-                            {summary_html}
-
-                            <!-- Transition to Sources -->
-                            <div style="margin: 32px 0 20px 0; padding: 12px 16px; background-color: #eff6ff; border-left: 4px solid #1e40af; border-radius: 4px;">
-                                <p style="margin: 0; font-size: 12px; color: #1e40af; font-weight: 600; line-height: 1.4;">
-                                    {analysis_message}
-                                </p>
-                            </div>
-
-                            <!-- Divider -->
-                            <div style="height: 2px; background: linear-gradient(90deg, #1e40af 0%, #e5e7eb 100%); margin-bottom: 20px;"></div>
-
-                            <!-- Source Articles -->
-                            <div style="margin-bottom: 0;">
-                                <h2 style="margin: 0 0 16px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">Source Articles</h2>
-                                {articles_html}
-                            </div>
-
-                        </td>
-                    </tr>
-
-                    <!-- Footer -->
-                    <tr>
-                        <td style="background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); padding: 16px 24px; color: rgba(255,255,255,0.9);">
-                            <table role="presentation" style="width: 100%; border-collapse: collapse;">
-                                <tr>
-                                    <td>
-                                        <div style="font-size: 14px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">StockDigest</div>
-                                        <div style="font-size: 12px; opacity: 0.8; margin-bottom: 8px; color: #ffffff;">Stock Intelligence Delivered Daily</div>
-
-                                        <!-- Legal Disclaimer -->
-                                        <div style="font-size: 10px; opacity: 0.7; line-height: 1.4; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2); color: #ffffff;">
-                                            For informational and educational purposes only. Not investment advice. See Terms of Service for full disclaimer.
-                                        </div>
-
-                                        <!-- Links -->
-                                        <div style="font-size: 11px; margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.2);">
-                                            <a href="https://stockdigest.app/terms-of-service" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Terms of Service</a>
-                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
-                                            <a href="https://stockdigest.app/privacy-policy" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Privacy Policy</a>
-                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
-                                            <a href="mailto:stockdigest.research@gmail.com" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Contact</a>
-                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
-                                            <a href="{unsubscribe_url}" style="color: #ffffff; text-decoration: none; opacity: 0.9;">Unsubscribe</a>
-                                        </div>
-
-                                        <!-- Copyright -->
-                                        <div style="font-size: 10px; opacity: 0.6; margin-top: 12px; color: #ffffff;">
-                                            © 2025 StockDigest. All rights reserved.
-                                        </div>
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
-
-                </table>
-
-            </td>
-        </tr>
-    </table>
-
-</body>
-</html>'''
-
-    subject = f"📋 Phase 2 Enrichment QA: {company_name} ({ticker}) - Pre-Integration Summary"
-
-    return {
-        "html": html,
-        "subject": subject,
-        "company_name": company_name,
-        "article_count": analyzed_count
-    }
-
-
-def send_user_intelligence_report(hours: int = 24, tickers: List[str] = None,
-                                   flagged_article_ids: List[int] = None,
-                                   recipient_email: str = None) -> Dict:
-    """
-    TEST wrapper: Email #3 - Premium Stock Intelligence Report (Single Ticker).
-    Generates email with real unsubscribe token and sends immediately.
-
-    Used by test runs for immediate email delivery.
-    Production uses generate_user_intelligence_report_html() instead.
-
-    Returns: {"status": "sent" | "failed", "articles_analyzed": X, ...}
-    """
-    LOG.info("=== EMAIL #3: PREMIUM STOCK INTELLIGENCE (TEST MODE) ===")
-
-    # Single ticker only
-    if not tickers or len(tickers) == 0:
-        return {"status": "error", "message": "No ticker specified"}
-
-    ticker = tickers[0]  # Take first ticker only
-    LOG.info(f"[TEST] Generating premium report for {ticker} → {recipient_email or DIGEST_TO}")
-
-    # Call core function with real token (recipient_email provided)
-    email_data = generate_email_html_core(
-        ticker=ticker,
-        hours=hours,
-        flagged_article_ids=flagged_article_ids,
-        recipient_email=recipient_email or DIGEST_TO  # Real token for test
-    )
-
-    if not email_data:
-        return {"status": "error", "message": "Failed to generate email HTML"}
-
-    # Send email immediately (test mode)
-    success = send_email(email_data['subject'], email_data['html'], to=recipient_email or DIGEST_TO)
-
-    LOG.info(f"📧 Email #3 (Premium Intelligence): {'✅ SENT' if success else '❌ FAILED'} to {recipient_email or DIGEST_TO}")
-
-    return {
-        "status": "sent" if success else "failed",
-        "articles_analyzed": email_data['article_count'],
-        "ticker": ticker,
-        "recipient": recipient_email or DIGEST_TO,
-        "email_type": "premium_stock_intelligence"
-    }
-
-# ------------------------------------------------------------------------------
-# Email #4: Editorial Stock Intelligence (Phase 3)
-# ------------------------------------------------------------------------------
-def generate_email_html_core_editorial(
-    ticker: str,
-    hours: int = 24,
-    recipient_email: str = None
-) -> Dict[str, any]:
-    """
-    Email #4 generation - SAME AS generate_email_html_core but uses editorial_markdown.
-
-    Generates Editorial Stock Intelligence Report HTML with Phase 3 formatted content.
+    Generates Stock Intelligence Report HTML with Phase 3 formatted content.
 
     Args:
         ticker: Stock ticker symbol
@@ -14445,7 +14097,7 @@ def generate_email_html_core_editorial(
             "article_count": Number of articles analyzed
         }
     """
-    LOG.info(f"Generating Email #4 (Editorial) for {ticker} (recipient: {recipient_email or 'placeholder'})")
+    LOG.info(f"Generating Email #3 (Stock Intelligence) for {ticker} (recipient: {recipient_email or 'placeholder'})")
 
     # Fetch ticker config
     config = get_ticker_config(ticker)
@@ -14508,14 +14160,14 @@ def generate_email_html_core_editorial(
         json_output = json.loads(executive_summary_text)
         sections = convert_phase1_to_sections_dict(json_output)
     except json.JSONDecodeError as e:
-        LOG.error(f"[{ticker}] Failed to parse Phase 3 JSON in Email #4: {e}")
+        LOG.error(f"[{ticker}] Failed to parse Phase 3 JSON in Email #3: {e}")
         sections = {}  # Empty sections
 
     # Fetch flagged articles (already sorted by SQL) - SAME AS EMAIL #3
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     articles_by_category = {"company": [], "industry": [], "competitor": [], "value_chain": []}
 
-    # Note: Email #4 uses same flagged articles as Email #3 (from Phase 1/2)
+    # Note: Email #3 uses same flagged articles as Email #3 (from Phase 1/2)
     # We fetch from executive_summaries metadata using CURRENT_DATE
     flagged_article_ids = []
     with db() as conn, conn.cursor() as cur:
@@ -14726,7 +14378,7 @@ def generate_email_html_core_editorial(
     }
 
 
-def send_editorial_intelligence_report(
+def send_user_intelligence_report(
     hours: int = 24,
     tickers: List[str] = None,
     recipient_email: str = None,
@@ -14734,7 +14386,7 @@ def send_editorial_intelligence_report(
     summary_date: date = None
 ) -> Dict:
     """
-    Email #4 wrapper - SAME AS send_user_intelligence_report but uses editorial version.
+    Email #3 wrapper - SAME AS send_user_intelligence_report but uses Phase 3 integrated version.
 
     Args:
         hours: Lookback window
@@ -14745,24 +14397,24 @@ def send_editorial_intelligence_report(
 
     Returns: {"status": "sent" | "failed", "articles_analyzed": X, ...}
     """
-    LOG.info("=== EMAIL #4: EDITORIAL STOCK INTELLIGENCE ===")
+    LOG.info("=== EMAIL #4: STOCK INTELLIGENCE ===")
 
     # Single ticker only
     if not tickers or len(tickers) == 0:
         return {"status": "error", "message": "No ticker specified"}
 
     ticker = tickers[0]
-    LOG.info(f"Generating editorial report for {ticker} → {recipient_email or DIGEST_TO}")
+    LOG.info(f"Generating stock intelligence report for {ticker} → {recipient_email or DIGEST_TO}")
 
-    # Call editorial core function
-    email_data = generate_email_html_core_editorial(
+    # Call core function
+    email_data = generate_email_html_core(
         ticker=ticker,
         hours=hours,
         recipient_email=recipient_email or DIGEST_TO
     )
 
     if not email_data:
-        return {"status": "error", "message": "Failed to generate editorial email HTML"}
+        return {"status": "error", "message": "Failed to generate email HTML"}
 
     # Send email immediately (with optional BCC)
     success = send_email(
@@ -14772,14 +14424,14 @@ def send_editorial_intelligence_report(
         bcc=bcc
     )
 
-    LOG.info(f"📧 Email #4 (Editorial): {'✅ SENT' if success else '❌ FAILED'} to {recipient_email or DIGEST_TO}")
+    LOG.info(f"📧 Email #3 (Stock Intelligence): {'✅ SENT' if success else '❌ FAILED'} to {recipient_email or DIGEST_TO}")
 
     return {
         "status": "sent" if success else "failed",
         "articles_analyzed": email_data['article_count'],
         "ticker": ticker,
         "recipient": recipient_email or DIGEST_TO,
-        "email_type": "editorial_stock_intelligence"
+        "email_type": "stock_intelligence"
     }
 
 # ------------------------------------------------------------------------------
@@ -16981,7 +16633,7 @@ async def process_ticker_job(job: dict):
                                     LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving Email #3 to queue ({len(recipients)} recipients)...")
 
                                     # Generate Email #3 HTML with placeholder token
-                                    email3_data = generate_email_html_core_editorial(
+                                    email3_data = generate_email_html_core(
                                         ticker=ticker,
                                         hours=int(minutes/60),
                                         recipient_email=None  # Use {{UNSUBSCRIBE_TOKEN}} placeholder
@@ -17106,7 +16758,7 @@ async def process_ticker_job(job: dict):
 
                                 # Send Email #3 (Stock Intelligence) immediately to admin (test mode)
                                 LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #3 (Stock Intelligence) to admin (test mode)...")
-                                editorial_result = send_editorial_intelligence_report(
+                                editorial_result = send_user_intelligence_report(
                                     hours=int(minutes/60),
                                     tickers=[ticker],
                                     recipient_email=DIGEST_TO,
@@ -27116,7 +26768,7 @@ async def regenerate_email_api(request: Request):
 
                         # Generate Email #3 HTML and queue it
                         LOG.info(f"[{ticker}] 💾 Generating and queueing Email #3...")
-                        email3_data = generate_email_html_core_editorial(
+                        email3_data = generate_email_html_core(
                             ticker=ticker,
                             hours=hours,
                             recipient_email=None  # Use {{UNSUBSCRIBE_TOKEN}} placeholder
@@ -28492,7 +28144,7 @@ async def send_ticker_api(request: Request):
 
 @APP.get("/api/view-email/{ticker}")
 def view_email_api(ticker: str, token: str = Query(...)):
-    """View Email #4 (Final User Email) preview"""
+    """View Email #3 (Final User Email) preview"""
     if not check_admin_token(token):
         return HTMLResponse("Unauthorized", status_code=401)
 

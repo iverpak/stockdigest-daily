@@ -372,7 +372,6 @@
                     <option value="transcripts">Earnings Transcripts</option>
                     <option value="press_releases">Press Releases</option>
                     <option value="8k_filings">8-K Filings</option>
-                    <option value="entity_logs">Entity Logs</option>
                 </select>
 
                 <!-- Search Box -->
@@ -1196,11 +1195,6 @@
                         dataKey = 'filings';
                         params = `token=${token}`;
                         break;
-                    case 'entity_logs':
-                        endpoint = '/api/admin/entity-logs';
-                        dataKey = 'entity_logs';
-                        params = `token=${token}`;
-                        break;
                 }
 
                 const response = await fetch(`${endpoint}?${params}`);
@@ -1232,7 +1226,6 @@
                 'transcripts': 'transcript',
                 'press_releases': 'press release',
                 '8k_filings': '8-K filing',
-                'entity_logs': 'entity log'
             };
             const typeLabel = typeLabels[currentResearchType] || 'document';
             document.getElementById('profiles-count').textContent = `Found ${profiles.length} ${typeLabel}${profiles.length !== 1 ? 's' : ''}`;
@@ -1251,10 +1244,8 @@
                     'presentations': 'No investor presentations analyzed yet.',
                     'transcripts': 'No earnings transcripts generated yet. Create one in the "Earnings Transcripts" tab!',
                     'press_releases': 'No press releases generated yet. Create one in the "Press Releases" tab!',
-                    'entity_logs': 'No entity logs generated yet. Go to Settings → Regenerate Entity Logs to extract entities from existing filings.'
                 };
                 const colspan = (currentResearchType === '10k' || currentResearchType === '10q') ? '6' :
-                               currentResearchType === 'entity_logs' ? '5' : '10';
                 tbody.innerHTML = `<tr><td colspan="${colspan}" style="padding: 40px; text-align: center; color: #6b7280;">${emptyMessages[currentResearchType]}</td></tr>`;
                 return;
             }
@@ -1327,13 +1318,6 @@
                         <th style="padding: 12px; text-align: center;">Exhibit</th>
                         <th style="padding: 12px; text-align: left;">Description</th>
                         <th style="padding: 12px; text-align: center;">Items</th>
-                        <th style="padding: 12px; text-align: center;">Actions</th>
-                    `;
-                case 'entity_logs':
-                    return common + `
-                        <th style="padding: 12px; text-align: left;">Company</th>
-                        <th style="padding: 12px; text-align: center;">Entries</th>
-                        <th onclick="sortTable('last_updated')" style="padding: 12px; text-align: left; cursor: pointer;">Last Updated</th>
                         <th style="padding: 12px; text-align: center;">Actions</th>
                     `;
             }
@@ -1442,18 +1426,6 @@
                             ${getActionButtons(doc, type)}
                         </td>
                     `;
-                case 'entity_logs':
-                    const lastUpdatedDate = doc.last_updated ? new Date(doc.last_updated).toLocaleDateString() : 'N/A';
-
-                    return `
-                        <td style="padding: 12px; font-weight: 600; color: #1e40af;">${doc.ticker}</td>
-                        <td style="padding: 12px; font-size: 13px;">${doc.company_name || doc.ticker}</td>
-                        <td style="padding: 12px; text-align: center; color: #6b7280; font-size: 13px;">${doc.entry_count || 0}</td>
-                        <td style="padding: 12px; color: #6b7280; font-size: 13px;">${lastUpdatedDate}</td>
-                        <td style="padding: 12px; text-align: center;">
-                            ${getActionButtons(doc, type)}
-                        </td>
-                    `;
             }
         }
 
@@ -1474,7 +1446,6 @@
             }).replace(/"/g, '&quot;');
 
             // Hide Email button only for entity logs (no email endpoint)
-            const showEmailButton = type !== 'entity_logs';
 
             return `
                 <div style="display: flex; gap: 3px; justify-content: center; flex-wrap: nowrap;">
@@ -1517,7 +1488,6 @@
                         return d.ticker === docInfo.ticker && d.report_date === docInfo.report_date && d.title === docInfo.pr_title;
                     } else if (docInfo.type === '8k_filings') {
                         return d.ticker === docInfo.ticker && d.accession_number === docInfo.accession_number && d.exhibit_number === docInfo.exhibit_number;
-                    } else if (docInfo.type === 'entity_logs') {
                         return d.ticker === docInfo.ticker;
                     }
                 });
@@ -1538,14 +1508,12 @@
                         title = `${doc.ticker} Press Release - ${doc.report_date}`;
                     } else if (docInfo.type === '8k_filings') {
                         title = `${doc.ticker} 8-K Filing - Exhibit ${doc.exhibit_number}: ${doc.exhibit_description} (${doc.filing_date})`;
-                    } else if (docInfo.type === 'entity_logs') {
                         title = `${doc.company_name || doc.ticker} (${doc.ticker}) - Entity Log`;
                     }
                     document.getElementById('modal-title').textContent = title;
 
                     // Get content (8-K uses raw_content which is already HTML)
                     let contentHtml;
-                    if (docInfo.type === 'entity_logs') {
                         // Fetch full entity log from API
                         const response = await fetch(`/api/admin/entity-log/${doc.ticker}?token=${token}`);
                         const data = await response.json();
@@ -1715,13 +1683,11 @@
                 } else if (docInfo.type === '8k_filings') {
                     endpoint = '/api/admin/delete-8k-filing';
                     body = { token, ticker: docInfo.ticker, accession_number: docInfo.accession_number, exhibit_number: docInfo.exhibit_number };
-                } else if (docInfo.type === 'entity_logs') {
                     endpoint = `/api/admin/entity-log/${docInfo.ticker}`;
                     body = { token };
                 }
 
                 const response = await fetch(endpoint, {
-                    method: docInfo.type === 'entity_logs' ? 'DELETE' : 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body)
                 });
@@ -1796,97 +1762,6 @@
         }
 
         // Format entity log JSON into HTML
-        function formatEntityLogHTML(entityLog) {
-            if (!entityLog || !entityLog.extractions) {
-                return '<p>No entity log data available</p>';
-            }
-
-            const entries = entityLog.extractions;
-            let html = `
-                <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;">
-                    <p style="color: #6b7280; margin-bottom: 20px;">
-                        ${entries.length} filing${entries.length !== 1 ? 's' : ''}
-                    </p>
-            `;
-
-            entries.forEach((entry, index) => {
-                const filingIcon = entry.filing_type === '10K' ? '📄' : '🎙️';
-                const filingLabel = entry.filing_type === '10K' ? '10-K' : 'Transcript';
-                const quarter = entry.fiscal_quarter ? ` Q${entry.fiscal_quarter}` : '';
-
-                html += `
-                    <div style="margin-bottom: 30px; border-left: 4px solid #1e40af; padding-left: 16px;">
-                        <h3 style="margin: 0 0 12px 0; color: #1e40af;">
-                            ${filingIcon} ${filingLabel} ${entry.fiscal_year}${quarter}
-                        </h3>
-                        <p style="color: #6b7280; font-size: 14px; margin: 0 0 16px 0;">
-                            Filed: ${entry.filing_date}
-                        </p>
-                `;
-
-                // Competitors
-                if (entry.competitors && entry.competitors.length > 0) {
-                    html += `<h4 style="margin: 12px 0 8px 0; color: #374151;">🔴 COMPETITORS (${entry.competitors.length}):</h4>`;
-                    entry.competitors.forEach(comp => {
-                        html += `
-                            <div style="margin-bottom: 12px; padding: 12px; background: #f9fafb; border-radius: 6px;">
-                                <div style="font-weight: 600; margin-bottom: 4px;">
-                                    ${comp.name}${comp.ticker ? ` (${comp.ticker})` : ''}
-                                </div>
-                                ${comp.context ? `
-                                <div style="font-size: 13px; color: #374151; font-style: italic; margin-top: 8px;">
-                                    "${comp.context}"
-                                </div>
-                                ` : ''}
-                            </div>
-                        `;
-                    });
-                }
-
-                // Suppliers
-                if (entry.suppliers && entry.suppliers.length > 0) {
-                    html += `<h4 style="margin: 16px 0 8px 0; color: #374151;">📦 SUPPLIERS (${entry.suppliers.length}):</h4>`;
-                    entry.suppliers.forEach(supp => {
-                        html += `
-                            <div style="margin-bottom: 12px; padding: 12px; background: #f9fafb; border-radius: 6px;">
-                                <div style="font-weight: 600; margin-bottom: 4px;">
-                                    ${supp.name}${supp.ticker ? ` (${supp.ticker})` : ''}
-                                </div>
-                                ${supp.context ? `
-                                <div style="font-size: 13px; color: #374151; font-style: italic; margin-top: 8px;">
-                                    "${supp.context}"
-                                </div>
-                                ` : ''}
-                            </div>
-                        `;
-                    });
-                }
-
-                // Customers
-                if (entry.customers && entry.customers.length > 0) {
-                    html += `<h4 style="margin: 16px 0 8px 0; color: #374151;">👥 CUSTOMERS (${entry.customers.length}):</h4>`;
-                    entry.customers.forEach(cust => {
-                        html += `
-                            <div style="margin-bottom: 12px; padding: 12px; background: #f9fafb; border-radius: 6px;">
-                                <div style="font-weight: 600; margin-bottom: 4px;">
-                                    ${cust.name}${cust.ticker ? ` (${cust.ticker})` : ''}
-                                </div>
-                                ${cust.context ? `
-                                <div style="font-size: 13px; color: #374151; font-style: italic; margin-top: 8px;">
-                                    "${cust.context}"
-                                </div>
-                                ` : ''}
-                            </div>
-                        `;
-                    });
-                }
-
-                html += `</div>`;
-            });
-
-            html += `</div>`;
-            return html;
-        }
 
         // Simple markdown to HTML converter
         function markdownToHtml(markdown) {

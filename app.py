@@ -16837,8 +16837,6 @@ async def process_transcript_phase(job: dict):
         LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Fetching transcript Q{quarter} FY{year} from FMP...")
 
         # Fetch transcript content from FMP
-        from modules.transcript_summaries import generate_transcript_summary_with_fallback
-
         fmp_url = f"https://financialmodelingprep.com/api/v3/earning_call_transcript/{ticker}?quarter={quarter}&year={year}"
         response = requests.get(f"{fmp_url}&apikey={FMP_API_KEY}", timeout=30)
 

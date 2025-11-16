@@ -434,11 +434,11 @@ StockDigest provides AI-powered research tools for analyzing SEC filings (10-K, 
 - 📊 **New sections:** Capital Allocation & Balance Sheet, Management Sentiment & Tone (expanded)
 - Function: `_build_research_summary_prompt()` in app.py (line 15470)
 
-**Section Flow (14 sections):**
+**Section Flow (15 sections):**
 1. 📌 Bottom Line | 2. 💰 Financial Results | 3. 📊 Operational Metrics | 4. 🏢 Major Developments
 5. 📈 Guidance | 6. 🎯 Strategic Initiatives | 7. 💼 Management Sentiment & Tone | 8. ⚠️ Risk Factors & Headwinds
-9. 🏭 Industry & Competitive Landscape | 10. 💡 Capital Allocation & Balance Sheet | 11. 💬 Q&A Highlights
-12. 📈 Upside Scenario | 13. 📉 Downside Scenario | 14. 🔍 Key Variables to Monitor
+9. 🏭 Industry & Competitive Landscape | 10. 🔗 Related Entities | 11. 💡 Capital Allocation & Balance Sheet | 12. 💬 Q&A Highlights
+13. 📈 Upside Scenario | 14. 📉 Downside Scenario | 15. 🔍 Key Variables to Monitor
 
 - **`GET /api/fmp-validate-ticker?ticker=AAPL&type=transcript`**: Fetch available earnings transcripts from FMP
 - **`GET /api/fmp-validate-ticker?ticker=AAPL&type=press_release`**: Fetch available press releases from FMP

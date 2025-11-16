@@ -19118,8 +19118,9 @@ async def validate_ticker_for_research(ticker: str, type: str = 'transcript'):
                         year = None
 
                         if sec_html_url:
-                            # Match 8-digit date pattern before .htm (e.g., jpm-20241231.htm)
-                            match = re.search(r'(\d{8})\.htm$', sec_html_url)
+                            # Match 8-digit date pattern before .htm (e.g., jpm-20241231.htm, atge-20250630x10k.htm)
+                            # Pattern handles: date.htm, date-10k.htm, datex10k.htm
+                            match = re.search(r'(\d{8})[x\-]?(?:10[kq])?\.htm$', sec_html_url)
                             if match:
                                 date_str = match.group(1)  # "20241231"
                                 year = int(date_str[:4])  # 2024
@@ -19189,8 +19190,9 @@ async def validate_ticker_for_research(ticker: str, type: str = 'transcript'):
                         month = None
 
                         if sec_html_url:
-                            # Match 8-digit date pattern before .htm (e.g., jpm-20250630.htm)
-                            match = re.search(r'(\d{8})\.htm$', sec_html_url)
+                            # Match 8-digit date pattern before .htm (e.g., jpm-20250630.htm, atge-20250630x10q.htm)
+                            # Pattern handles: date.htm, date-10q.htm, datex10q.htm
+                            match = re.search(r'(\d{8})[x\-]?(?:10[kq])?\.htm$', sec_html_url)
                             if match:
                                 date_str = match.group(1)  # "20250630"
                                 year = int(date_str[:4])  # 2025
@@ -24590,8 +24592,8 @@ async def generate_company_profile_api(request: Request):
     filing_type = body.get('filing_type', '10-K')  # '10-K' or '10-Q'
     fiscal_year = body.get('fiscal_year')
     fiscal_quarter = body.get('fiscal_quarter')  # Required for 10-Q (e.g., 'Q3')
-    filing_date = body.get('filing_date')
-    period_end_date = body.get('period_end_date')  # Actual fiscal year/quarter end date
+    filing_date = body.get('filing_date') or None  # Convert empty string to None
+    period_end_date = body.get('period_end_date') or None  # Convert empty string to None (fixes ATGE issue)
     sec_html_url = body.get('sec_html_url')  # FMP mode (optional)
     file_content = body.get('file_content')  # Base64 encoded (optional)
     file_name = body.get('file_name')  # Optional
@@ -24693,8 +24695,8 @@ async def generate_10q_profile_api(request: Request):
     ticker = body.get('ticker')
     fiscal_year = body.get('fiscal_year')
     fiscal_quarter = body.get('fiscal_quarter')  # e.g., "Q3"
-    filing_date = body.get('filing_date')
-    period_end_date = body.get('period_end_date')  # Actual quarter end date
+    filing_date = body.get('filing_date') or None  # Convert empty string to None
+    period_end_date = body.get('period_end_date') or None  # Convert empty string to None (fixes edge cases)
     sec_html_url = body.get('sec_html_url')
 
     try:

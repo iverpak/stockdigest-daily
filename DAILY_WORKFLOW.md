@@ -344,7 +344,7 @@ For each ticker:
    - Generate Email #3 HTML using `generate_email_html_core()`
    - HTML contains `{{UNSUBSCRIBE_TOKEN}}` placeholder
    - **Mode-specific behavior:**
-     - `mode='daily'`: Call `save_email_to_queue()` → Save to `email_queue` (status='ready')
+     - `mode='daily'`: Inline SQL → Save to `email_queue` (status='ready')
      - `mode='test'`: Call `send_user_intelligence_report()` → Send immediately
    - **Send Email #3 preview to admin**
    - Update job heartbeat
@@ -891,7 +891,7 @@ for user in active_users:
 1. **Ingest (0-60%):** `process_ingest_phase()` → RSS feeds, AI triage, Email #1
 2. **Digest (60-95%):** `process_digest_phase()` → Scraping, AI analysis, Email #2
 3. **Email #3 (95-97%):**
-   - `mode='daily'`: `save_email_to_queue()` → Save to database
+   - `mode='daily'`: Inline SQL → Save to database
    - `mode='test'`: `send_user_intelligence_report()` → Send immediately
 4. **Commit (97-100%):** `process_commit_phase()` → GitHub commit
 
@@ -902,34 +902,7 @@ for user in active_users:
 
 ---
 
-### 3. `save_email_to_queue()`
-
-**Location:** ~Line 12577
-**Purpose:** Save Email #3 to queue for admin review (production mode)
-**Returns:** `True` on success, `False` on failure
-
-**Logic:**
-```python
-# Generate email HTML using core function
-email_data = generate_email_html_core(
-    ticker=ticker,
-    hours=hours,
-    flagged_article_ids=flagged_article_ids,
-    recipient_email=None  # Uses {{UNSUBSCRIBE_TOKEN}} placeholder
-)
-
-# Save to email_queue
-INSERT INTO email_queue (ticker, recipients, email_html, status)
-VALUES (%s, %s, %s, 'ready')
-ON CONFLICT (ticker) DO UPDATE
-SET email_html = EXCLUDED.email_html,
-    status = 'ready',
-    error_message = NULL  # Clear old errors on retry
-```
-
----
-
-### 4. `send_all_ready_emails_impl()`
+### 3. `send_all_ready_emails_impl()`
 
 **Location:** ~Line 18646
 **Purpose:** Send all ready emails with unique unsubscribe tokens

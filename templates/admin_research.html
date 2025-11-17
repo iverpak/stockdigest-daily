@@ -1488,7 +1488,6 @@
                         return d.ticker === docInfo.ticker && d.report_date === docInfo.report_date && d.title === docInfo.pr_title;
                     } else if (docInfo.type === '8k_filings') {
                         return d.ticker === docInfo.ticker && d.accession_number === docInfo.accession_number && d.exhibit_number === docInfo.exhibit_number;
-                        return d.ticker === docInfo.ticker;
                     }
                 });
 
@@ -1508,12 +1507,12 @@
                         title = `${doc.ticker} Press Release - ${doc.report_date}`;
                     } else if (docInfo.type === '8k_filings') {
                         title = `${doc.ticker} 8-K Filing - Exhibit ${doc.exhibit_number}: ${doc.exhibit_description} (${doc.filing_date})`;
-                        title = `${doc.company_name || doc.ticker} (${doc.ticker}) - Entity Log`;
                     }
                     document.getElementById('modal-title').textContent = title;
 
                     // Get content (8-K uses raw_content which is already HTML)
                     let contentHtml;
+                    if (docInfo.type === 'entity_log') {
                         // Fetch full entity log from API
                         const response = await fetch(`/api/admin/entity-log/${doc.ticker}?token=${token}`);
                         const data = await response.json();

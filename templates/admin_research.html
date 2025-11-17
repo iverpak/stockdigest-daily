@@ -1445,9 +1445,6 @@
                 ai_provider: doc.ai_provider         // Include ai_provider for transcript disambiguation
             }).replace(/"/g, '&quot;');
 
-            // Hide Email button only for entity logs (no email endpoint)
-            const showEmailButton = type !== 'entity_log';
-
             return `
                 <div style="display: flex; gap: 3px; justify-content: center; flex-wrap: nowrap;">
                     <button onclick='viewDocument(${docId}); event.stopPropagation();'
@@ -1455,13 +1452,11 @@
                             style="background: #1e40af; color: white; border: none; padding: 4px 8px; border-radius: 3px; cursor: pointer; font-size: 10px; white-space: nowrap;">
                         👁️
                     </button>
-                    ${showEmailButton ? `
                     <button onclick='emailDocument(${docId}); event.stopPropagation();'
                             title="Email to Me"
                             style="background: #059669; color: white; border: none; padding: 4px 8px; border-radius: 3px; cursor: pointer; font-size: 10px; white-space: nowrap;">
                         📧
                     </button>
-                    ` : ''}
                     <button onclick='deleteDocument(${docId}); event.stopPropagation();'
                             title="Delete"
                             style="background: #dc2626; color: white; border: none; padding: 4px 8px; border-radius: 3px; cursor: pointer; font-size: 10px; white-space: nowrap;">
@@ -1513,17 +1508,7 @@
 
                     // Get content (8-K uses raw_content which is already HTML)
                     let contentHtml;
-                    if (docInfo.type === 'entity_log') {
-                        // Fetch full entity log from API
-                        const response = await fetch(`/api/admin/entity-log/${doc.ticker}?token=${token}`);
-                        const data = await response.json();
-
-                        if (data.status === 'success') {
-                            contentHtml = formatEntityLogHTML(data.entity_log);
-                        } else {
-                            contentHtml = `<p style="color: red;">Error loading entity log: ${data.message}</p>`;
-                        }
-                    } else if (docInfo.type === '8k_filings') {
+                    if (docInfo.type === '8k_filings') {
                         // 8-K content is already HTML, use directly
                         contentHtml = doc.raw_content || 'No content available';
                     } else {
@@ -1683,11 +1668,10 @@
                 } else if (docInfo.type === '8k_filings') {
                     endpoint = '/api/admin/delete-8k-filing';
                     body = { token, ticker: docInfo.ticker, accession_number: docInfo.accession_number, exhibit_number: docInfo.exhibit_number };
-                    endpoint = `/api/admin/entity-log/${docInfo.ticker}`;
-                    body = { token };
                 }
 
                 const response = await fetch(endpoint, {
+                    method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body)
                 });
@@ -1760,8 +1744,6 @@
                 alert(`❌ Failed to email: ${error.message}`);
             }
         }
-
-        // Format entity log JSON into HTML
 
         // Simple markdown to HTML converter
         function markdownToHtml(markdown) {

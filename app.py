@@ -2319,17 +2319,19 @@ def get_latest_summary_date(ticker: str) -> date:
 @with_deadlock_retry()
 def update_executive_summary_with_phase3(
     ticker: str,
-    phase3_merged_json: Dict
+    phase3_merged_json: Dict,
+    phase3_model: str = None
 ) -> bool:
     """
     Update existing executive summary with Phase 3 integrated content.
 
     Overwrites summary_text and summary_json with Phase 3 merged JSON (Phase 1+2+3).
-    Updates generation_phase to 'phase3' for tracking.
+    Updates generation_phase to 'phase3' and records Phase 3 model for tracking.
 
     Args:
         ticker: Stock ticker
         phase3_merged_json: Complete merged JSON from Phase 1+2+3
+        phase3_model: Model used for Phase 3 (e.g., 'claude-sonnet-4-5', 'gemini-2.5-pro')
 
     Returns:
         bool: True if update successful, False otherwise
@@ -2340,11 +2342,13 @@ def update_executive_summary_with_phase3(
             SET summary_text = %s,
                 summary_json = %s,
                 generation_phase = 'phase3',
+                ai_models = jsonb_set(COALESCE(ai_models, '{}'::jsonb), '{phase3}', %s),
                 generated_at = NOW()
             WHERE ticker = %s AND summary_date = CURRENT_DATE
         """, (
             json.dumps(phase3_merged_json),  # summary_text (JSON string)
             json.dumps(phase3_merged_json),  # summary_json (JSONB)
+            json.dumps(phase3_model),        # phase3 model (as JSON string)
             ticker
         ))
 
@@ -16618,9 +16622,11 @@ async def process_ticker_job(job: dict):
 
                         if phase3_merged_json:
                             # Update database with Phase 3 content
+                            phase3_model = phase3_usage.get("model", "") if phase3_usage else None
                             success = update_executive_summary_with_phase3(
                                 ticker=ticker,
-                                phase3_merged_json=phase3_merged_json
+                                phase3_merged_json=phase3_merged_json,
+                                phase3_model=phase3_model
                             )
 
                             if success:
@@ -16748,9 +16754,11 @@ async def process_ticker_job(job: dict):
 
                         if phase3_merged_json:
                             # Update database with Phase 3 content
+                            phase3_model = phase3_usage.get("model", "") if phase3_usage else None
                             success = update_executive_summary_with_phase3(
                                 ticker=ticker,
-                                phase3_merged_json=phase3_merged_json
+                                phase3_merged_json=phase3_merged_json,
+                                phase3_model=phase3_model
                             )
 
                             if success:
@@ -26758,9 +26766,11 @@ async def regenerate_email_api(request: Request):
 
                 if phase3_merged_json:
                     # Update database with Phase 3 content
+                    phase3_model = phase3_usage.get("model", "") if phase3_usage else None
                     success = update_executive_summary_with_phase3(
                         ticker=ticker,
-                        phase3_merged_json=phase3_merged_json
+                        phase3_merged_json=phase3_merged_json,
+                        phase3_model=phase3_model
                     )
 
                     if success:

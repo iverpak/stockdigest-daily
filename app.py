@@ -16410,10 +16410,11 @@ async def process_press_release_phase(job: dict):
             try:
                 parsed_result = generate_parsed_press_release_with_gemini(
                     ticker=ticker,
+                    company_name=ticker_config.get('company_name', ticker),
                     content=content,  # Raw FMP content
-                    config=ticker_config,
-                    document_date=pr_date,
                     document_title=pr_title,
+                    source_type='fmp',
+                    item_codes=None,
                     gemini_api_key=GEMINI_API_KEY
                 )
 
@@ -16664,10 +16665,11 @@ async def process_8k_summary_phase(job: dict):
                 try:
                     parsed_result = generate_parsed_press_release_with_gemini(
                         ticker=ticker,
+                        company_name=ticker_config.get('company_name', ticker),
                         content=raw_content,  # Raw 8-K content
-                        config=ticker_config,
-                        document_date=filing_date,
                         document_title=f"{filing_title} - Exhibit {exhibit_num}",
+                        source_type='8k',
+                        item_codes=item_codes,
                         gemini_api_key=GEMINI_API_KEY
                     )
 

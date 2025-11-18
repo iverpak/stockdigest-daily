@@ -1254,7 +1254,7 @@
                     'parsed_prs': 'No parsed press releases generated yet. New PRs and 8-Ks will be parsed automatically.',
                     '8k_filings': 'No 8-K filings loaded yet.',
                 };
-                const colspan = (currentResearchType === '10k' || currentResearchType === '10q') ? '6' :
+                const colspan = (currentResearchType === '10k' || currentResearchType === '10q') ? '6' : '7';
                 tbody.innerHTML = `<tr><td colspan="${colspan}" style="padding: 40px; text-align: center; color: #6b7280;">${emptyMessages[currentResearchType]}</td></tr>`;
                 return;
             }

@@ -2014,10 +2014,14 @@ def get_all_parsed_press_releases(
             LIMIT %s
         """, (limit,))
 
-        columns = [desc[0] for desc in cur.description]
         results = []
         for row in cur.fetchall():
-            results.append(dict(zip(columns, row)))
+            # Handle both dict and tuple cursor types
+            if isinstance(row, dict):
+                results.append(dict(row))
+            else:
+                columns = [desc[0] for desc in cur.description]
+                results.append(dict(zip(columns, row)))
 
         cur.close()
         return results

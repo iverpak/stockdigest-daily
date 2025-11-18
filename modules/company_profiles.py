@@ -1915,7 +1915,11 @@ def save_parsed_press_release_to_database(
         ))
 
         result = cur.fetchone()
-        row_id = result[0] if result else None
+        # Handle both tuple and dict cursor types
+        if result:
+            row_id = result['id'] if isinstance(result, dict) else result[0]
+        else:
+            row_id = None
 
         db_connection.commit()
         cur.close()

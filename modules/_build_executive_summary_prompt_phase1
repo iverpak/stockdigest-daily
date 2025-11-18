@@ -756,9 +756,9 @@ EXCLUDE ENTIRELY from all sections (do not include even as low impact):
 6. Stale developments (retrospective reporting of old events)
    - Articles with retrospective framing of past events as primary content
    - Past-tense patterns: "updated in [past month]", "announced last year", "back in [date]"
-   - HIGH-FREQUENCY DATA >6 months old: Commodity prices, stock prices, quarterly earnings/metrics, monthly operational data
-   - Exception: Historical context supporting current development
+   - TIME-SENSITIVE DATA RULE: For any metric that updates frequently (daily/weekly/monthly/quarterly), if the MOST RECENT datapoint is >6 months before article date → EXCLUDE FROM ALL SECTIONS - DO NOT CREATE ANY BULLET   - Exception: Historical context supporting current development
    - Exception: Annual/structural data recently released (prior year annual totals published in current year)
+   - NOT AN EXCEPTION: Trend analysis where newest point is stale (H1 2024 to Nov 2024 in Nov 2025)
 
    ✗ "CDC updated IUD guidelines in [8+ months ago]" [retrospective, no current news]
    ✗ "Diesel prices reached $32/barrel in [12 months ago]" [high-freq data, stale]

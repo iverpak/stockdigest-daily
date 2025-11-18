@@ -297,6 +297,7 @@ def _build_phase2_user_content(ticker: str, phase1_json: Dict, filings: Dict) ->
     Build Phase 2 user content combining Phase 1 JSON and filing sources.
 
     Format matches old _build_executive_summary_prompt() structure:
+    - Current date for temporal checks
     - Phase 1 JSON first
     - Then filing sources with proper headers (Transcript, 10-Q, 10-K)
 
@@ -308,9 +309,15 @@ def _build_phase2_user_content(ticker: str, phase1_json: Dict, filings: Dict) ->
     Returns:
         str: Formatted user content for Phase 2 prompt
     """
+    # Add current date for temporal checks (used by Phase 2 staleness filtering)
+    current_date = datetime.now().strftime('%B %d, %Y')  # e.g., "November 18, 2025"
+
+    content = f"CURRENT DATE: {current_date}\n\n"
+    content += "---\n\n"
+
     # Start with Phase 1 JSON
     phase1_str = json.dumps(phase1_json, indent=2)
-    content = f"PHASE 1 ANALYSIS (TO BE ENRICHED):\n\n{phase1_str}\n\n"
+    content += f"PHASE 1 ANALYSIS (TO BE ENRICHED):\n\n{phase1_str}\n\n"
     content += "---\n\n"
     content += "AVAILABLE FILING SOURCES FOR CONTEXT:\n\n"
 

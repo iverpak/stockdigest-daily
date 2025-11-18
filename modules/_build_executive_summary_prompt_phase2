@@ -1356,7 +1356,7 @@ MATERIALITY: Is scale >1% of relevant company metric?
 
 TEMPORAL CHECK: For any metric that updates frequently (daily/weekly/monthly/quarterly):
    - Find the MOST RECENT date mentioned IN THE BULLET CONTENT (not context)
-   - Compare to CURRENT DATE
+   - Compare to the CURRENT DATE provided at the top of this prompt
    - If >6 months before current date → automatic "none" relevance
    - IGNORE dates in context field (those are from filings, always recent)
    - This includes: commodity prices, interest rates, stock prices, quarterly earnings, monthly metrics

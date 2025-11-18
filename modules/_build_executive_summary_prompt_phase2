@@ -1355,17 +1355,18 @@ MATERIALITY: Is scale >1% of relevant company metric?
    - Note: Strategic importance may override small scale
 
 TEMPORAL CHECK: For any metric that updates frequently (daily/weekly/monthly/quarterly):
-- Find the MOST RECENT date mentioned for that metric
-- If >6 months before article date → automatic "none" relevance
-- This includes: commodity prices, interest rates, stock prices, quarterly earnings, monthly metrics
+   - Find the MOST RECENT date mentioned IN THE BULLET CONTENT (not context)
+   - Compare to CURRENT DATE
+   - If >6 months before current date → automatic "none" relevance
+   - IGNORE dates in context field (those are from filings, always recent)
+   - This includes: commodity prices, interest rates, stock prices, quarterly earnings, monthly metrics
 
-Examples of automatic "none" for staleness:
-✗ "Diesel prices at $32 in November [prior year]" (commodity >6 months old)
-✗ "Q3 [prior year] earnings showed growth" (quarterly data >6 months old)
-✗ "Interest rates peaked at 5% in [8 months ago]" (rate data stale)
-
-Exception: Annual/structural data from prior year if recently released
-✓ "[Prior year] infrastructure spending $463B" (annual data, natural lag)
+   Examples of automatic "none" for staleness:
+      ✗ "Diesel prices at $32 in November 2024" (commodity from 12 months ago)
+      ✗ "Q3 2024 earnings showed growth" (quarterly data from 15 months ago)
+   
+   Exception: Annual/structural data from prior year if recently released
+      ✓ "[Prior year] infrastructure spending $463B" (annual data, natural lag)
 
 MANAGEMENT TEST EXAMPLES:
 

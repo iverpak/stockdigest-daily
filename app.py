@@ -16201,6 +16201,60 @@ async def process_press_release_phase(job: dict):
                 db_connection=conn
             )
 
+            # Get the source_id for parsed PR generation
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT id FROM press_releases
+                WHERE ticker = %s AND report_date = %s AND pr_title = %s
+            """, (ticker, pr_date, pr_title))
+            source_id_row = cur.fetchone()
+            source_id = source_id_row[0] if source_id_row else None
+            cur.close()
+
+        # Progress: 85% - Generating parsed PR summary with Gemini
+        if source_id:
+            update_job_status(job_id, progress=85)
+            LOG.info(f"[{ticker}] 🔄 [JOB {job_id}] Generating parsed PR summary with Gemini...")
+
+            try:
+                parsed_result = generate_parsed_press_release_with_gemini(
+                    ticker=ticker,
+                    content=content,  # Raw FMP content
+                    config=ticker_config,
+                    document_date=pr_date,
+                    document_title=pr_title,
+                    gemini_api_key=GEMINI_API_KEY
+                )
+
+                if parsed_result and parsed_result.get('parsed_summary'):
+                    with db() as conn:
+                        save_parsed_press_release_to_database(
+                            ticker=ticker,
+                            company_name=ticker_config.get('company_name', ticker),
+                            source_type='fmp',
+                            source_id=source_id,
+                            document_date=pr_date,
+                            document_title=pr_title,
+                            source_url=None,  # FMP doesn't provide direct URL
+                            exhibit_number=None,
+                            item_codes=None,
+                            parsed_summary=parsed_result['parsed_summary'],
+                            ai_model=parsed_result.get('model', 'gemini-2.5-flash'),
+                            token_count_input=parsed_result.get('token_count_input', 0),
+                            token_count_output=parsed_result.get('token_count_output', 0),
+                            processing_duration_seconds=int(parsed_result.get('generation_time_seconds', 0)),
+                            db_connection=conn
+                        )
+                    LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Parsed PR saved (source_id={source_id})")
+                else:
+                    LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Parsed PR generation returned empty result")
+
+            except Exception as parsed_error:
+                LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to generate parsed PR: {parsed_error}")
+                # Continue - original PR was saved successfully
+        else:
+            LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Could not get source_id for parsed PR")
+
         # Progress: 95% - Sending email
         if config.get('send_email', True):
             update_job_status(job_id, progress=95)
@@ -16383,6 +16437,7 @@ async def process_8k_summary_phase(job: dict):
                         exhibit_type = EXCLUDED.exhibit_type,
                         ai_provider = EXCLUDED.ai_provider,
                         generated_at = NOW()
+                    RETURNING id
                 """, (
                     ticker,
                     ticker_config.get('company_name', ticker),
@@ -16401,9 +16456,54 @@ async def process_8k_summary_phase(job: dict):
                     'none',  # ai_provider (no AI processing for raw exhibits)
                     job_id
                 ))
+                source_id_row = cur.fetchone()
+                source_id = source_id_row[0] if source_id_row else None
                 conn.commit()
 
             LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Exhibit {exhibit_num} saved to database")
+
+            # Generate parsed PR summary with Gemini
+            if source_id:
+                LOG.info(f"[{ticker}] 🔄 [JOB {job_id}] Generating parsed PR for Exhibit {exhibit_num}...")
+
+                try:
+                    parsed_result = generate_parsed_press_release_with_gemini(
+                        ticker=ticker,
+                        content=raw_content,  # Raw 8-K content
+                        config=ticker_config,
+                        document_date=filing_date,
+                        document_title=f"{filing_title} - Exhibit {exhibit_num}",
+                        gemini_api_key=GEMINI_API_KEY
+                    )
+
+                    if parsed_result and parsed_result.get('parsed_summary'):
+                        with db() as conn:
+                            save_parsed_press_release_to_database(
+                                ticker=ticker,
+                                company_name=ticker_config.get('company_name', ticker),
+                                source_type='8k',
+                                source_id=source_id,
+                                document_date=filing_date,
+                                document_title=filing_title,
+                                source_url=exhibit_url,
+                                exhibit_number=exhibit_num,
+                                item_codes=item_codes,
+                                parsed_summary=parsed_result['parsed_summary'],
+                                ai_model=parsed_result.get('model', 'gemini-2.5-flash'),
+                                token_count_input=parsed_result.get('token_count_input', 0),
+                                token_count_output=parsed_result.get('token_count_output', 0),
+                                processing_duration_seconds=int(parsed_result.get('generation_time_seconds', 0)),
+                                db_connection=conn
+                            )
+                        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Parsed PR saved for Exhibit {exhibit_num} (source_id={source_id})")
+                    else:
+                        LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Parsed PR generation returned empty for Exhibit {exhibit_num}")
+
+                except Exception as parsed_error:
+                    LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to generate parsed PR for Exhibit {exhibit_num}: {parsed_error}")
+                    # Continue - original 8-K was saved successfully
+            else:
+                LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Could not get source_id for Exhibit {exhibit_num}")
 
         # Mark complete
         update_job_status(job_id, status='completed', progress=100)

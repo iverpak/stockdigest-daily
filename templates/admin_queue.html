@@ -142,13 +142,6 @@
             display: grid;
             grid-template-columns: repeat(4, 1fr);
             gap: 12px;
-            margin-bottom: 16px;
-        }
-
-        .restart-actions {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 12px;
             margin-bottom: 32px;
         }
 
@@ -467,11 +460,6 @@
             <button class="btn btn-info" onclick="bulkReviewQuality()">
                 🔍 REVIEW ALL READY/SENT <span class="btn-count" id="btn-bulk-review-count">-</span>
             </button>
-        </div>
-
-        <!-- Restart Actions -->
-        <div class="restart-actions">
-            <div></div>
             <button class="btn btn-warning" onclick="restartWorker()">
                 🔄 RESTART WORKER THREAD
             </button>

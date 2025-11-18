@@ -95,6 +95,7 @@ from modules.company_profiles import (
     get_8k_html_url,
     quick_parse_8k_header,
     get_all_8k_exhibits,      # NEW: Parse all EX-99.* files from documents page
+    get_main_8k_url,          # NEW: Fallback to main 8-K body when no exhibits
     extract_8k_html_content,  # Simplified: Single exhibit HTML extraction
     classify_exhibit_type,    # NEW: Auto-classify exhibits (earnings_release, investor_presentation, etc.)
     # Parsed press releases (Nov 2025 - unified Gemini summaries for FMP PRs and 8-K exhibits)
@@ -16530,7 +16531,26 @@ async def process_8k_summary_phase(job: dict):
         LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Fetching all HTML exhibits from documents page...")
 
         # Step 1: Get ALL HTML exhibits (any number: 1.1, 4.1, 10.1, 99.1, etc.)
-        exhibits = get_all_8k_exhibits(documents_url)
+        # If no exhibits found, fall back to main 8-K body
+        try:
+            exhibits = get_all_8k_exhibits(documents_url)
+        except ValueError as e:
+            if "No HTML exhibits found" in str(e):
+                LOG.info(f"[{ticker}] ⚠️ [JOB {job_id}] No exhibits found, extracting main 8-K body...")
+                # Fall back to main 8-K body content
+                main_8k_url = get_main_8k_url(documents_url)
+                if main_8k_url:
+                    exhibits = [{
+                        'exhibit_number': 'MAIN',
+                        'description': 'Main 8-K Body',
+                        'url': main_8k_url,
+                        'size': 0
+                    }]
+                    LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Using main 8-K body as fallback")
+                else:
+                    raise ValueError("No HTML exhibits and no main 8-K body found")
+            else:
+                raise
 
         if not exhibits:
             raise ValueError("No HTML exhibits found in this 8-K")

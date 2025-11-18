@@ -686,6 +686,70 @@ def get_all_8k_exhibits(documents_url: str) -> List[Dict[str, Any]]:
         raise
 
 
+def get_main_8k_url(documents_url: str) -> Optional[str]:
+    """
+    Get URL of main 8-K HTML document from SEC documents page.
+
+    Used as fallback when no exhibits are found. Some 8-Ks put all content
+    in the main form body (Items 2.02, 7.01, 8.01, etc.) without separate exhibits.
+
+    Args:
+        documents_url: URL to SEC documents index page
+
+    Returns:
+        URL to main 8-K HTML document, or None if not found
+    """
+    import requests
+    from bs4 import BeautifulSoup
+    from urllib.parse import urljoin
+
+    LOG.info(f"Looking for main 8-K body in documents page: {documents_url}")
+
+    try:
+        headers = {
+            'User-Agent': 'StockDigest/1.0 (stockdigest.research@gmail.com)'
+        }
+
+        response = requests.get(documents_url, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.text, 'html.parser')
+        table = soup.find('table', class_='tableFile')
+
+        if not table:
+            return None
+
+        rows = table.find_all('tr')[1:]  # Skip header
+
+        # Find the main 8-K document (type "8-K" and HTML format)
+        for row in rows:
+            cols = row.find_all('td')
+
+            if len(cols) >= 4:
+                doc_type = cols[1].text.strip().upper()
+                filename = cols[2].text.strip()
+
+                # Match main 8-K form (not exhibits)
+                is_main_8k = doc_type == '8-K'
+                is_html = '.htm' in filename.lower()
+
+                if is_main_8k and is_html:
+                    link = cols[2].find('a')
+                    if link and 'href' in link.attrs:
+                        main_url = urljoin(documents_url, link['href'])
+                        # Strip iXBRL viewer wrapper
+                        main_url = main_url.replace('/ix?doc=', '')
+                        LOG.info(f"✅ Found main 8-K body: {main_url}")
+                        return main_url
+
+        LOG.warning("No main 8-K HTML document found")
+        return None
+
+    except Exception as e:
+        LOG.error(f"Failed to get main 8-K URL: {e}")
+        return None
+
+
 def classify_exhibit_type(exhibit_num: str, description: str, char_count: int) -> str:
     """
     Classify exhibit based on number, description, and size.

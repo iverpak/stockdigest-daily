@@ -16428,13 +16428,15 @@ async def process_press_release_phase(job: dict):
                             document_date=pr_date,
                             document_title=pr_title,
                             source_url=None,  # FMP doesn't provide direct URL
+                            parsed_summary=parsed_result['parsed_summary'],
+                            metadata={
+                                'model': parsed_result.get('model', 'gemini-2.5-flash'),
+                                'token_count_input': parsed_result.get('token_count_input', 0),
+                                'token_count_output': parsed_result.get('token_count_output', 0),
+                                'generation_time_seconds': parsed_result.get('generation_time_seconds', 0)
+                            },
                             exhibit_number=None,
                             item_codes=None,
-                            parsed_summary=parsed_result['parsed_summary'],
-                            ai_model=parsed_result.get('model', 'gemini-2.5-flash'),
-                            token_count_input=parsed_result.get('token_count_input', 0),
-                            token_count_output=parsed_result.get('token_count_output', 0),
-                            processing_duration_seconds=int(parsed_result.get('generation_time_seconds', 0)),
                             db_connection=conn
                         )
                     LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Parsed PR saved (source_id={source_id})")
@@ -16683,13 +16685,15 @@ async def process_8k_summary_phase(job: dict):
                                 document_date=filing_date,
                                 document_title=filing_title,
                                 source_url=exhibit_url,
+                                parsed_summary=parsed_result['parsed_summary'],
+                                metadata={
+                                    'model': parsed_result.get('model', 'gemini-2.5-flash'),
+                                    'token_count_input': parsed_result.get('token_count_input', 0),
+                                    'token_count_output': parsed_result.get('token_count_output', 0),
+                                    'generation_time_seconds': parsed_result.get('generation_time_seconds', 0)
+                                },
                                 exhibit_number=exhibit_num,
                                 item_codes=item_codes,
-                                parsed_summary=parsed_result['parsed_summary'],
-                                ai_model=parsed_result.get('model', 'gemini-2.5-flash'),
-                                token_count_input=parsed_result.get('token_count_input', 0),
-                                token_count_output=parsed_result.get('token_count_output', 0),
-                                processing_duration_seconds=int(parsed_result.get('generation_time_seconds', 0)),
                                 db_connection=conn
                             )
                         LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Parsed PR saved for Exhibit {exhibit_num} (source_id={source_id})")

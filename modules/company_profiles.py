@@ -1090,6 +1090,9 @@ def generate_sec_filing_profile_with_gemini(
         # DIAGNOSTIC LOGGING - Detect truncation, safety filters, recitation
         # ====================================================================
 
+        # Store finish_reason_name for later use in truncation check
+        finish_reason_name = None
+
         if hasattr(response, 'candidates') and response.candidates:
             candidate = response.candidates[0]
 
@@ -1184,10 +1187,30 @@ def generate_sec_filing_profile_with_gemini(
         last_chars = profile_markdown.rstrip()[-100:] if len(profile_markdown) > 100 else profile_markdown
         clean_endings = ('.', ')', ']', '*', '`', '>', '|', ':', ';')  # Common markdown endings
 
-        if not profile_markdown.rstrip().endswith(clean_endings):
-            LOG.error(f"[{ticker}] ✂️ MID-SENTENCE TRUNCATION detected!")
-            LOG.error(f"[{ticker}]   Last 100 chars: {last_chars}")
-            LOG.error(f"[{ticker}]   Does not end with: {clean_endings}")
+        # Strip trailing quotes/backticks before checking punctuation
+        text_to_check = profile_markdown.rstrip().rstrip('"\'`')
+
+        if not text_to_check.endswith(clean_endings):
+            # Determine severity based on finish_reason
+            if finish_reason_name and 'STOP' in finish_reason_name:
+                # Model finished naturally - likely false positive (e.g., ends with quote)
+                LOG.warning(f"[{ticker}] ⚠️ Suspicious ending detected (finish_reason=STOP, likely false positive)")
+                LOG.warning(f"[{ticker}]   Last 100 chars: {last_chars}")
+                LOG.warning(f"[{ticker}]   Expected endings: {clean_endings}")
+            elif finish_reason_name and 'MAX_TOKENS' in finish_reason_name:
+                # Hit token limit with bad punctuation - real truncation
+                LOG.error(f"[{ticker}] ✂️ MID-SENTENCE TRUNCATION detected!")
+                LOG.error(f"[{ticker}]   Last 100 chars: {last_chars}")
+                LOG.error(f"[{ticker}]   Does not end with: {clean_endings}")
+            elif finish_reason_name and ('SAFETY' in finish_reason_name or 'RECITATION' in finish_reason_name):
+                # Safety/recitation issue - different problem
+                LOG.error(f"[{ticker}] ✂️ Incomplete output due to {finish_reason_name}")
+                LOG.error(f"[{ticker}]   Last 100 chars: {last_chars}")
+            else:
+                # No finish_reason available or OTHER - uncertain, use warning
+                LOG.warning(f"[{ticker}] ⚠️ Suspicious ending detected (finish_reason={finish_reason_name or 'unknown'})")
+                LOG.warning(f"[{ticker}]   Last 100 chars: {last_chars}")
+                LOG.warning(f"[{ticker}]   Expected endings: {clean_endings}")
 
         # ====================================================================
         # END DIAGNOSTIC LOGGING

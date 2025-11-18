@@ -5190,11 +5190,23 @@ async def scrape_with_scrapfly_async(url: str, domain: str, max_retries: int = 2
             return content, None
 
         LOG.warning(f"⚠️ TIER 2 (Scrapfly) failed for {domain}: {error2}")
-        LOG.error(f"❌ ALL TIERS FAILED for {domain} - Free: {error1}, Scrapfly: {error2}")
+
+        # Smart categorization: ERROR for our infrastructure issues, WARNING for external failures
+        if error2 and "429" in str(error2) and "scrapfly" in str(error2).lower():
+            # ScrapFly rate limited - OUR quota/concurrency issue (SERIOUS)
+            LOG.error(f"❌ SCRAPFLY RATE LIMITED for {domain} - Free: {error1}, Scrapfly: {error2}")
+            LOG.error(f"   ⚠️ Consider upgrading plan or adding request delays")
+        elif error2 and "422" in str(error2):
+            # ScrapFly config error - OUR mistake
+            LOG.error(f"❌ SCRAPFLY CONFIG ERROR for {domain} - Free: {error1}, Scrapfly: {error2}")
+        else:
+            # All other failures (403, 401, insufficient content, etc.) - expected external failures
+            LOG.warning(f"⚠️ ALL TIERS FAILED for {domain} - Free: {error1}, Scrapfly: {error2}")
+
         enhanced_scraping_stats["total_failures"] += 1
         return None, f"All methods failed (Free: {error1}, Scrapfly: {error2})"
     else:
-        LOG.error(f"❌ Scraping failed for {domain} - Free tier failed and no Scrapfly key configured")
+        LOG.warning(f"⚠️ Scraping failed for {domain} - Free tier failed and no Scrapfly key configured")
         enhanced_scraping_stats["total_failures"] += 1
         return None, f"Free scraping failed: {error1}"
 
@@ -14709,9 +14721,21 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
             # If all methods failed, log and skip
             if not resolved_url:
                 failed_count += 1
-                # Log Tier 3 failure with error message
+                # Smart categorization: ERROR for our infrastructure issues, WARNING for external failures
                 if scrapfly_error:
-                    LOG.error(f"[{ticker}] ❌ [{idx}/{total}] Tier 3 (ScrapFly) failed → {scrapfly_error}")
+                    if "429" in str(scrapfly_error):
+                        # ScrapFly rate limited - SERIOUS (breaks workflow)
+                        LOG.error(f"[{ticker}] ❌ [{idx}/{total}] SCRAPFLY RATE LIMITED → {scrapfly_error}")
+                        LOG.error(f"[{ticker}]    ⚠️ This will cause broken google.news links and duplicates!")
+                    elif "422" in str(scrapfly_error):
+                        # ScrapFly config error - OUR mistake
+                        LOG.error(f"[{ticker}] ❌ [{idx}/{total}] SCRAPFLY CONFIG ERROR → {scrapfly_error}")
+                    elif "Timeout" in str(scrapfly_error):
+                        # Timeout - might indicate rate limiting or service issues
+                        LOG.warning(f"[{ticker}] ⚠️ [{idx}/{total}] ScrapFly timeout → {scrapfly_error}")
+                    else:
+                        # Other failures (network, etc.)
+                        LOG.warning(f"[{ticker}] ⚠️ [{idx}/{total}] ScrapFly failed → {scrapfly_error}")
                 continue
 
             # Check if resolved to Yahoo Finance → Extract original source

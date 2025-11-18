@@ -16395,7 +16395,11 @@ async def process_press_release_phase(job: dict):
                 WHERE ticker = %s AND report_date = %s AND pr_title = %s
             """, (ticker, pr_date, pr_title))
             source_id_row = cur.fetchone()
-            source_id = source_id_row[0] if source_id_row else None
+            # Handle both tuple and dict cursor types
+            if source_id_row:
+                source_id = source_id_row['id'] if isinstance(source_id_row, dict) else source_id_row[0]
+            else:
+                source_id = None
             cur.close()
 
         # Progress: 85% - Generating parsed PR summary with Gemini
@@ -16644,7 +16648,11 @@ async def process_8k_summary_phase(job: dict):
                     job_id
                 ))
                 source_id_row = cur.fetchone()
-                source_id = source_id_row[0] if source_id_row else None
+                # Handle both tuple and dict cursor types
+                if source_id_row:
+                    source_id = source_id_row['id'] if isinstance(source_id_row, dict) else source_id_row[0]
+                else:
+                    source_id = None
                 conn.commit()
 
             LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Exhibit {exhibit_num} saved to database")

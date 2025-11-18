@@ -1693,3 +1693,369 @@ def save_company_profile_to_database(
     except Exception as e:
         LOG.error(f"Failed to save company profile for {ticker}: {e}")
         raise
+
+
+# ==============================================================================
+# PARSED PRESS RELEASES - Unified summaries for FMP PRs and 8-K exhibits
+# ==============================================================================
+
+def load_press_release_prompt() -> str:
+    """Load the press release summary prompt from file."""
+    try:
+        prompt_path = os.path.join(os.path.dirname(__file__), '_press_release_summary_prompt')
+        with open(prompt_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except Exception as e:
+        LOG.error(f"Failed to load press release prompt: {e}")
+        raise
+
+
+def generate_parsed_press_release_with_gemini(
+    ticker: str,
+    company_name: str,
+    content: str,
+    document_title: str,
+    source_type: str,  # 'fmp' or '8k'
+    item_codes: str = None,  # 8-K item codes (e.g., "2.02, 9.01")
+    gemini_api_key: str = None
+) -> Optional[Dict]:
+    """
+    Generate structured summary of press release or 8-K exhibit using Gemini 2.5 Flash.
+
+    This creates a unified summary format that can be fed into Phase 1 executive summaries
+    as a pseudo-article that auto-passes triage.
+
+    Args:
+        ticker: Stock ticker (e.g., 'AAPL')
+        company_name: Company name for context
+        content: Full text of press release or 8-K exhibit
+        document_title: Title of the document
+        source_type: 'fmp' for FMP press releases, '8k' for SEC 8-K exhibits
+        item_codes: 8-K item codes for context (optional)
+        gemini_api_key: Gemini API key
+
+    Returns:
+        {
+            'parsed_summary': str (structured extraction),
+            'metadata': {
+                'model': str,
+                'generation_time_seconds': int,
+                'token_count_input': int,
+                'token_count_output': int
+            }
+        }
+    """
+    if not gemini_api_key:
+        LOG.error("❌ Gemini API key not configured for parsed press release generation")
+        return None
+
+    if not content or len(content.strip()) < 100:
+        LOG.error(f"❌ Content too short for {ticker} ({len(content) if content else 0} chars)")
+        return None
+
+    try:
+        genai.configure(api_key=gemini_api_key)
+
+        # Load prompt
+        prompt_template = load_press_release_prompt()
+
+        # Build context header based on source type
+        if source_type == '8k':
+            source_context = f"SEC 8-K Filing"
+            if item_codes:
+                source_context += f" (Items: {item_codes})"
+        else:
+            source_context = "Company Press Release"
+
+        LOG.info(f"Generating parsed summary for {ticker} - {source_context}")
+        LOG.info(f"Document: {document_title[:80]}...")
+        LOG.info(f"Content length: {len(content):,} chars")
+
+        # Gemini 2.5 Flash
+        model = genai.GenerativeModel('gemini-2.5-flash')
+
+        generation_config = {
+            "temperature": 0.0,  # Maximum determinism for consistent extraction
+            "max_output_tokens": 8192  # Sufficient for 2-6 paragraph summary
+        }
+
+        start_time = datetime.now(timezone.utc)
+
+        # Build user content with document context
+        user_content = f"""Company: {company_name} ({ticker})
+Document Type: {source_context}
+Title: {document_title}
+
+---
+DOCUMENT CONTENT:
+
+{content[:400000]}
+"""
+
+        # Combine prompt with content
+        full_prompt = f"{prompt_template}\n\n---\n\n{user_content}"
+
+        response = model.generate_content(
+            full_prompt,
+            generation_config=generation_config
+        )
+
+        end_time = datetime.now(timezone.utc)
+        generation_time = int((end_time - start_time).total_seconds())
+
+        parsed_summary = response.text.strip()
+
+        # Get token counts from usage metadata
+        token_count_input = 0
+        token_count_output = 0
+        if hasattr(response, 'usage_metadata'):
+            token_count_input = getattr(response.usage_metadata, 'prompt_token_count', 0)
+            token_count_output = getattr(response.usage_metadata, 'candidates_token_count', 0)
+
+        # Log success
+        word_count = len(parsed_summary.split())
+        LOG.info(f"✅ Generated parsed summary for {ticker}: {word_count} words in {generation_time}s")
+        LOG.info(f"   Tokens: {token_count_input:,} input, {token_count_output:,} output")
+
+        return {
+            'parsed_summary': parsed_summary,
+            'metadata': {
+                'model': 'gemini-2.5-flash',
+                'generation_time_seconds': generation_time,
+                'token_count_input': token_count_input,
+                'token_count_output': token_count_output
+            }
+        }
+
+    except Exception as e:
+        LOG.error(f"❌ Gemini generation failed for {ticker} parsed PR: {e}")
+        LOG.error(traceback.format_exc())
+        return None
+
+
+def save_parsed_press_release_to_database(
+    ticker: str,
+    company_name: str,
+    source_type: str,  # 'fmp' or '8k'
+    source_id: int,  # FK to press_releases.id or sec_8k_filings.id
+    document_date,  # datetime or string
+    document_title: str,
+    source_url: str,
+    parsed_summary: str,
+    metadata: Dict,
+    exhibit_number: str = None,  # For 8-K exhibits
+    item_codes: str = None,  # For 8-K
+    db_connection = None
+) -> Optional[int]:
+    """
+    Save parsed press release summary to database.
+
+    Args:
+        ticker: Stock ticker
+        company_name: Company name
+        source_type: 'fmp' or '8k'
+        source_id: FK to source table
+        document_date: Publication date
+        document_title: Document title
+        source_url: Direct URL to document
+        parsed_summary: Gemini-generated summary
+        metadata: AI metadata dict
+        exhibit_number: Exhibit number for 8-K (e.g., '99.1')
+        item_codes: 8-K item codes
+        db_connection: Database connection
+
+    Returns:
+        ID of inserted/updated row, or None on error
+    """
+    if not db_connection:
+        LOG.error("❌ No database connection provided for save_parsed_press_release_to_database")
+        return None
+
+    try:
+        cur = db_connection.cursor()
+
+        # Upsert: insert or update on conflict
+        cur.execute("""
+            INSERT INTO parsed_press_releases (
+                ticker, company_name, source_type, source_id,
+                document_date, document_title, source_url,
+                exhibit_number, item_codes,
+                parsed_summary,
+                ai_provider, ai_model,
+                token_count_input, token_count_output,
+                processing_duration_seconds,
+                generated_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            ON CONFLICT (ticker, source_type, source_id, exhibit_number)
+            DO UPDATE SET
+                parsed_summary = EXCLUDED.parsed_summary,
+                ai_model = EXCLUDED.ai_model,
+                token_count_input = EXCLUDED.token_count_input,
+                token_count_output = EXCLUDED.token_count_output,
+                processing_duration_seconds = EXCLUDED.processing_duration_seconds,
+                generated_at = NOW()
+            RETURNING id
+        """, (
+            ticker,
+            company_name,
+            source_type,
+            source_id,
+            document_date,
+            document_title,
+            source_url,
+            exhibit_number,
+            item_codes,
+            parsed_summary,
+            'gemini',
+            metadata.get('model'),
+            metadata.get('token_count_input'),
+            metadata.get('token_count_output'),
+            metadata.get('generation_time_seconds')
+        ))
+
+        result = cur.fetchone()
+        row_id = result[0] if result else None
+
+        db_connection.commit()
+        cur.close()
+
+        LOG.info(f"✅ Saved parsed PR for {ticker} ({source_type}, source_id={source_id}) → id={row_id}")
+        return row_id
+
+    except Exception as e:
+        LOG.error(f"❌ Failed to save parsed PR for {ticker}: {e}")
+        LOG.error(traceback.format_exc())
+        return None
+
+
+def get_parsed_press_releases_for_ticker(
+    ticker: str,
+    db_connection,
+    limit: int = 20
+) -> List[Dict]:
+    """
+    Fetch parsed press releases for a ticker, sorted by date descending.
+
+    Args:
+        ticker: Stock ticker
+        db_connection: Database connection
+        limit: Maximum number of results
+
+    Returns:
+        List of parsed press release dicts
+    """
+    try:
+        cur = db_connection.cursor()
+
+        cur.execute("""
+            SELECT
+                id, ticker, company_name, source_type, source_id,
+                document_date, document_title, source_url,
+                exhibit_number, item_codes,
+                parsed_summary,
+                ai_provider, ai_model,
+                token_count_input, token_count_output,
+                processing_duration_seconds,
+                fed_to_phase1, fed_to_phase1_at,
+                generated_at
+            FROM parsed_press_releases
+            WHERE ticker = %s
+            ORDER BY document_date DESC
+            LIMIT %s
+        """, (ticker, limit))
+
+        columns = [desc[0] for desc in cur.description]
+        results = []
+        for row in cur.fetchall():
+            results.append(dict(zip(columns, row)))
+
+        cur.close()
+        return results
+
+    except Exception as e:
+        LOG.error(f"❌ Failed to fetch parsed PRs for {ticker}: {e}")
+        return []
+
+
+def get_all_parsed_press_releases(
+    db_connection,
+    limit: int = 100
+) -> List[Dict]:
+    """
+    Fetch all parsed press releases for Research viewer, sorted by date descending.
+
+    Args:
+        db_connection: Database connection
+        limit: Maximum number of results
+
+    Returns:
+        List of parsed press release dicts
+    """
+    try:
+        cur = db_connection.cursor()
+
+        cur.execute("""
+            SELECT
+                id, ticker, company_name, source_type, source_id,
+                document_date, document_title, source_url,
+                exhibit_number, item_codes,
+                LENGTH(parsed_summary) as char_count,
+                ai_model,
+                processing_duration_seconds,
+                fed_to_phase1,
+                generated_at
+            FROM parsed_press_releases
+            ORDER BY document_date DESC
+            LIMIT %s
+        """, (limit,))
+
+        columns = [desc[0] for desc in cur.description]
+        results = []
+        for row in cur.fetchall():
+            results.append(dict(zip(columns, row)))
+
+        cur.close()
+        return results
+
+    except Exception as e:
+        LOG.error(f"❌ Failed to fetch all parsed PRs: {e}")
+        return []
+
+
+def delete_parsed_press_release(
+    parsed_pr_id: int,
+    db_connection
+) -> bool:
+    """
+    Delete a parsed press release by ID.
+
+    Args:
+        parsed_pr_id: ID of parsed press release to delete
+        db_connection: Database connection
+
+    Returns:
+        True on success, False on error
+    """
+    try:
+        cur = db_connection.cursor()
+
+        cur.execute("""
+            DELETE FROM parsed_press_releases
+            WHERE id = %s
+        """, (parsed_pr_id,))
+
+        deleted = cur.rowcount > 0
+        db_connection.commit()
+        cur.close()
+
+        if deleted:
+            LOG.info(f"✅ Deleted parsed PR id={parsed_pr_id}")
+        else:
+            LOG.warning(f"⚠️ No parsed PR found with id={parsed_pr_id}")
+
+        return deleted
+
+    except Exception as e:
+        LOG.error(f"❌ Failed to delete parsed PR id={parsed_pr_id}: {e}")
+        return False

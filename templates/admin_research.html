@@ -372,6 +372,7 @@
                     <option value="transcripts">Earnings Transcripts</option>
                     <option value="press_releases">Press Releases</option>
                     <option value="8k_filings">8-K Filings</option>
+                    <option value="parsed_prs">Parsed Press Releases</option>
                 </select>
 
                 <!-- Search Box -->
@@ -1195,6 +1196,11 @@
                         dataKey = 'filings';
                         params = `token=${token}`;
                         break;
+                    case 'parsed_prs':
+                        endpoint = '/api/admin/parsed-press-releases';
+                        dataKey = 'parsed_prs';
+                        params = `token=${token}`;
+                        break;
                 }
 
                 const response = await fetch(`${endpoint}?${params}`);
@@ -1226,6 +1232,7 @@
                 'transcripts': 'transcript',
                 'press_releases': 'press release',
                 '8k_filings': '8-K filing',
+                'parsed_prs': 'parsed press release',
             };
             const typeLabel = typeLabels[currentResearchType] || 'document';
             document.getElementById('profiles-count').textContent = `Found ${profiles.length} ${typeLabel}${profiles.length !== 1 ? 's' : ''}`;
@@ -1244,6 +1251,8 @@
                     'presentations': 'No investor presentations analyzed yet.',
                     'transcripts': 'No earnings transcripts generated yet. Create one in the "Earnings Transcripts" tab!',
                     'press_releases': 'No press releases generated yet. Create one in the "Press Releases" tab!',
+                    'parsed_prs': 'No parsed press releases generated yet. New PRs and 8-Ks will be parsed automatically.',
+                    '8k_filings': 'No 8-K filings loaded yet.',
                 };
                 const colspan = (currentResearchType === '10k' || currentResearchType === '10q') ? '6' :
                 tbody.innerHTML = `<tr><td colspan="${colspan}" style="padding: 40px; text-align: center; color: #6b7280;">${emptyMessages[currentResearchType]}</td></tr>`;
@@ -1318,6 +1327,15 @@
                         <th style="padding: 12px; text-align: center;">Exhibit</th>
                         <th style="padding: 12px; text-align: left;">Description</th>
                         <th style="padding: 12px; text-align: center;">Items</th>
+                        <th style="padding: 12px; text-align: center;">Actions</th>
+                    `;
+                case 'parsed_prs':
+                    return common + `
+                        <th style="padding: 12px; text-align: center;">Source</th>
+                        <th style="padding: 12px; text-align: center;">Source ID</th>
+                        <th style="padding: 12px; text-align: left;">Title</th>
+                        <th onclick="sortTable('document_date')" style="padding: 12px; text-align: left; cursor: pointer;">Date</th>
+                        <th style="padding: 12px; text-align: center;">Chars</th>
                         <th style="padding: 12px; text-align: center;">Actions</th>
                     `;
             }
@@ -1426,6 +1444,29 @@
                             ${getActionButtons(doc, type)}
                         </td>
                     `;
+                case 'parsed_prs':
+                    // Truncate title if too long
+                    const parsedTitle = doc.document_title ? (doc.document_title.length > 50 ? doc.document_title.substring(0, 50) + '...' : doc.document_title) : 'N/A';
+                    // Format source type badge
+                    const sourceTypeBadge = doc.source_type === '8k'
+                        ? '<span style="background: #dbeafe; color: #1e40af; padding: 2px 6px; border-radius: 3px; font-size: 10px;">8-K</span>'
+                        : '<span style="background: #dcfce7; color: #166534; padding: 2px 6px; border-radius: 3px; font-size: 10px;">FMP</span>';
+                    // Format date
+                    const docDate = doc.document_date ? new Date(doc.document_date).toLocaleDateString() : 'N/A';
+                    // Format source ID with prefix
+                    const sourceIdLabel = doc.source_type === '8k' ? `#${doc.source_id}` : `#${doc.source_id}`;
+
+                    return `
+                        <td style="padding: 12px; font-weight: 600; color: #1e40af;">${doc.ticker}</td>
+                        <td style="padding: 12px; text-align: center;">${sourceTypeBadge}</td>
+                        <td style="padding: 12px; text-align: center; font-family: monospace; font-size: 11px; color: #6b7280;">${sourceIdLabel}</td>
+                        <td style="padding: 12px; font-size: 13px; max-width: 250px;" title="${doc.document_title || ''}">${parsedTitle}</td>
+                        <td style="padding: 12px; color: #6b7280; font-size: 13px;">${docDate}</td>
+                        <td style="padding: 12px; text-align: center;">${(doc.char_count || 0).toLocaleString()}</td>
+                        <td style="padding: 12px; text-align: center;">
+                            ${getActionButtons(doc, type)}
+                        </td>
+                    `;
             }
         }
 
@@ -1442,7 +1483,10 @@
                 pr_title: doc.title,                 // For press releases (title field from doc)
                 accession_number: doc.accession_number,  // For 8-K filings
                 exhibit_number: doc.exhibit_number,      // For 8-K exhibit-level operations
-                ai_provider: doc.ai_provider         // Include ai_provider for transcript disambiguation
+                ai_provider: doc.ai_provider,        // Include ai_provider for transcript disambiguation
+                id: doc.id,                          // For parsed_prs (direct ID)
+                source_type: doc.source_type,        // For parsed_prs
+                source_id: doc.source_id             // For parsed_prs
             }).replace(/"/g, '&quot;');
 
             return `
@@ -1484,6 +1528,8 @@
                         return d.ticker === docInfo.ticker && d.report_date === docInfo.report_date && d.title === docInfo.pr_title;
                     } else if (docInfo.type === '8k_filings') {
                         return d.ticker === docInfo.ticker && d.accession_number === docInfo.accession_number && d.exhibit_number === docInfo.exhibit_number;
+                    } else if (docInfo.type === 'parsed_prs') {
+                        return d.id === docInfo.id;
                     }
                 });
 
@@ -1503,6 +1549,9 @@
                         title = `${doc.ticker} Press Release - ${doc.report_date}`;
                     } else if (docInfo.type === '8k_filings') {
                         title = `${doc.ticker} 8-K Filing - Exhibit ${doc.exhibit_number}: ${doc.exhibit_description} (${doc.filing_date})`;
+                    } else if (docInfo.type === 'parsed_prs') {
+                        const sourceLabel = doc.source_type === '8k' ? '8-K' : 'FMP';
+                        title = `${doc.ticker} Parsed PR (${sourceLabel}) - ${doc.document_title}`;
                     }
                     document.getElementById('modal-title').textContent = title;
 
@@ -1511,6 +1560,22 @@
                     if (docInfo.type === '8k_filings') {
                         // 8-K content is already HTML, use directly
                         contentHtml = doc.raw_content || 'No content available';
+                    } else if (docInfo.type === 'parsed_prs') {
+                        // Parsed PRs need to fetch full summary via API
+                        try {
+                            const response = await fetch(`/api/admin/parsed-press-release/${doc.id}?token=${token}`);
+                            const data = await response.json();
+                            if (data.status === 'success' && data.parsed_pr) {
+                                const content = data.parsed_pr.parsed_summary || 'No content available';
+                                contentHtml = markdownToHtml(content);
+                                // Update currentProfile with full data for download
+                                currentProfile = { ...currentProfile, ...data.parsed_pr };
+                            } else {
+                                contentHtml = '<p>Failed to load parsed summary</p>';
+                            }
+                        } catch (e) {
+                            contentHtml = '<p>Error fetching parsed summary: ' + e.message + '</p>';
+                        }
                     } else {
                         // Other types use markdown, convert it
                         const content = doc.profile_markdown || doc.summary_text || 'No content available';
@@ -1551,6 +1616,10 @@
             } else if (type === '8k_filings') {
                 filename = `${currentProfile.ticker}_8K_Exhibit_${currentProfile.exhibit_number}_${currentProfile.filing_date}.md`;
                 content = currentProfile.raw_content || currentProfile.summary_text;
+            } else if (type === 'parsed_prs') {
+                const dateStr = currentProfile.document_date ? new Date(currentProfile.document_date).toISOString().split('T')[0] : 'unknown';
+                filename = `${currentProfile.ticker}_ParsedPR_${currentProfile.source_type}_${dateStr}.md`;
+                content = currentProfile.parsed_summary;
             }
 
             const blob = new Blob([content], { type: 'text/markdown' });
@@ -1641,6 +1710,7 @@
             const docLabel = docInfo.type === '10q' ? `${docInfo.fiscal_quarter} ${docInfo.fiscal_year}` :
                            docInfo.type === '10k' ? `FY ${docInfo.fiscal_year}` :
                            docInfo.type === '8k_filings' ? `Exhibit ${docInfo.exhibit_number}` :
+                           docInfo.type === 'parsed_prs' ? `Parsed PR (${docInfo.source_type})` :
                            docInfo.type;
 
             if (!confirm(`Are you sure you want to delete ${docLabel} for ${docInfo.ticker}?\n\nThis action cannot be undone.`)) {
@@ -1668,6 +1738,9 @@
                 } else if (docInfo.type === '8k_filings') {
                     endpoint = '/api/admin/delete-8k-filing';
                     body = { token, ticker: docInfo.ticker, accession_number: docInfo.accession_number, exhibit_number: docInfo.exhibit_number };
+                } else if (docInfo.type === 'parsed_prs') {
+                    endpoint = '/api/admin/delete-parsed-pr';
+                    body = { token, id: docInfo.id };
                 }
 
                 const response = await fetch(endpoint, {

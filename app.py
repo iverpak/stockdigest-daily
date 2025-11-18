@@ -96,7 +96,13 @@ from modules.company_profiles import (
     quick_parse_8k_header,
     get_all_8k_exhibits,      # NEW: Parse all EX-99.* files from documents page
     extract_8k_html_content,  # Simplified: Single exhibit HTML extraction
-    classify_exhibit_type     # NEW: Auto-classify exhibits (earnings_release, investor_presentation, etc.)
+    classify_exhibit_type,    # NEW: Auto-classify exhibits (earnings_release, investor_presentation, etc.)
+    # Parsed press releases (Nov 2025 - unified Gemini summaries for FMP PRs and 8-K exhibits)
+    generate_parsed_press_release_with_gemini,
+    save_parsed_press_release_to_database,
+    get_parsed_press_releases_for_ticker,
+    get_all_parsed_press_releases,
+    delete_parsed_press_release
 )
 # Article summaries module (Nov 2025 - Gemini primary, Claude fallback)
 import modules.article_summaries as article_summaries
@@ -1934,6 +1940,55 @@ def ensure_schema():
                     generated_at
                 FROM sec_filings
                 WHERE filing_type = '10-K';
+
+                -- PARSED PRESS RELEASES: Unified Gemini summaries from FMP PRs and 8-K exhibits
+                -- Used to feed company announcements into Phase 1 executive summary as pseudo-articles
+                CREATE TABLE IF NOT EXISTS parsed_press_releases (
+                    id SERIAL PRIMARY KEY,
+                    ticker VARCHAR(20) NOT NULL,
+                    company_name VARCHAR(255),
+
+                    -- Source tracking (polymorphic relationship)
+                    source_type VARCHAR(10) NOT NULL,       -- 'fmp' or '8k'
+                    source_id INTEGER,                      -- FK to press_releases.id or sec_8k_filings.id
+
+                    -- Original document metadata
+                    document_date TIMESTAMPTZ NOT NULL,     -- Publication date/time
+                    document_title VARCHAR(500) NOT NULL,   -- Press release or 8-K title
+                    source_url TEXT,                        -- Direct link (SEC URL for 8-K, FMP URL for PR)
+
+                    -- 8-K specific fields (NULL for FMP PRs)
+                    exhibit_number VARCHAR(20),             -- '99.1', '99.2', etc.
+                    item_codes VARCHAR(100),                -- '2.02, 9.01'
+
+                    -- Gemini-generated summary
+                    parsed_summary TEXT NOT NULL,           -- Structured extraction (company article format)
+
+                    -- AI metadata
+                    ai_provider VARCHAR(20) DEFAULT 'gemini',
+                    ai_model VARCHAR(50),
+                    token_count_input INTEGER,
+                    token_count_output INTEGER,
+                    processing_duration_seconds INTEGER,
+
+                    -- Phase 1 integration tracking (Part 2)
+                    fed_to_phase1 BOOLEAN DEFAULT FALSE,
+                    fed_to_phase1_at TIMESTAMPTZ,
+                    phase1_article_id INTEGER,              -- FK to ticker_articles.id when injected
+
+                    -- Timestamps
+                    generated_at TIMESTAMPTZ DEFAULT NOW(),
+
+                    -- Unique constraint: one parsed summary per source document/exhibit
+                    CONSTRAINT parsed_pr_unique UNIQUE(ticker, source_type, source_id, exhibit_number)
+                );
+
+                -- Indexes for parsed_press_releases
+                CREATE INDEX IF NOT EXISTS idx_parsed_pr_ticker ON parsed_press_releases(ticker);
+                CREATE INDEX IF NOT EXISTS idx_parsed_pr_date ON parsed_press_releases(document_date DESC);
+                CREATE INDEX IF NOT EXISTS idx_parsed_pr_ticker_date ON parsed_press_releases(ticker, document_date DESC);
+                CREATE INDEX IF NOT EXISTS idx_parsed_pr_source ON parsed_press_releases(source_type, source_id);
+                CREATE INDEX IF NOT EXISTS idx_parsed_pr_fed ON parsed_press_releases(fed_to_phase1) WHERE fed_to_phase1 = FALSE;
 
                 -- Beta users table for landing page signups
                 CREATE TABLE IF NOT EXISTS beta_users (
@@ -23601,6 +23656,318 @@ async def delete_8k_filing_api(request: Request):
 
     except Exception as e:
         LOG.error(f"Failed to delete 8-K exhibit: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+# ==============================================================================
+# PARSED PRESS RELEASES API ENDPOINTS
+# ==============================================================================
+
+@APP.get("/api/admin/parsed-press-releases")
+def get_all_parsed_press_releases_api(token: str = Query(...)):
+    """
+    Get all parsed press releases for Research Library.
+
+    Returns unified list of Gemini summaries from FMP PRs and 8-K exhibits.
+
+    Returns: {
+        "status": "success",
+        "parsed_prs": [
+            {
+                "id": 1,
+                "ticker": "AAPL",
+                "company_name": "Apple Inc.",
+                "source_type": "8k",
+                "document_date": "2025-01-30T16:00:00",
+                "document_title": "Apple Reports First Quarter Results",
+                "exhibit_number": "99.1",
+                "item_codes": "2.02",
+                "char_count": 3500,
+                "fed_to_phase1": false,
+                "generated_at": "..."
+            },
+            ...
+        ]
+    }
+    """
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn:
+            parsed_prs = get_all_parsed_press_releases(conn, limit=200)
+
+            # Format dates for JSON serialization
+            for pr in parsed_prs:
+                if pr.get('document_date'):
+                    pr['document_date'] = pr['document_date'].isoformat() if hasattr(pr['document_date'], 'isoformat') else str(pr['document_date'])
+                if pr.get('generated_at'):
+                    pr['generated_at'] = pr['generated_at'].isoformat() if hasattr(pr['generated_at'], 'isoformat') else str(pr['generated_at'])
+
+            return {
+                "status": "success",
+                "parsed_prs": parsed_prs
+            }
+
+    except Exception as e:
+        LOG.error(f"Failed to get parsed press releases: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@APP.get("/api/admin/parsed-press-release/{pr_id}")
+def get_parsed_press_release_detail(pr_id: int, token: str = Query(...)):
+    """
+    Get full details of a specific parsed press release including the summary text.
+
+    Returns: {
+        "status": "success",
+        "parsed_pr": {
+            "id": 1,
+            "ticker": "AAPL",
+            "parsed_summary": "...",
+            ...
+        }
+    }
+    """
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    id, ticker, company_name, source_type, source_id,
+                    document_date, document_title, source_url,
+                    exhibit_number, item_codes,
+                    parsed_summary,
+                    ai_provider, ai_model,
+                    token_count_input, token_count_output,
+                    processing_duration_seconds,
+                    fed_to_phase1, fed_to_phase1_at,
+                    generated_at
+                FROM parsed_press_releases
+                WHERE id = %s
+            """, (pr_id,))
+
+            row = cur.fetchone()
+
+            if not row:
+                return {"status": "error", "message": f"Parsed PR {pr_id} not found"}
+
+            # Convert to dict
+            columns = [desc[0] for desc in cur.description]
+            pr = dict(zip(columns, row))
+
+            # Format dates
+            for key in ['document_date', 'fed_to_phase1_at', 'generated_at']:
+                if pr.get(key) and hasattr(pr[key], 'isoformat'):
+                    pr[key] = pr[key].isoformat()
+
+            return {
+                "status": "success",
+                "parsed_pr": pr
+            }
+
+    except Exception as e:
+        LOG.error(f"Failed to get parsed PR {pr_id}: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@APP.post("/api/admin/generate-parsed-pr")
+async def generate_parsed_pr_api(request: Request):
+    """
+    Generate parsed press release summary on-demand.
+
+    Can regenerate existing or create new from source document.
+
+    Body: {
+        "token": "...",
+        "source_type": "fmp" or "8k",
+        "source_id": 123,  // ID in source table
+        // For regeneration, that's all we need - we fetch content from source table
+    }
+
+    Returns: {
+        "status": "success",
+        "parsed_pr_id": 456,
+        "message": "Generated parsed summary for AAPL"
+    }
+    """
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    source_type = body.get('source_type')
+    source_id = body.get('source_id')
+
+    if not source_type or not source_id:
+        return {"status": "error", "message": "Missing required fields: source_type, source_id"}
+
+    if source_type not in ['fmp', '8k']:
+        return {"status": "error", "message": "source_type must be 'fmp' or '8k'"}
+
+    gemini_api_key = os.getenv("GEMINI_API_KEY")
+    if not gemini_api_key:
+        return {"status": "error", "message": "GEMINI_API_KEY not configured"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Fetch source document details
+            if source_type == 'fmp':
+                # Get from press_releases table
+                cur.execute("""
+                    SELECT id, ticker, company_name, report_date, pr_title
+                    FROM press_releases
+                    WHERE id = %s
+                """, (source_id,))
+                source_row = cur.fetchone()
+
+                if not source_row:
+                    return {"status": "error", "message": f"Press release {source_id} not found"}
+
+                ticker = source_row[1]
+                company_name = source_row[2]
+                document_date = source_row[3]
+                document_title = source_row[4]
+                exhibit_number = None
+                item_codes = None
+                source_url = None
+
+                # Fetch RAW content from FMP API (not Claude summary)
+                fmp_api_key = os.getenv("FMP_API_KEY")
+                if not fmp_api_key:
+                    return {"status": "error", "message": "FMP_API_KEY not configured"}
+
+                LOG.info(f"📥 Fetching raw PR content from FMP for {ticker} - {document_title}")
+
+                # Format date for FMP API (YYYY-MM-DD)
+                pr_date_str = document_date.strftime('%Y-%m-%d') if hasattr(document_date, 'strftime') else str(document_date)[:10]
+
+                raw_pr = fetch_fmp_press_release_by_date(ticker, pr_date_str, document_title, fmp_api_key)
+
+                if not raw_pr or not raw_pr.get('text'):
+                    return {"status": "error", "message": f"Could not fetch raw PR content from FMP for {ticker} on {pr_date_str}"}
+
+                content = raw_pr.get('text', '')
+                LOG.info(f"✅ Fetched raw PR: {len(content):,} chars")
+
+            else:  # '8k'
+                # Get from sec_8k_filings table
+                cur.execute("""
+                    SELECT id, ticker, company_name, filing_date, filing_title,
+                           item_codes, sec_html_url, raw_content, exhibit_number
+                    FROM sec_8k_filings
+                    WHERE id = %s
+                """, (source_id,))
+                source_row = cur.fetchone()
+
+                if not source_row:
+                    return {"status": "error", "message": f"8-K filing {source_id} not found"}
+
+                ticker = source_row[1]
+                company_name = source_row[2]
+                document_date = source_row[3]
+                document_title = source_row[4]
+                item_codes = source_row[5]
+                source_url = source_row[6]
+                content = source_row[7]  # raw_content
+                exhibit_number = source_row[8]
+
+            if not content:
+                return {"status": "error", "message": f"No content found for {source_type} source {source_id}"}
+
+            # Get ticker config for company name if not available
+            if not company_name:
+                config = get_ticker_config(ticker)
+                company_name = config.get('company_name', ticker) if config else ticker
+
+            LOG.info(f"📝 Generating parsed PR for {ticker} ({source_type}, source_id={source_id})")
+
+            # Generate summary
+            result = generate_parsed_press_release_with_gemini(
+                ticker=ticker,
+                company_name=company_name,
+                content=content,
+                document_title=document_title,
+                source_type=source_type,
+                item_codes=item_codes,
+                gemini_api_key=gemini_api_key
+            )
+
+            if not result:
+                return {"status": "error", "message": "Failed to generate parsed summary"}
+
+            # Save to database
+            parsed_pr_id = save_parsed_press_release_to_database(
+                ticker=ticker,
+                company_name=company_name,
+                source_type=source_type,
+                source_id=source_id,
+                document_date=document_date,
+                document_title=document_title,
+                source_url=source_url,
+                parsed_summary=result['parsed_summary'],
+                metadata=result['metadata'],
+                exhibit_number=exhibit_number,
+                item_codes=item_codes,
+                db_connection=conn
+            )
+
+            if not parsed_pr_id:
+                return {"status": "error", "message": "Failed to save parsed summary"}
+
+            return {
+                "status": "success",
+                "parsed_pr_id": parsed_pr_id,
+                "message": f"Generated parsed summary for {ticker}",
+                "word_count": len(result['parsed_summary'].split()),
+                "generation_time": result['metadata'].get('generation_time_seconds')
+            }
+
+    except Exception as e:
+        LOG.error(f"Failed to generate parsed PR: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+
+@APP.post("/api/admin/delete-parsed-pr")
+async def delete_parsed_pr_api(request: Request):
+    """
+    Delete a parsed press release by ID.
+
+    Body: {
+        "token": "...",
+        "id": 123
+    }
+    """
+    body = await request.json()
+    token = body.get('token')
+    parsed_pr_id = body.get('id')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    if not parsed_pr_id:
+        return {"status": "error", "message": "Missing required field: id"}
+
+    try:
+        with db() as conn:
+            deleted = delete_parsed_press_release(parsed_pr_id, conn)
+
+            if deleted:
+                return {
+                    "status": "success",
+                    "message": f"Deleted parsed PR {parsed_pr_id}"
+                }
+            else:
+                return {
+                    "status": "error",
+                    "message": f"Parsed PR {parsed_pr_id} not found"
+                }
+
+    except Exception as e:
+        LOG.error(f"Failed to delete parsed PR: {e}")
         return {"status": "error", "message": str(e)}
 
 

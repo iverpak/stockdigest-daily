@@ -5979,26 +5979,7 @@ async def scrape_single_article_async(article: Dict, category: str, metadata: Di
                         "scraped_content": None
                     }
             else:
-                # Paywall or problematic domain - store headline-only marker for flagged articles
-                article_id = article.get("id")
-                if scrape_domain in PAYWALL_DOMAINS and article_id:
-                    try:
-                        with db() as conn, conn.cursor() as cur:
-                            cur.execute("""
-                                UPDATE ticker_articles
-                                SET ai_summary = %s,
-                                    ai_model = %s
-                                WHERE article_id = %s AND ticker = %s
-                            """, (
-                                f"Paywalled content - headline only. Title: {title}",
-                                "headline_only",
-                                article_id,
-                                analysis_ticker
-                            ))
-                        LOG.info(f"[{analysis_ticker}] 🔒 Stored headline-only marker for paywalled article: {title[:60]}...")
-                    except Exception as e:
-                        LOG.error(f"[{analysis_ticker}] Failed to store headline-only marker: {e}")
-
+                # Paywall or problematic domain - no scraping, no ai_summary
                 return {
                     "success": False,
                     "error": f"Skipped problematic domain: {scrape_domain}",
@@ -6889,8 +6870,8 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
     if ai_model == 'spam':
         # Spam article (resolved to spam domain)
         header_badges.append('<span class="spam-badge" style="display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fee; color: #c53030; border: 1px solid #fc8181;">🗑️ Spam</span>')
-    elif ai_model == 'headline_only':
-        # Paywalled article (flagged + paywalled)
+    elif normalize_domain(resolved_domain) in PAYWALL_DOMAINS:
+        # Paywalled article - scraping skipped
         header_badges.append('<span class="paywall-badge" style="display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e;">📰 Paywall</span>')
     elif ai_model == 'filtered':
         # Filtered by retail platform detection
@@ -6902,7 +6883,7 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
     elif ai_model == 'error':
         # AI analysis failed (technical error)
         header_badges.append('<span class="error-badge" style="display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fee; color: #c53030; border: 1px solid #fc8181;">❌ Failed (AI Error)</span>')
-    elif ai_summary and ai_model and ai_model not in ('none', 'spam', 'headline_only', 'filtered', 'low_relevance', 'error'):
+    elif ai_summary and ai_model and ai_model not in ('none', 'spam', 'filtered', 'low_relevance', 'error'):
         # Successfully analyzed article - show which AI model was used
         header_badges.append(f'<span class="ai-model-badge">🤖 {ai_model}</span>')
     elif scraping_failed:

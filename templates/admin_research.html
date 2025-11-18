@@ -749,11 +749,21 @@
             }
 
             container.innerHTML = items.map(item => {
-                // Truncate title if too long
-                const displayTitle = item.title.length > 80 ? item.title.substring(0, 80) + '...' : item.title;
+                // Truncate and escape title to prevent HTML injection
+                const rawTitle = item.title || '';
+                const truncatedTitle = rawTitle.length > 80 ? rawTitle.substring(0, 80) + '...' : rawTitle;
+                const displayTitle = escapeHtml(truncatedTitle);
 
                 if (item.generated) {
                     const genDate = new Date(item.generated).toLocaleDateString();
+                    // Use JSON.stringify for safe onclick parameters
+                    const deleteParams = JSON.stringify({
+                        ticker: ticker,
+                        type: 'press_releases',
+                        report_date: item.date,
+                        pr_title: item.title
+                    }).replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
                     return `
                         <div style="padding: 12px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
                             <div>
@@ -766,7 +776,7 @@
                                         style="background: #1e40af; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">
                                     View
                                 </button>
-                                <button onclick="deleteDocument({ticker: '${ticker}', type: 'press_releases', report_date: '${item.date}', pr_title: \`${item.title}\`})"
+                                <button onclick='deleteDocument(${deleteParams})'
                                         style="background: #dc2626; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">
                                     Delete
                                 </button>
@@ -774,13 +784,20 @@
                         </div>
                     `;
                 } else {
+                    // Use JSON.stringify for safe onclick parameters
+                    const genParams = JSON.stringify({
+                        ticker: ticker,
+                        date: item.date,
+                        title: item.title
+                    }).replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
                     return `
                         <div style="padding: 12px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
                             <div>
                                 <strong>${displayTitle}</strong>
                                 ${item.date ? `<span style="color: #6b7280; font-size: 12px; margin-left: 8px;">Date: ${formatShortDate(item.date)}</span>` : ''}
                             </div>
-                            <button onclick="generatePressRelease('${ticker}', '${item.date}', \`${item.title}\`)"
+                            <button onclick='generatePressReleaseSafe(${genParams})'
                                     style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600;">
                                 Generate
                             </button>
@@ -851,7 +868,7 @@
                         </div>
                     `;
                 } else {
-                    // Encode all parameters as JSON object (same safe pattern as has_summary section)
+                    // Encode all parameters as JSON object with full HTML escaping
                     const params = JSON.stringify({
                         ticker: ticker,
                         cik: cik || '',
@@ -860,7 +877,7 @@
                         filing_title: item.title || '',
                         documents_url: item.documents_url || '',
                         item_codes: item.item_codes || ''
-                    }).replace(/"/g, '&quot;');
+                    }).replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
                     return `
                         <div style="padding: 12px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
@@ -1033,6 +1050,11 @@
             } catch (error) {
                 alert(`❌ Failed: ${error.message}`);
             }
+        }
+
+        // Safe wrapper that accepts JSON object (for escaped onclick handlers)
+        function generatePressReleaseSafe(params) {
+            generatePressRelease(params.ticker, params.date, params.title);
         }
 
         // PDF drag & drop handlers
@@ -1406,11 +1428,11 @@
                     `;
                 case 'presentations':
                     return `
-                        <td style="padding: 12px; font-weight: 600; color: #1e40af;">${doc.ticker}</td>
-                        <td style="padding: 12px;">${doc.company_name || 'N/A'}</td>
-                        <td style="padding: 12px; font-size: 13px;">${doc.presentation_title || 'N/A'}</td>
+                        <td style="padding: 12px; font-weight: 600; color: #1e40af;">${escapeHtml(doc.ticker)}</td>
+                        <td style="padding: 12px;">${escapeHtml(doc.company_name) || 'N/A'}</td>
+                        <td style="padding: 12px; font-size: 13px;">${escapeHtml(doc.presentation_title) || 'N/A'}</td>
                         <td style="padding: 12px; font-size: 13px;">${doc.presentation_date || 'N/A'}</td>
-                        <td style="padding: 12px; text-align: center; font-size: 13px;">${doc.presentation_type || 'N/A'}</td>
+                        <td style="padding: 12px; text-align: center; font-size: 13px;">${escapeHtml(doc.presentation_type) || 'N/A'}</td>
                         <td style="padding: 12px; text-align: center;">${doc.page_count || 'N/A'}</td>
                         <td style="padding: 12px; color: #6b7280; font-size: 13px;">${generatedDate}</td>
                         <td style="padding: 12px; text-align: center;">
@@ -1429,11 +1451,13 @@
                         </td>
                     `;
                 case 'press_releases':
-                    // Title truncation - show more of the title (80 chars instead of 60)
-                    const prTitle = doc.title ? (doc.title.length > 80 ? doc.title.substring(0, 80) + '...' : doc.title) : 'Press Release';
+                    // Title truncation and escaping
+                    const prRawTitle = doc.title || '';
+                    const prTruncated = prRawTitle.length > 80 ? prRawTitle.substring(0, 80) + '...' : prRawTitle;
+                    const prTitle = escapeHtml(prTruncated) || 'Press Release';
 
                     return `
-                        <td style="padding: 12px; font-weight: 600; color: #1e40af;">${doc.ticker}</td>
+                        <td style="padding: 12px; font-weight: 600; color: #1e40af;">${escapeHtml(doc.ticker)}</td>
                         <td style="padding: 12px; font-size: 13px; max-width: 400px;">${prTitle}</td>
                         <td style="padding: 12px; color: #6b7280; font-size: 13px;">${doc.report_date || 'N/A'}</td>
                         <td style="padding: 12px; text-align: center;">${(doc.word_count || 0).toLocaleString()}</td>
@@ -1443,10 +1467,10 @@
                         </td>
                     `;
                 case '8k_filings':
-                    const exhibitDesc = doc.exhibit_description || 'N/A';
+                    const exhibitDesc = escapeHtml(doc.exhibit_description) || 'N/A';
 
                     return `
-                        <td style="padding: 12px; font-weight: 600; color: #1e40af;">${doc.ticker}</td>
+                        <td style="padding: 12px; font-weight: 600; color: #1e40af;">${escapeHtml(doc.ticker)}</td>
                         <td style="padding: 12px; color: #6b7280; font-size: 13px;">${formatShortDate(doc.filing_date) || 'N/A'}</td>
                         <td style="padding: 12px; text-align: center; font-weight: 600; color: #1e40af; font-size: 14px;">${doc.exhibit_number || 'N/A'}</td>
                         <td style="padding: 12px; font-size: 13px; max-width: 300px;">${exhibitDesc}</td>
@@ -1500,7 +1524,7 @@
                 id: doc.id,                          // For parsed_prs (direct ID)
                 source_type: doc.source_type,        // For parsed_prs
                 source_id: doc.source_id             // For parsed_prs
-            }).replace(/"/g, '&quot;');
+            }).replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
             return `
                 <div style="display: flex; gap: 3px; justify-content: center; flex-wrap: nowrap;">

@@ -464,6 +464,9 @@
             <button class="btn btn-secondary" onclick="clearAllReports()">
                 🗑️ CLEAR ALL REPORTS <span class="btn-count" id="btn-clear-count">-</span>
             </button>
+            <button class="btn btn-info" onclick="bulkReviewQuality()">
+                🔍 REVIEW ALL READY/SENT <span class="btn-count" id="btn-bulk-review-count">-</span>
+            </button>
         </div>
 
         <!-- Restart Actions -->
@@ -663,6 +666,7 @@
             document.getElementById('btn-undo-cancel-count').textContent = data.cancelled || 0;
             document.getElementById('btn-send-count').textContent = data.ready || 0;
             document.getElementById('btn-clear-count').textContent = total;
+            document.getElementById('btn-bulk-review-count').textContent = (data.ready || 0) + (data.sent || 0);
 
             // Dynamic count #1: Active users (for Generate All Reports button)
             try {
@@ -1081,60 +1085,237 @@
         }
 
         async function reviewQuality(ticker) {
-            if (!confirm(`🔍 Comprehensive Quality Review for ${ticker}?\n\nThis will:\n• Phase 1: Verify every sentence against article summaries\n• Phase 2: Verify filing context against 10-K/10-Q/Transcript\n• Detect fabricated numbers, claims, and context errors\n• Email detailed combined report to your inbox\n\nEstimated time: 10-15 seconds\n\nContinue?`)) return;
+            if (!confirm(`🔍 Comprehensive Quality Review for ${ticker}?\n\nThis will:\n• Phase 1: Verify every sentence against article summaries\n• Phase 2: Verify filing context against 10-K/10-Q/Transcript\n• Phase 3: Context relevance verification\n• Phase 4: Metadata & structure validation\n• Email detailed combined report to your inbox\n\nEstimated time: 2-4 minutes\n\nContinue?`)) return;
 
             try {
                 // Show loading state
                 const btn = event.target;
                 const originalText = btn.innerHTML;
-                btn.innerHTML = '⏳ Reviewing...';
+                btn.innerHTML = '⏳ Submitting...';
                 btn.disabled = true;
 
-                const response = await fetch('/api/review-all-quality', {
+                // Submit job to queue
+                const response = await fetch('/api/quality-review-job', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({token, ticker})
+                    body: JSON.stringify({
+                        token,
+                        tickers: [ticker],  // Single ticker
+                        send_email: true
+                    })
                 });
 
                 const result = await response.json();
 
-                // Restore button
-                btn.innerHTML = originalText;
-                btn.disabled = false;
-
-                if (result.status === 'success') {
-                    const p1Summary = result.phase1_summary;
-                    const p2Summary = result.phase2_summary;
-                    const phase2Skipped = result.phase2_skipped;
-
-                    const p1Critical = p1Summary.errors_by_severity.CRITICAL || 0;
-                    const p2Critical = phase2Skipped ? 0 : (p2Summary.errors_by_severity.CRITICAL || 0);
-                    const totalCritical = p1Critical + p2Critical;
-                    const passStatus = totalCritical === 0 ? '✅ PASS' : '❌ FAIL';
-
-                    let message = `${passStatus} Comprehensive Quality Review Complete: ${ticker}\n\n`;
-                    message += `📰 Phase 1 (Articles):\n`;
-                    message += `• ${p1Summary.supported} supported (${(p1Summary.supported/p1Summary.total_sentences*100).toFixed(1)}%)\n`;
-                    message += `• ${p1Summary.unsupported} unsupported\n`;
-                    message += `• ${p1Critical} critical errors\n\n`;
-
-                    if (phase2Skipped) {
-                        message += `📄 Phase 2 (Filings): SKIPPED (no filings available)\n\n`;
-                    } else {
-                        message += `📄 Phase 2 (Filings):\n`;
-                        message += `• ${p2Summary.accurate} accurate contexts (${(p2Summary.accurate/p2Summary.total_contexts*100).toFixed(1)}%)\n`;
-                        message += `• ${p2Summary.issues} issues\n`;
-                        message += `• ${p2Critical} critical errors\n\n`;
-                    }
-
-                    message += `📧 Detailed combined report sent to your inbox!`;
-
-                    alert(message);
-                } else {
+                if (result.status !== 'success') {
+                    btn.innerHTML = originalText;
+                    btn.disabled = false;
                     alert('Error: ' + result.message);
+                    return;
                 }
+
+                const batchId = result.batch_id;
+
+                // Poll for completion
+                let pollCount = 0;
+                const maxPolls = 60;  // 3 minutes max (60 × 3s)
+
+                const pollInterval = setInterval(async () => {
+                    pollCount++;
+
+                    try {
+                        const statusResp = await fetch(`/jobs/batch/${batchId}?token=${token}`);
+                        const statusData = await statusResp.json();
+
+                        if (statusData.jobs && statusData.jobs.length > 0) {
+                            const job = statusData.jobs[0];
+                            const progress = job.progress || 0;
+
+                            // Update button with progress
+                            btn.innerHTML = `⏳ ${progress}%`;
+
+                            // Check if complete
+                            if (job.status === 'completed') {
+                                clearInterval(pollInterval);
+                                btn.innerHTML = originalText;
+                                btn.disabled = false;
+
+                                alert(`✅ Quality review complete for ${ticker}!\n\n📧 Detailed report sent to your inbox.`);
+                            } else if (job.status === 'failed') {
+                                clearInterval(pollInterval);
+                                btn.innerHTML = originalText;
+                                btn.disabled = false;
+
+                                alert(`❌ Quality review failed for ${ticker}:\n\n${job.error_message || 'Unknown error'}`);
+                            }
+                        }
+
+                        // Timeout after max polls
+                        if (pollCount >= maxPolls) {
+                            clearInterval(pollInterval);
+                            btn.innerHTML = originalText;
+                            btn.disabled = false;
+                            alert(`⏱️ Quality review for ${ticker} is still processing.\n\nCheck /jobs/batch/${batchId} for status.`);
+                        }
+                    } catch (pollError) {
+                        console.error('Poll error:', pollError);
+                    }
+                }, 3000);  // Poll every 3 seconds
+
             } catch (error) {
-                alert('Failed to review quality: ' + error.message);
+                const btn = event.target;
+                if (btn) {
+                    btn.innerHTML = btn.getAttribute('data-original-text') || '🔍 Review All';
+                    btn.disabled = false;
+                }
+                alert('Failed to submit quality review: ' + error.message);
+            }
+        }
+
+        async function bulkReviewQuality() {
+            // Get ready/sent tickers
+            const readySentTickers = Object.values(queueStats).filter(t =>
+                t.status === 'ready' || t.status === 'sent'
+            );
+            const readySentCount = readySentTickers.length;
+
+            if (readySentCount === 0) {
+                alert('⚠️ No ready or sent tickers found to review.');
+                return;
+            }
+
+            // Calculate estimated time (3 min per ticker @ 3 concurrent = total/3 batches)
+            const estimatedMinutes = Math.ceil(readySentCount / 3) * 3;
+
+            if (!confirm(`🔍 Bulk Quality Review?\n\nThis will review ALL ${readySentCount} tickers with status 'ready' or 'sent'.\n\nProcessing:\n• Phase 1: Article verification\n• Phase 2: Filing context verification\n• Phase 3: Context relevance\n• Phase 4: Metadata & structure\n\nYou will receive ${readySentCount} separate emails (one per ticker).\n\nEstimated time: ~${estimatedMinutes} minutes (3 concurrent)\n\nContinue?`)) return;
+
+            try {
+                // Show loading state
+                const btn = event.target;
+                const originalText = btn.innerHTML;
+                btn.innerHTML = '⏳ Submitting...';
+                btn.disabled = true;
+
+                // Submit jobs to queue
+                const response = await fetch('/api/quality-review-job', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        token,
+                        tickers: readySentTickers.map(t => t.ticker),
+                        send_email: true
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.status !== 'success') {
+                    btn.innerHTML = originalText;
+                    btn.disabled = false;
+                    alert('Error: ' + result.message);
+                    return;
+                }
+
+                const batchId = result.batch_id;
+
+                // Show progress modal
+                const progressDiv = document.createElement('div');
+                progressDiv.id = 'bulk-review-progress';
+                progressDiv.style.cssText = 'position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 32px; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.2); z-index: 10000; min-width: 400px; text-align: center;';
+                progressDiv.innerHTML = `
+                    <div style="font-size: 20px; font-weight: 700; margin-bottom: 16px; color: #1e3a8a;">🔍 Bulk Quality Review</div>
+                    <div id="bulk-progress-status" style="font-size: 16px; color: #374151; margin-bottom: 12px;">Starting...</div>
+                    <div style="width: 100%; background: #e5e7eb; border-radius: 8px; height: 24px; margin-bottom: 12px; overflow: hidden;">
+                        <div id="bulk-progress-bar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #3b82f6, #1e40af); transition: width 0.3s;"></div>
+                    </div>
+                    <div id="bulk-progress-details" style="font-size: 14px; color: #6b7280;"></div>
+                `;
+                document.body.appendChild(progressDiv);
+
+                // Poll for progress
+                let pollCount = 0;
+                const maxPolls = 180;  // 15 minutes max (180 × 5s)
+
+                const pollInterval = setInterval(async () => {
+                    pollCount++;
+
+                    try {
+                        const statusResp = await fetch(`/jobs/batch/${batchId}?token=${token}`);
+                        const statusData = await statusResp.json();
+
+                        const completed = statusData.completed || 0;
+                        const failed = statusData.failed || 0;
+                        const processing = statusData.processing || 0;
+                        const total = statusData.total_tickers || readySentCount;
+                        const overallProgress = statusData.overall_progress || 0;
+
+                        // Update progress bar
+                        const progressPercent = Math.floor((completed + failed) / total * 100);
+                        document.getElementById('bulk-progress-bar').style.width = progressPercent + '%';
+
+                        // Update status text
+                        document.getElementById('bulk-progress-status').textContent =
+                            `Processing ${completed + failed + processing}/${total} tickers`;
+
+                        // Update details
+                        document.getElementById('bulk-progress-details').textContent =
+                            `✅ ${completed} completed | ❌ ${failed} failed | ⏳ ${processing} in progress`;
+
+                        // Check if batch complete
+                        if (statusData.status === 'completed' || (completed + failed) >= total) {
+                            clearInterval(pollInterval);
+
+                            // Remove progress modal
+                            if (progressDiv.parentNode) {
+                                progressDiv.parentNode.removeChild(progressDiv);
+                            }
+
+                            // Restore button
+                            btn.innerHTML = originalText;
+                            btn.disabled = false;
+
+                            // Show results
+                            let message = `✅ Bulk Quality Review Complete!\n\n`;
+                            message += `📊 Summary:\n`;
+                            message += `• Total: ${total}\n`;
+                            message += `• ✅ Completed: ${completed}\n`;
+                            message += `• ❌ Failed: ${failed}\n\n`;
+                            message += `📧 ${completed} email reports sent to your inbox!`;
+
+                            alert(message);
+                        }
+
+                        // Timeout
+                        if (pollCount >= maxPolls) {
+                            clearInterval(pollInterval);
+
+                            if (progressDiv.parentNode) {
+                                progressDiv.parentNode.removeChild(progressDiv);
+                            }
+
+                            btn.innerHTML = originalText;
+                            btn.disabled = false;
+
+                            alert(`⏱️ Bulk review is still processing.\n\nCompleted so far: ${completed}/${total}\n\nCheck /jobs/batch/${batchId} for status.`);
+                        }
+                    } catch (pollError) {
+                        console.error('Poll error:', pollError);
+                    }
+                }, 5000);  // Poll every 5 seconds
+
+            } catch (error) {
+                const progressDiv = document.getElementById('bulk-review-progress');
+                if (progressDiv && progressDiv.parentNode) {
+                    progressDiv.parentNode.removeChild(progressDiv);
+                }
+
+                const btn = event.target;
+                if (btn) {
+                    btn.innerHTML = btn.getAttribute('data-original-text') || '🔍 REVIEW ALL READY/SENT';
+                    btn.disabled = false;
+                }
+
+                alert('Failed to submit bulk review: ' + error.message);
             }
         }
 

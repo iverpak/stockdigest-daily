@@ -15404,6 +15404,267 @@ async def process_company_profile_phase(job: dict):
         )
 
 
+async def process_quality_review_phase(job: dict):
+    """Process comprehensive quality review (2-4 min, 4 Gemini calls)
+
+    Runs all 4 quality review phases:
+    - Phase 1: Article verification against executive summary
+    - Phase 2: Filing context verification (10-K/10-Q/Transcript)
+    - Phase 3: Context relevance verification
+    - Phase 4: Metadata & structure validation
+
+    Sends email report with pass/fail status.
+    """
+    job_id = job['job_id']
+    ticker = job['ticker']
+    config = job['config'] if isinstance(job['config'], dict) else {}
+
+    try:
+        # Start heartbeat thread (CRITICAL: Quality review takes 2-4 minutes)
+        start_heartbeat_thread(job_id)
+
+        # Progress: 10% - Fetch executive summary from database
+        update_job_status(job_id, progress=10)
+        LOG.info(f"[{ticker}] 🔍 [JOB {job_id}] Fetching executive summary for quality review...")
+
+        # Determine target date
+        review_date_str = config.get('review_date')
+        if review_date_str:
+            if isinstance(review_date_str, str):
+                target_date = datetime.strptime(review_date_str, '%Y-%m-%d').date()
+            else:
+                target_date = review_date_str
+            LOG.info(f"[{ticker}] Using explicit date parameter: {target_date}")
+        else:
+            target_date = datetime.now(timezone.utc).date()
+            LOG.info(f"[{ticker}] Using current date (UTC): {target_date}")
+
+        # Fetch executive summary
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT summary_json, article_ids
+                FROM executive_summaries
+                WHERE ticker = %s AND summary_date = %s
+                ORDER BY generated_at DESC LIMIT 1
+            """, (ticker, target_date))
+
+            summary_row = cur.fetchone()
+
+        if not summary_row:
+            raise ValueError(f"No executive summary found for {ticker} on {target_date}")
+
+        # Parse executive summary JSON
+        if summary_row['summary_json']:
+            executive_summary = summary_row['summary_json']
+        else:
+            # Legacy: parse from summary_text if summary_json not available
+            executive_summary = json.loads(summary_row.get('summary_text', '{}'))
+
+        if not executive_summary:
+            raise ValueError("Executive summary JSON is empty")
+
+        # Get article IDs
+        article_ids_json = summary_row.get('article_ids')
+        if isinstance(article_ids_json, str):
+            article_ids = json.loads(article_ids_json)
+        elif isinstance(article_ids_json, list):
+            article_ids = article_ids_json
+        else:
+            raise ValueError("No article IDs found in executive summary")
+
+        LOG.info(f"[{ticker}] Found {len(article_ids)} article IDs for review")
+
+        # Fetch article objects (domain + summary) for Phase 1 attribution validation
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT a.domain, a.title, ta.ai_summary, ta.article_id
+                FROM ticker_articles ta
+                JOIN articles a ON ta.article_id = a.id
+                WHERE ta.ticker = %s
+                AND ta.article_id = ANY(%s)
+                AND ta.ai_summary IS NOT NULL
+                ORDER BY ta.article_id
+            """, (ticker, article_ids))
+
+            rows = cur.fetchall()
+
+        # Build article objects with domain metadata
+        articles = [
+            {
+                "domain": row['domain'],
+                "title": row['title'],
+                "ai_summary": row['ai_summary'],
+                "article_id": row['article_id']
+            }
+            for row in rows if row['ai_summary']
+        ]
+
+        if not articles:
+            raise ValueError("No articles found for verification")
+
+        LOG.info(f"[{ticker}] Found {len(articles)} articles for Phase 1 verification")
+
+        # ============================================================
+        # PHASE 1: Article Verification (30-90 seconds)
+        # ============================================================
+        update_job_status(job_id, progress=25)
+        LOG.info(f"[{ticker}] 📰 [JOB {job_id}] Phase 1: Article verification (30-90s)...")
+
+        from modules.quality_review import review_executive_summary_quality
+
+        phase1_result = review_executive_summary_quality(
+            ticker=ticker,
+            phase1_json=executive_summary,
+            articles=articles,
+            gemini_api_key=GEMINI_API_KEY
+        )
+
+        if not phase1_result:
+            raise ValueError("Phase 1 quality review failed")
+
+        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 1 complete")
+
+        # ============================================================
+        # PHASE 2: Filing Context Verification (30-90 seconds)
+        # ============================================================
+        update_job_status(job_id, progress=45)
+        LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Phase 2: Filing context verification (30-90s)...")
+
+        from modules.executive_summary_phase2 import _fetch_available_filings
+        from modules.quality_review_phase2 import review_phase2_context_quality
+
+        # Fetch available filings (10-K, 10-Q, Transcript)
+        filings = _fetch_available_filings(ticker, db)
+
+        # Fetch ticker metadata for validation
+        ticker_metadata = get_ticker_config(ticker)
+
+        phase2_result = None
+        if filings:
+            LOG.info(f"[{ticker}] Found {len(filings)} filing(s) for Phase 2: {list(filings.keys())}")
+
+            phase2_result = review_phase2_context_quality(
+                ticker=ticker,
+                executive_summary=executive_summary,
+                filings=filings,
+                gemini_api_key=GEMINI_API_KEY,
+                ticker_metadata=ticker_metadata
+            )
+
+            if phase2_result:
+                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 2 complete")
+            else:
+                LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Phase 2 failed, continuing without it")
+        else:
+            LOG.info(f"[{ticker}] ℹ️ [JOB {job_id}] No filings available - skipping Phase 2")
+
+        # ============================================================
+        # PHASE 3: Context Relevance Verification (20-40 seconds)
+        # ============================================================
+        update_job_status(job_id, progress=65)
+        LOG.info(f"[{ticker}] 🔗 [JOB {job_id}] Phase 3: Context relevance verification (20-40s)...")
+
+        from modules.quality_review_phase3 import review_context_relevance
+
+        phase3_result = review_context_relevance(
+            ticker=ticker,
+            executive_summary=executive_summary,
+            gemini_api_key=GEMINI_API_KEY
+        )
+
+        if phase3_result:
+            LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 3 complete")
+        else:
+            LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Phase 3 failed, continuing without it")
+
+        # ============================================================
+        # PHASE 4: Metadata & Structure Validation (20-40 seconds)
+        # ============================================================
+        update_job_status(job_id, progress=85)
+        LOG.info(f"[{ticker}] 🏗️ [JOB {job_id}] Phase 4: Metadata & structure validation (20-40s)...")
+
+        from modules.quality_review_phase4 import review_phase4_metadata_and_structure
+
+        phase4_result = review_phase4_metadata_and_structure(
+            ticker=ticker,
+            executive_summary=executive_summary,
+            gemini_api_key=GEMINI_API_KEY
+        )
+
+        if phase4_result:
+            LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 4 complete")
+        else:
+            LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Phase 4 failed, continuing without it")
+
+        # ============================================================
+        # EMAIL GENERATION & SENDING (5-10 seconds)
+        # ============================================================
+        if config.get('send_email', True):
+            update_job_status(job_id, progress=95)
+            LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Generating and sending email report...")
+
+            try:
+                from modules.quality_review import generate_bullet_centric_review_email_html
+
+                report_html = generate_bullet_centric_review_email_html(
+                    phase1_result=phase1_result,
+                    phase2_result=phase2_result,
+                    phase3_result=phase3_result,
+                    phase4_result=phase4_result
+                )
+
+                # Determine subject line (pass/fail based on critical errors)
+                p1_summary = phase1_result["summary"]
+                p1_critical = p1_summary["errors_by_severity"].get("CRITICAL", 0)
+
+                if phase2_result:
+                    p2_summary = phase2_result["summary"]
+                    p2_critical = p2_summary["errors_by_severity"].get("CRITICAL", 0)
+                    total_critical = p1_critical + p2_critical
+
+                    if total_critical > 0:
+                        subject = f"🔍 Quality Review: {ticker} - ❌ FAIL ({p1_critical} Phase 1 + {p2_critical} Phase 2 critical errors)"
+                    else:
+                        subject = f"🔍 Quality Review: {ticker} - ✅ PASS"
+                else:
+                    if p1_critical > 0:
+                        subject = f"🔍 Quality Review: {ticker} - ❌ FAIL ({p1_critical} critical errors, Phase 2 skipped)"
+                    else:
+                        subject = f"🔍 Quality Review: {ticker} - ✅ PASS (Phase 2 skipped)"
+
+                # Send email
+                send_email(subject, report_html)
+
+                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email sent successfully")
+
+            except Exception as email_error:
+                LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send email: {email_error}")
+                # Continue - review completed successfully, email failure shouldn't mark job as failed
+
+        # Mark complete
+        update_job_status(job_id, status='completed', progress=100)
+
+        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Quality review complete")
+
+        # Stop heartbeat
+        stop_heartbeat_thread(job_id)
+
+    except Exception as e:
+        LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Quality review failed: {str(e)}")
+        LOG.error(f"Stacktrace: {traceback.format_exc()}")
+
+        # Stop heartbeat
+        stop_heartbeat_thread(job_id)
+
+        # Mark failed
+        update_job_status(
+            job_id,
+            status='failed',
+            error_message=str(e)[:1000],
+            error_stacktrace=traceback.format_exc()[:5000]
+        )
+
+
 async def process_10q_profile_phase(job: dict):
     """Process 10-Q quarterly profile generation (5-15 min, Gemini 2.5)"""
     job_id = job['job_id']
@@ -16370,6 +16631,11 @@ async def process_ticker_job(job: dict):
     # ROUTE: If this is an investor presentation job, handle separately
     if phase == 'presentation_generation':
         await process_presentation_phase(job)
+        return
+
+    # ROUTE: If this is a quality review job, handle separately
+    if phase == 'quality_review_generation':
+        await process_quality_review_phase(job)
         return
 
     # Standard ticker processing (news articles)
@@ -27223,6 +27489,95 @@ async def review_all_quality_api(request: Request):
 
     except Exception as e:
         LOG.error(f"❌ Failed to review quality for {ticker}: {e}")
+        import traceback
+        LOG.error(traceback.format_exc())
+        return {"status": "error", "message": str(e)}
+
+
+@APP.post("/api/quality-review-job")
+async def submit_quality_review_job(request: Request):
+    """
+    Submit quality review job(s) to job queue for background processing.
+
+    Supports both individual ticker review and bulk review.
+    Jobs process in background with 3 concurrent workers.
+    Returns batch_id for status polling via /jobs/batch/{batch_id}
+    """
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    tickers = body.get('tickers', [])
+    if not tickers:
+        return {"status": "error", "message": "No tickers provided"}
+
+    # Normalize tickers to list
+    if isinstance(tickers, str):
+        tickers = [tickers]
+
+    review_date = body.get('review_date')  # Optional, defaults to today in worker
+    send_email = body.get('send_email', True)
+
+    try:
+        # Create batch
+        batch_id = str(uuid.uuid4())
+
+        with db() as conn, conn.cursor() as cur:
+            # Insert batch record
+            cur.execute("""
+                INSERT INTO ticker_processing_batches (
+                    batch_id, total_jobs, created_by, config
+                )
+                VALUES (%s, %s, %s, %s)
+            """, (
+                batch_id,
+                len(tickers),
+                'admin',
+                json.dumps({
+                    'job_type': 'quality_review',
+                    'review_date': review_date,
+                    'send_email': send_email
+                })
+            ))
+
+            # Set timeout to 15 minutes (quality review is fast: 2-4 min typical)
+            timeout_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+
+            # Create individual jobs
+            for ticker in tickers:
+                cur.execute("""
+                    INSERT INTO ticker_processing_jobs (
+                        batch_id,
+                        ticker,
+                        phase,
+                        config,
+                        timeout_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (
+                    batch_id,
+                    ticker.upper(),
+                    'quality_review_generation',
+                    json.dumps({
+                        'review_date': review_date,
+                        'send_email': send_email
+                    }),
+                    timeout_at
+                ))
+
+        LOG.info(f"✅ Quality review batch {batch_id} created: {len(tickers)} jobs submitted")
+
+        return {
+            "status": "success",
+            "batch_id": batch_id,
+            "total_jobs": len(tickers),
+            "message": f"Quality review jobs submitted for {len(tickers)} ticker{'s' if len(tickers) > 1 else ''}. Poll /jobs/batch/{batch_id} for status."
+        }
+
+    except Exception as e:
+        LOG.error(f"❌ Failed to submit quality review jobs: {e}")
         import traceback
         LOG.error(traceback.format_exc())
         return {"status": "error", "message": str(e)}

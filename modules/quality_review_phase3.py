@@ -18,6 +18,8 @@ CONTEXT_RELEVANCE_PROMPT = """You are validating filing context relevance for fi
 
 This check runs across thousands of companies - keep evaluation straightforward and consistent.
 
+⚠️ BE CRITICAL AND THOROUGH: Irrelevant context wastes reader attention and dilutes signal. If a sentence requires mental gymnastics to connect, it fails. Apply consistent standards as if you're reviewing 5000 companies.
+
 INPUT:
 - Content: [bullet text OR paragraph text]
 - Context: [filing-derived context sentences]

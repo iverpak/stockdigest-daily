@@ -19,6 +19,8 @@ QUALITY_REVIEW_PROMPT = """You are a quality assurance analyst reviewing an exec
 
 Your task: Verify every sentence in the executive summary is supported by the article summaries provided.
 
+⚠️ BE CRITICAL AND THOROUGH: This is financial intelligence for institutional investors. A single fabricated number or wrong attribution can destroy credibility. Review with the same rigor as an SEC filing review.
+
 ═══════════════════════════════════════════
 VERIFICATION RULES
 ═══════════════════════════════════════════

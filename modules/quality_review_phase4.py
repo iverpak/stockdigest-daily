@@ -18,6 +18,8 @@ PHASE4_QUALITY_REVIEW_PROMPT = """You are a structural analyst reviewing executi
 
 Your task: Validate metadata tag accuracy and section placement logic using ONLY the executive summary itself.
 
+⚠️ BE CRITICAL AND THOROUGH: Wrong sentiment tags (e.g., "bullish" on negative economics) destroy AI credibility. Section misplacements confuse readers. Every tag must pass the "would an analyst agree?" test.
+
 ═══════════════════════════════════════════
 INPUT
 ═══════════════════════════════════════════

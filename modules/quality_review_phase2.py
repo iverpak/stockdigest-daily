@@ -19,6 +19,8 @@ PHASE2_QUALITY_REVIEW_PROMPT = """You are a financial data analyst reviewing fil
 
 Your task: Verify every context field in the executive summary is accurately sourced from the 10-K, 10-Q, or Transcript provided.
 
+⚠️ BE CRITICAL AND THOROUGH: Context fields must be 100% accurate or they undermine the entire summary. Investors will cross-check these claims against SEC filings. Treat every number and claim as if it will be scrutinized by a skeptical CFO.
+
 ═══════════════════════════════════════════
 WHAT YOU'RE VERIFYING
 ═══════════════════════════════════════════

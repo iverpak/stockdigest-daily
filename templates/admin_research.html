@@ -1726,7 +1726,14 @@
                            docInfo.type === 'parsed_prs' ? `Parsed PR (${docInfo.source_type})` :
                            docInfo.type;
 
-            if (!confirm(`Are you sure you want to delete ${docLabel} for ${docInfo.ticker}?\n\nThis action cannot be undone.`)) {
+            // Custom warning for parsed PRs (cascade delete)
+            let confirmMsg = `Are you sure you want to delete ${docLabel} for ${docInfo.ticker}?\n\nThis action cannot be undone.`;
+            if (docInfo.type === 'parsed_prs') {
+                const sourceLabel = docInfo.source_type === '8k' ? '8-K filing' : 'FMP press release';
+                confirmMsg = `Delete ${docLabel} for ${docInfo.ticker}?\n\nThis will also delete the source ${sourceLabel}.\n\nThis action cannot be undone.`;
+            }
+
+            if (!confirm(confirmMsg)) {
                 return;
             }
 

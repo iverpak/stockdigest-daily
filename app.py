@@ -24076,7 +24076,11 @@ async def generate_parsed_pr_api(request: Request):
 @APP.post("/api/admin/delete-parsed-pr")
 async def delete_parsed_pr_api(request: Request):
     """
-    Delete a parsed press release by ID.
+    Delete a parsed press release by ID with CASCADE to source.
+
+    Deletes both:
+    - The parsed PR (Gemini summary) from parsed_press_releases
+    - The source (Claude summary from press_releases OR raw from sec_8k_filings)
 
     Body: {
         "token": "...",
@@ -24094,19 +24098,48 @@ async def delete_parsed_pr_api(request: Request):
         return {"status": "error", "message": "Missing required field: id"}
 
     try:
-        with db() as conn:
-            deleted = delete_parsed_press_release(parsed_pr_id, conn)
+        with db() as conn, conn.cursor() as cur:
+            # 1. Get the parsed PR to find source
+            cur.execute("""
+                SELECT source_type, source_id, ticker
+                FROM parsed_press_releases
+                WHERE id = %s
+            """, (parsed_pr_id,))
+            row = cur.fetchone()
 
-            if deleted:
-                return {
-                    "status": "success",
-                    "message": f"Deleted parsed PR {parsed_pr_id}"
-                }
+            if not row:
+                return {"status": "error", "message": f"Parsed PR {parsed_pr_id} not found"}
+
+            # Handle both dict and tuple cursor types
+            if isinstance(row, dict):
+                source_type = row['source_type']
+                source_id = row['source_id']
+                ticker = row['ticker']
             else:
-                return {
-                    "status": "error",
-                    "message": f"Parsed PR {parsed_pr_id} not found"
-                }
+                source_type, source_id, ticker = row
+
+            deleted_items = []
+
+            # 2. Delete the parsed PR
+            cur.execute("DELETE FROM parsed_press_releases WHERE id = %s", (parsed_pr_id,))
+            deleted_items.append(f"parsed_pr #{parsed_pr_id}")
+
+            # 3. Delete the source
+            if source_type == 'fmp':
+                cur.execute("DELETE FROM press_releases WHERE id = %s", (source_id,))
+                deleted_items.append(f"press_release #{source_id}")
+            elif source_type == '8k':
+                cur.execute("DELETE FROM sec_8k_filings WHERE id = %s", (source_id,))
+                deleted_items.append(f"8k_filing #{source_id}")
+
+            conn.commit()
+
+            LOG.info(f"✅ Cascade deleted for {ticker}: {', '.join(deleted_items)}")
+
+            return {
+                "status": "success",
+                "message": f"Deleted {ticker}: {', '.join(deleted_items)}"
+            }
 
     except Exception as e:
         LOG.error(f"Failed to delete parsed PR: {e}")

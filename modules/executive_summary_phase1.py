@@ -126,10 +126,10 @@ def _build_phase1_user_content(
             domain = article.get("domain", "")
             published_at = article.get("published_at")
 
-            # Format date
+            # Format date with year for clarity in staleness checks
             if published_at:
-                # Use simple format like "Oct 22"
-                date_str = published_at.strftime("%b %d")
+                # Use format like "Oct 22, 2025" (includes year for temporal comparisons)
+                date_str = published_at.strftime("%b %d, %Y")
             else:
                 date_str = "Unknown date"
 
@@ -155,9 +155,13 @@ def _build_phase1_user_content(
     # CRITICAL: Add ticker context here (not in system prompt) for prompt caching optimization
     ticker_header = f"TARGET COMPANY: {ticker} ({company_name})\n\n"
 
+    # Add explicit current date for temporal staleness checks (matches Phase 2)
+    current_date_header = f"CURRENT DATE: {end_date}\n\n"
+
     if not all_flagged_articles:
         user_content = (
             ticker_header +
+            current_date_header +
             f"REPORT CONTEXT:\n"
             f"Report type: {day_of_week}\n"
             f"Coverage period: {start_date} to {end_date}\n\n"
@@ -169,6 +173,7 @@ def _build_phase1_user_content(
         article_count = len(all_flagged_articles)
         user_content = (
             ticker_header +
+            current_date_header +
             f"REPORT CONTEXT:\n"
             f"Report type: {day_of_week}\n"
             f"Coverage period: {start_date} to {end_date}\n\n"

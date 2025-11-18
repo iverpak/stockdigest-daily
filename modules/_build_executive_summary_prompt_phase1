@@ -756,14 +756,21 @@ EXCLUDE ENTIRELY from all sections (do not include even as low impact):
 6. Stale developments (retrospective reporting of old events)
    - Articles with retrospective framing of past events as primary content
    - Past-tense patterns: "updated in [past month]", "announced last year", "back in [date]"
-   - TIME-SENSITIVE DATA RULE: For any metric that updates frequently (daily/weekly/monthly/quarterly), if the MOST RECENT datapoint is >6 months before article date → EXCLUDE FROM ALL SECTIONS - DO NOT CREATE ANY BULLET   - Exception: Historical context supporting current development
-   - Exception: Annual/structural data recently released (prior year annual totals published in current year)
-   - NOT AN EXCEPTION: Trend analysis where newest point is stale (H1 2024 to Nov 2024 in Nov 2025)
+
+   TIME-SENSITIVE DATA RULE: For any metric that updates frequently (daily/weekly/monthly/quarterly):
+   - Find the MOST RECENT date mentioned IN THE ARTICLE CONTENT (not publication date)
+   - Compare to the CURRENT DATE provided at the top of this prompt
+   - If >6 months before current date → EXCLUDE FROM ALL SECTIONS - DO NOT CREATE ANY BULLET
+   - This applies to data points within articles (e.g., "Q3 2024 earnings", "November 2024 prices")
+
+   Exception: Historical context supporting current development
+   Exception: Annual/structural data recently released (prior year annual totals published in current year)
+   NOT AN EXCEPTION: Trend analysis where newest point is stale (H1 2024 to Nov 2024 if current date is Nov 2025)
 
    ✗ "CDC updated IUD guidelines in [8+ months ago]" [retrospective, no current news]
-   ✗ "Diesel prices reached $32/barrel in [12 months ago]" [high-freq data, stale]
-   ✗ "Q3 [prior year] earnings showed margin compression" [quarterly data, >6 months old]
-   ✓ "U.S. infrastructure spending reached $463B in [prior year]" [annual structural data, recently released]
+   ✗ "Diesel prices reached $32/barrel in November 2024" (if current date is Nov 2025) [high-freq data, 12 months old]
+   ✗ "Q3 2024 earnings showed margin compression" (if current date is May 2025) [quarterly data, >6 months old]
+   ✓ "U.S. infrastructure spending reached $463B in 2024" (if current date is Feb 2025) [annual structural data, recently released]
    ✓ "Device launches using previously-approved technology" [current + context]
 
 If article discusses these topics, skip them entirely. Do not create bullets for noise.

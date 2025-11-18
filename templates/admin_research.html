@@ -1341,6 +1341,17 @@
             }
         }
 
+        // Helper to escape HTML special characters for safe display
+        function escapeHtml(text) {
+            if (!text) return '';
+            return String(text)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
         function getTableRow(doc, type) {
             // Format date without time (just YYYY-MM-DD)
             const generatedDate = new Date(doc.generated_at).toLocaleDateString();
@@ -1445,8 +1456,10 @@
                         </td>
                     `;
                 case 'parsed_prs':
-                    // Truncate title if too long
-                    const parsedTitle = doc.document_title ? (doc.document_title.length > 50 ? doc.document_title.substring(0, 50) + '...' : doc.document_title) : 'N/A';
+                    // Truncate and escape title to prevent HTML injection
+                    const rawTitle = doc.document_title || '';
+                    const truncatedTitle = rawTitle.length > 50 ? rawTitle.substring(0, 50) + '...' : rawTitle;
+                    const parsedTitle = escapeHtml(truncatedTitle) || 'N/A';
                     // Format source type badge
                     const sourceTypeBadge = doc.source_type === '8k'
                         ? '<span style="background: #dbeafe; color: #1e40af; padding: 2px 6px; border-radius: 3px; font-size: 10px;">8-K</span>'
@@ -1457,10 +1470,10 @@
                     const sourceIdLabel = doc.source_type === '8k' ? `#${doc.source_id}` : `#${doc.source_id}`;
 
                     return `
-                        <td style="padding: 12px; font-weight: 600; color: #1e40af;">${doc.ticker}</td>
+                        <td style="padding: 12px; font-weight: 600; color: #1e40af;">${escapeHtml(doc.ticker)}</td>
                         <td style="padding: 12px; text-align: center;">${sourceTypeBadge}</td>
                         <td style="padding: 12px; text-align: center; font-family: monospace; font-size: 11px; color: #6b7280;">${sourceIdLabel}</td>
-                        <td style="padding: 12px; font-size: 13px; max-width: 250px;" title="${doc.document_title || ''}">${parsedTitle}</td>
+                        <td style="padding: 12px; font-size: 13px; max-width: 250px;" title="${escapeHtml(rawTitle)}">${parsedTitle}</td>
                         <td style="padding: 12px; color: #6b7280; font-size: 13px;">${docDate}</td>
                         <td style="padding: 12px; text-align: center;">${(doc.char_count || 0).toLocaleString()}</td>
                         <td style="padding: 12px; text-align: center;">

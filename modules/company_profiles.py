@@ -783,11 +783,16 @@ def quick_parse_8k_header(sec_html_url: str, rate_limit_delay: float = 0.15) -> 
             primary_item = items[0]
             item_description = ITEM_CODE_MAP.get(primary_item, "Other Events")
 
-        # Extract title from content
+        # Strip HTML tags before extracting title to avoid capturing HTML fragments
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(text, 'html.parser')
+        clean_text = soup.get_text(separator=' ')
+
+        # Extract title from clean text content
         # Look for patterns like "announces", "reports", "completes", etc.
         title_match = re.search(
             r'(announces?|reports?|completes?|enters?|acquires?|appoints?)[^\.]{10,200}',
-            text,
+            clean_text,
             re.IGNORECASE
         )
         parsed_title = title_match.group(0).strip() if title_match else ""

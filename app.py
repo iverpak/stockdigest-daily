@@ -23454,6 +23454,56 @@ async def generate_transcript_summary_api(request: Request):
                     db_connection=conn
                 )
 
+                # Get source_id for parsed PR generation
+                cur.execute("""
+                    SELECT id FROM press_releases
+                    WHERE ticker = %s AND report_date = %s AND pr_title = %s
+                """, (ticker, report_date, pr_title))
+                source_id_row = cur.fetchone()
+                source_id = source_id_row[0] if source_id_row else None
+
+                # Generate parsed PR summary with Gemini
+                if source_id:
+                    LOG.info(f"[{ticker}] 🔄 [ADMIN API] Generating parsed PR summary with Gemini...")
+
+                    try:
+                        parsed_result = generate_parsed_press_release_with_gemini(
+                            ticker=ticker,
+                            content=content,  # Raw FMP content
+                            config=config,
+                            document_date=report_date,
+                            document_title=pr_title,
+                            gemini_api_key=GEMINI_API_KEY
+                        )
+
+                        if parsed_result and parsed_result.get('parsed_summary'):
+                            save_parsed_press_release_to_database(
+                                ticker=ticker,
+                                company_name=company_name,
+                                source_type='fmp',
+                                source_id=source_id,
+                                document_date=report_date,
+                                document_title=pr_title,
+                                source_url=None,  # FMP doesn't provide direct URL
+                                exhibit_number=None,
+                                item_codes=None,
+                                parsed_summary=parsed_result['parsed_summary'],
+                                ai_model=parsed_result.get('model', 'gemini-2.5-flash'),
+                                token_count_input=parsed_result.get('token_count_input', 0),
+                                token_count_output=parsed_result.get('token_count_output', 0),
+                                processing_duration_seconds=int(parsed_result.get('generation_time_seconds', 0)),
+                                db_connection=conn
+                            )
+                            LOG.info(f"[{ticker}] ✅ [ADMIN API] Parsed PR saved (source_id={source_id})")
+                        else:
+                            LOG.warning(f"[{ticker}] ⚠️ [ADMIN API] Parsed PR generation returned empty result")
+
+                    except Exception as parsed_error:
+                        LOG.error(f"[{ticker}] ⚠️ [ADMIN API] Failed to generate parsed PR: {parsed_error}")
+                        # Continue - original PR was saved successfully
+                else:
+                    LOG.warning(f"[{ticker}] ⚠️ [ADMIN API] Could not get source_id for parsed PR")
+
             conn.commit()
 
         LOG.info(f"💾 [ADMIN API] Saved v2 summary to database")

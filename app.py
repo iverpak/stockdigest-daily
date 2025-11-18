@@ -23893,9 +23893,12 @@ def get_parsed_press_release_detail(pr_id: int, token: str = Query(...)):
             if not row:
                 return {"status": "error", "message": f"Parsed PR {pr_id} not found"}
 
-            # Convert to dict
-            columns = [desc[0] for desc in cur.description]
-            pr = dict(zip(columns, row))
+            # Convert to dict - handle both dict and tuple cursor types
+            if isinstance(row, dict):
+                pr = dict(row)
+            else:
+                columns = [desc[0] for desc in cur.description]
+                pr = dict(zip(columns, row))
 
             # Format dates
             for key in ['document_date', 'fed_to_phase1_at', 'generated_at']:

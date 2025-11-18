@@ -16114,6 +16114,193 @@ async def process_transcript_phase(job: dict):
         )
 
 
+async def process_transcript_generation_phase(job: dict):
+    """Process transcript generation (30-60s, Gemini/Claude)"""
+    job_id = job['job_id']
+    ticker = job['ticker']
+    config = job['config'] if isinstance(job['config'], dict) else {}
+
+    try:
+        # Start heartbeat thread
+        start_heartbeat_thread(job_id)
+
+        quarter = config.get('quarter')  # Integer (3) for transcripts
+        year = config.get('year')  # Integer (2024) for transcripts
+
+        # Progress: 10% - Fetching transcript from FMP
+        update_job_status(job_id, progress=10)
+        LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Fetching transcript Q{quarter} {year} from FMP...")
+
+        # Fetch transcript content from FMP
+        data = fetch_fmp_transcript(ticker, quarter, year, FMP_API_KEY)
+        if not data:
+            raise ValueError(f"No transcript found for {ticker} Q{quarter} {year}")
+
+        content = data['content']
+        report_date = data.get('date', f"{year}-{quarter*3:02d}-01")  # Approximate date
+
+        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Fetched {len(content)} characters")
+
+        # Progress: 30% - Generating summary with AI v2
+        update_job_status(job_id, progress=30)
+        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating summary with AI v2...")
+
+        ticker_config = get_ticker_config(ticker)
+        company_name = ticker_config.get('company_name', ticker)
+
+        # Use v2 JSON generation (Gemini-first, Claude-fallback)
+        from modules.transcript_summaries import generate_transcript_json_with_fallback, convert_json_to_markdown
+        result = generate_transcript_json_with_fallback(
+            ticker=ticker,
+            content=content,
+            config=ticker_config,
+            content_type='transcript',
+            anthropic_api_key=ANTHROPIC_API_KEY,
+            gemini_api_key=GEMINI_API_KEY
+        )
+
+        if not result or not result.get('json_output'):
+            raise ValueError("Both Gemini and Claude transcript summarization failed")
+
+        json_output = result['json_output']
+        model_used = result['model_used']
+        generation_time_ms = result.get('generation_time_ms', 0)
+        prompt_tokens = result.get('prompt_tokens', 0)
+        completion_tokens = result.get('completion_tokens', 0)
+
+        # Extract provider name from model string
+        ai_provider = "gemini" if "gemini" in model_used.lower() else "claude"
+
+        LOG.info(
+            f"[{ticker}] ✅ [JOB {job_id}] Generated {len(json_output.get('sections', {}))} sections "
+            f"with {model_used} ({generation_time_ms}ms, {prompt_tokens}→{completion_tokens} tokens)"
+        )
+
+        # Generate markdown for database storage
+        summary_text_markdown = convert_json_to_markdown(json_output, 'transcript')
+
+        # Format quarter with Q prefix
+        quarter_str = str(quarter)
+        quarter_formatted = quarter_str if quarter_str.startswith('Q') else f"Q{quarter_str}"
+
+        # Progress: 80% - Saving to database
+        update_job_status(job_id, progress=80)
+        LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving summary to database...")
+
+        with db() as conn, conn.cursor() as cur:
+            # Check if summary_json column exists (backward compatibility)
+            cur.execute("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'transcript_summaries'
+                AND column_name IN ('summary_json', 'prompt_version')
+            """)
+            rows = cur.fetchall()
+            existing_columns = {row[0] for row in rows}
+            has_json_columns = 'summary_json' in existing_columns and 'prompt_version' in existing_columns
+
+            fmp_url = f"https://financialmodelingprep.com/api/v3/earning_call_transcript/{ticker}?quarter={quarter}&year={year}"
+
+            if has_json_columns:
+                try:
+                    from psycopg.types.json import Json
+                    json_param = Json(json_output)
+                except ImportError:
+                    json_param = json.dumps(json_output)
+
+                cur.execute("""
+                    INSERT INTO transcript_summaries (
+                        ticker, company_name, report_type, quarter, year,
+                        report_date, summary_text, summary_json, prompt_version,
+                        source_url, ai_provider, ai_model
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (ticker, report_type, quarter, year)
+                    DO UPDATE SET
+                        summary_text = EXCLUDED.summary_text,
+                        summary_json = EXCLUDED.summary_json,
+                        prompt_version = EXCLUDED.prompt_version,
+                        ai_provider = EXCLUDED.ai_provider,
+                        ai_model = EXCLUDED.ai_model,
+                        generated_at = NOW()
+                """, (
+                    ticker, company_name, 'transcript',
+                    quarter_formatted, year, report_date,
+                    summary_text_markdown, json_param, 'v2',
+                    fmp_url, ai_provider, model_used
+                ))
+            else:
+                cur.execute("""
+                    INSERT INTO transcript_summaries (
+                        ticker, company_name, report_type, quarter, year,
+                        report_date, summary_text, source_url, ai_provider, ai_model
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (ticker, report_type, quarter, year)
+                    DO UPDATE SET
+                        summary_text = EXCLUDED.summary_text,
+                        ai_provider = EXCLUDED.ai_provider,
+                        ai_model = EXCLUDED.ai_model,
+                        generated_at = NOW()
+                """, (
+                    ticker, company_name, 'transcript',
+                    quarter_formatted, year, report_date,
+                    summary_text_markdown, fmp_url, ai_provider, model_used
+                ))
+            conn.commit()
+
+        # Progress: 95% - Sending email
+        if config.get('send_email', True):
+            update_job_status(job_id, progress=95)
+            LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending email notification...")
+
+            try:
+                from modules.transcript_summaries import generate_transcript_email_v2
+
+                # Get real-time stock data
+                stock_data = get_filing_stock_data(ticker)
+
+                # Generate email v2 from JSON
+                email_data = generate_transcript_email_v2(
+                    ticker=ticker,
+                    json_output=json_output,
+                    config=ticker_config,
+                    content_type='transcript',
+                    quarter=quarter,
+                    year=year,
+                    report_date=report_date,
+                    stock_data=stock_data
+                )
+
+                send_email(subject=email_data['subject'], html_body=email_data['html'], to=DIGEST_TO)
+                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email sent to {DIGEST_TO}")
+
+            except Exception as email_error:
+                LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send email: {email_error}")
+
+        # Mark complete
+        update_job_status(job_id, status='completed', progress=100)
+        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Transcript generation complete")
+
+        # Stop heartbeat
+        stop_heartbeat_thread(job_id)
+
+    except Exception as e:
+        LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Transcript generation failed: {str(e)}")
+        LOG.error(f"Stacktrace: {traceback.format_exc()}")
+
+        # Stop heartbeat
+        stop_heartbeat_thread(job_id)
+
+        # Mark failed
+        update_job_status(
+            job_id,
+            status='failed',
+            error_message=str(e)[:1000],
+            error_stacktrace=traceback.format_exc()[:5000]
+        )
+
+
 async def process_press_release_phase(job: dict):
     """Process press release generation (30-60s, Claude)"""
     job_id = job['job_id']
@@ -16775,7 +16962,7 @@ async def process_ticker_job(job: dict):
 
     # ROUTE: If this is a transcript generation job, handle separately
     if phase == 'transcript_generation':
-        await process_transcript_phase(job)
+        await process_transcript_generation_phase(job)
         return
 
     # ROUTE: If this is a press release generation job, handle separately
@@ -23266,7 +23453,12 @@ async def delete_user(request: Request):
 
 @APP.post("/api/admin/generate-transcript-summary")
 async def generate_transcript_summary_api(request: Request):
-    """Generate AI summary of earnings transcript or press release using Claude or Gemini"""
+    """
+    Generate AI summary of earnings transcript or press release using job queue.
+
+    Returns job_id immediately for async processing.
+    Client should poll /jobs/{job_id} for status.
+    """
     body = await request.json()
     token = body.get('token')
 
@@ -23281,279 +23473,62 @@ async def generate_transcript_summary_api(request: Request):
     pr_title = body.get('pr_title')  # String title for press releases (optional, for exact matching)
 
     try:
-        LOG.info(f"📊 Generating transcript summary for {ticker} ({report_type}) using automatic AI fallback")
-
-        # Get ticker config
+        # Validate ticker exists (quick check before queuing)
         config = get_ticker_config(ticker)
         if not config:
             return {"status": "error", "message": f"Ticker {ticker} not found in database"}
 
-        company_name = config.get("company_name", ticker)
-
-        # Fetch content from FMP (using module function)
+        # Determine phase based on report type
         if report_type == 'transcript':
-            data = fetch_fmp_transcript(ticker, quarter, year, FMP_API_KEY)
-            if not data:
-                return {"status": "error", "message": f"No transcript found for {ticker} Q{quarter} {year}"}
+            phase = 'transcript_generation'
+            LOG.info(f"📋 Creating transcript generation job for {ticker} Q{quarter} {year}")
+        else:
+            phase = 'press_release_generation'
+            LOG.info(f"📋 Creating press release generation job for {ticker} ({pr_date})")
 
-            content = data['content']
-            report_date = data.get('date', f"{year}-{quarter*3:02d}-01")  # Approximate date
-            fmp_url = f"https://financialmodelingprep.com/api/v3/earning_call_transcript/{ticker}?quarter={quarter}&year={year}"
-            pr_title = None
+        # Build job config
+        job_config = {
+            "ticker": ticker,
+            "report_type": report_type,
+            "quarter": quarter,
+            "year": year,
+            "pr_date": pr_date,
+            "pr_title": pr_title,
+            "send_email": True
+        }
 
-        else:  # press_release
-            # Import appropriate fetch function
-            from modules.transcript_summaries import fetch_fmp_press_release_by_date, fetch_fmp_press_release_by_date_and_title
-
-            # Use title-based matching if title provided (for ad-hoc generation with multiple PRs per day)
-            # Otherwise use date-only matching (for cron job compatibility)
-            if pr_title:
-                data = fetch_fmp_press_release_by_date_and_title(ticker, pr_date, pr_title, FMP_API_KEY)
-                if not data:
-                    return {"status": "error", "message": f"No press release found for {ticker} on {pr_date} with title: {pr_title[:50]}..."}
-            else:
-                data = fetch_fmp_press_release_by_date(ticker, pr_date, FMP_API_KEY)
-                if not data:
-                    return {"status": "error", "message": f"No press release found for {ticker} on {pr_date}"}
-
-            content = data['text']
-            report_date = pr_date.split()[0]  # Extract date part (YYYY-MM-DD)
-            if not pr_title:  # Only override if not already provided
-                pr_title = data['title']
-            fmp_url = f"https://financialmodelingprep.com/api/v3/press-releases/{ticker}"
-
-        # Summarize with automatic AI fallback using v2 JSON system (Gemini Pro → Claude Sonnet)
-        from modules.transcript_summaries import generate_transcript_json_with_fallback
-
-        LOG.info(f"🤖 [ADMIN API] Summarizing {report_type} with AI v2 (Gemini Pro → Claude Sonnet fallback, content: {len(content)} chars)")
-        result = generate_transcript_json_with_fallback(
-            ticker=ticker,
-            content=content,
-            config=config,
-            content_type=report_type,
-            anthropic_api_key=ANTHROPIC_API_KEY,
-            gemini_api_key=GEMINI_API_KEY
-        )
-
-        if not result or not result.get('json_output'):
-            return {"status": "error", "message": "Both Gemini and Claude v2 summarization failed"}
-
-        json_output = result['json_output']
-        model_used = result['model_used']  # e.g., "gemini-2.5-pro" or "claude-sonnet-4-5-20250929"
-        generation_time_ms = result.get('generation_time_ms', 0)
-        prompt_tokens = result.get('prompt_tokens', 0)
-        completion_tokens = result.get('completion_tokens', 0)
-
-        # Extract provider name from model string
-        ai_provider = "gemini" if "gemini" in model_used.lower() else "claude"
-
-        LOG.info(
-            f"[{ticker}] ✅ [ADMIN API] Generated {len(json_output.get('sections', {}))} sections "
-            f"with {model_used} ({generation_time_ms}ms, {prompt_tokens}→{completion_tokens} tokens)"
-        )
-
-        # Save to database with v2 JSON support (backward compatible)
-        # Ensure quarter has Q prefix (defensive check - don't double-prefix)
-        quarter_formatted = None
-        if quarter:
-            quarter_str = str(quarter)
-            quarter_formatted = quarter_str if quarter_str.startswith('Q') else f"Q{quarter_str}"
-
-        # Generate markdown for research page display (summary_text column)
-        from modules.transcript_summaries import convert_json_to_markdown
-        import json
-        summary_text_markdown = convert_json_to_markdown(json_output, report_type)
-
+        # Create job in database
         with db() as conn, conn.cursor() as cur:
-            if report_type == 'transcript':
-                # Check if summary_json column exists (backward compatibility)
-                cur.execute("""
-                    SELECT column_name
-                    FROM information_schema.columns
-                    WHERE table_name = 'transcript_summaries'
-                    AND column_name IN ('summary_json', 'prompt_version')
-                """)
-                rows = cur.fetchall()
-                # Handle both tuple and dict cursor types
-                if rows and isinstance(rows[0], dict):
-                    existing_columns = {row['column_name'] for row in rows}
-                else:
-                    existing_columns = {row[0] for row in rows}
-                has_json_columns = 'summary_json' in existing_columns and 'prompt_version' in existing_columns
+            batch_id = str(uuid.uuid4())
 
-                if has_json_columns:
-                    # New schema: Save both text (for backward compat) and JSON
-                    # Use Json adapter for psycopg3 JSONB support
-                    try:
-                        from psycopg.types.json import Json
-                        json_param = Json(json_output)
-                    except ImportError:
-                        json_param = json.dumps(json_output)
+            # Create batch
+            cur.execute("""
+                INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
+                VALUES (%s, 'processing', 1, %s)
+            """, (batch_id, json.dumps({"source": "admin_api", "report_type": report_type})))
 
-                    cur.execute("""
-                        INSERT INTO transcript_summaries (
-                            ticker, company_name, report_type, quarter, year,
-                            report_date, summary_text, summary_json, prompt_version,
-                            source_url, ai_provider, ai_model
-                        )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (ticker, report_type, quarter, year)
-                        DO UPDATE SET
-                            summary_text = EXCLUDED.summary_text,
-                            summary_json = EXCLUDED.summary_json,
-                            prompt_version = EXCLUDED.prompt_version,
-                            ai_provider = EXCLUDED.ai_provider,
-                            ai_model = EXCLUDED.ai_model,
-                            generated_at = NOW()
-                    """, (
-                        ticker, company_name, 'transcript',
-                        quarter_formatted, year, report_date,
-                        summary_text_markdown,  # Clean markdown for research page
-                        json_param,             # Structured JSON (summary_json column)
-                        'v2',                   # Mark as v2 prompt
-                        fmp_url,
-                        ai_provider,  # "gemini" or "claude"
-                        model_used    # Full model name
-                    ))
-                    LOG.info(f"[{ticker}] ✅ [ADMIN API] Saved with JSON columns (v2)")
-                else:
-                    # Old schema: Save JSON as text only (pre-migration)
-                    cur.execute("""
-                        INSERT INTO transcript_summaries (
-                            ticker, company_name, report_type, quarter, year,
-                            report_date, summary_text, source_url, ai_provider, ai_model
-                        )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (ticker, report_type, quarter, year)
-                        DO UPDATE SET
-                            summary_text = EXCLUDED.summary_text,
-                            ai_provider = EXCLUDED.ai_provider,
-                            ai_model = EXCLUDED.ai_model,
-                            generated_at = NOW()
-                    """, (
-                        ticker, company_name, 'transcript',
-                        quarter_formatted, year, report_date,
-                        summary_text_markdown, fmp_url, ai_provider, model_used
-                    ))
-                    LOG.warning(f"[{ticker}] ⚠️ [ADMIN API] Saved as text only (run migration to enable JSON storage)")
-
-            elif report_type == 'press_release':
-                # Press releases: Save to press_releases table (no v2 JSON support yet)
-                from modules.press_releases import save_press_release_to_database
-
-                save_press_release_to_database(
-                    ticker=ticker,
-                    company_name=company_name,
-                    report_date=report_date,
-                    pr_title=pr_title,
-                    summary_text=summary_text_markdown,  # Clean markdown for research page
-                    ai_provider=ai_provider,
-                    ai_model=model_used,
-                    processing_duration_seconds=int(generation_time_ms / 1000),
-                    job_id=None,  # No job for synchronous generation
-                    db_connection=conn
+            # Create job
+            job_id = str(uuid.uuid4())
+            cur.execute("""
+                INSERT INTO ticker_processing_jobs (
+                    batch_id, job_id, ticker, status, phase, progress, config
                 )
-
-                # Get source_id for parsed PR generation
-                cur.execute("""
-                    SELECT id FROM press_releases
-                    WHERE ticker = %s AND report_date = %s AND pr_title = %s
-                """, (ticker, report_date, pr_title))
-                source_id_row = cur.fetchone()
-                source_id = source_id_row[0] if source_id_row else None
-
-                # Generate parsed PR summary with Gemini
-                if source_id:
-                    LOG.info(f"[{ticker}] 🔄 [ADMIN API] Generating parsed PR summary with Gemini...")
-
-                    try:
-                        parsed_result = generate_parsed_press_release_with_gemini(
-                            ticker=ticker,
-                            content=content,  # Raw FMP content
-                            config=config,
-                            document_date=report_date,
-                            document_title=pr_title,
-                            gemini_api_key=GEMINI_API_KEY
-                        )
-
-                        if parsed_result and parsed_result.get('parsed_summary'):
-                            save_parsed_press_release_to_database(
-                                ticker=ticker,
-                                company_name=company_name,
-                                source_type='fmp',
-                                source_id=source_id,
-                                document_date=report_date,
-                                document_title=pr_title,
-                                source_url=None,  # FMP doesn't provide direct URL
-                                exhibit_number=None,
-                                item_codes=None,
-                                parsed_summary=parsed_result['parsed_summary'],
-                                ai_model=parsed_result.get('model', 'gemini-2.5-flash'),
-                                token_count_input=parsed_result.get('token_count_input', 0),
-                                token_count_output=parsed_result.get('token_count_output', 0),
-                                processing_duration_seconds=int(parsed_result.get('generation_time_seconds', 0)),
-                                db_connection=conn
-                            )
-                            LOG.info(f"[{ticker}] ✅ [ADMIN API] Parsed PR saved (source_id={source_id})")
-                        else:
-                            LOG.warning(f"[{ticker}] ⚠️ [ADMIN API] Parsed PR generation returned empty result")
-
-                    except Exception as parsed_error:
-                        LOG.error(f"[{ticker}] ⚠️ [ADMIN API] Failed to generate parsed PR: {parsed_error}")
-                        # Continue - original PR was saved successfully
-                else:
-                    LOG.warning(f"[{ticker}] ⚠️ [ADMIN API] Could not get source_id for parsed PR")
+                VALUES (%s, %s, %s, 'queued', %s, 0, %s)
+            """, (batch_id, job_id, ticker, phase, json.dumps(job_config)))
 
             conn.commit()
 
-        LOG.info(f"💾 [ADMIN API] Saved v2 summary to database")
+        LOG.info(f"✅ Created job {job_id} for {ticker} ({report_type})")
 
-        # Send email with v2 JSON-to-HTML conversion
-        # Get real-time stock data using unified helper (yfinance → Polygon → database → None)
-        stock_data = get_filing_stock_data(ticker)
-
-        # Generate email from JSON output using v2 function
-        from modules.transcript_summaries import generate_transcript_email_v2
-
-        # Extract quarter integer from formatted string (remove 'Q' prefix for v2 function)
-        quarter_int = None
-        if quarter_formatted:
-            quarter_int = int(quarter_formatted.replace('Q', ''))
-
-        email_data = generate_transcript_email_v2(
-            ticker=ticker,
-            json_output=json_output,
-            config=config,
-            content_type=report_type,
-            quarter=quarter_int,
-            year=year,
-            report_date=report_date,
-            stock_data=stock_data
-        )
-
-        # Send to admin email
-        success = send_email(
-            subject=email_data['subject'],
-            html_body=email_data['html'],
-            to='stockdigest.research@gmail.com'
-        )
-
-        if success:
-            LOG.info(f"✅ [ADMIN API] Transcript v2 email sent successfully")
-            return {
-                "status": "success",
-                "message": f"Summary generated with v2 prompt and email sent to stockdigest.research@gmail.com",
-                "ticker": ticker,
-                "company_name": company_name,
-                "report_type": report_type,
-                "prompt_version": "v2",
-                "model_used": model_used
-            }
-        else:
-            return {"status": "error", "message": "Email sending failed"}
+        return {
+            "status": "success",
+            "message": f"Job queued for {ticker} {report_type}",
+            "job_id": job_id,
+            "batch_id": batch_id
+        }
 
     except Exception as e:
-        LOG.error(f"Failed to generate transcript summary: {e}", exc_info=True)
+        LOG.error(f"Failed to create {report_type} job for {ticker}: {e}")
         return {"status": "error", "message": str(e)}
 
 @APP.get("/api/admin/debug-transcript-summary")

@@ -1206,100 +1206,17 @@
 
                 const batchId = result.batch_id;
 
-                // Show progress modal
-                const progressDiv = document.createElement('div');
-                progressDiv.id = 'bulk-review-progress';
-                progressDiv.style.cssText = 'position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 32px; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.2); z-index: 10000; min-width: 400px; text-align: center;';
-                progressDiv.innerHTML = `
-                    <div style="font-size: 20px; font-weight: 700; margin-bottom: 16px; color: #1e3a8a;">🔍 Bulk Quality Review</div>
-                    <div id="bulk-progress-status" style="font-size: 16px; color: #374151; margin-bottom: 12px;">Starting...</div>
-                    <div style="width: 100%; background: #e5e7eb; border-radius: 8px; height: 24px; margin-bottom: 12px; overflow: hidden;">
-                        <div id="bulk-progress-bar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #3b82f6, #1e40af); transition: width 0.3s;"></div>
-                    </div>
-                    <div id="bulk-progress-details" style="font-size: 14px; color: #6b7280;"></div>
-                `;
-                document.body.appendChild(progressDiv);
+                // Restore button immediately
+                btn.innerHTML = originalText;
+                btn.disabled = false;
 
-                // Poll for progress
-                let pollCount = 0;
-                const maxPolls = 180;  // 15 minutes max (180 × 5s)
-
-                const pollInterval = setInterval(async () => {
-                    pollCount++;
-
-                    try {
-                        const statusResp = await fetch(`/jobs/batch/${batchId}?token=${token}`);
-                        const statusData = await statusResp.json();
-
-                        const completed = statusData.completed || 0;
-                        const failed = statusData.failed || 0;
-                        const processing = statusData.processing || 0;
-                        const total = statusData.total_tickers || readySentCount;
-                        const overallProgress = statusData.overall_progress || 0;
-
-                        // Update progress bar
-                        const progressPercent = Math.floor((completed + failed) / total * 100);
-                        document.getElementById('bulk-progress-bar').style.width = progressPercent + '%';
-
-                        // Update status text
-                        document.getElementById('bulk-progress-status').textContent =
-                            `Processing ${completed + failed + processing}/${total} tickers`;
-
-                        // Update details
-                        document.getElementById('bulk-progress-details').textContent =
-                            `✅ ${completed} completed | ❌ ${failed} failed | ⏳ ${processing} in progress`;
-
-                        // Check if batch complete
-                        if (statusData.status === 'completed' || (completed + failed) >= total) {
-                            clearInterval(pollInterval);
-
-                            // Remove progress modal
-                            if (progressDiv.parentNode) {
-                                progressDiv.parentNode.removeChild(progressDiv);
-                            }
-
-                            // Restore button
-                            btn.innerHTML = originalText;
-                            btn.disabled = false;
-
-                            // Show results
-                            let message = `✅ Bulk Quality Review Complete!\n\n`;
-                            message += `📊 Summary:\n`;
-                            message += `• Total: ${total}\n`;
-                            message += `• ✅ Completed: ${completed}\n`;
-                            message += `• ❌ Failed: ${failed}\n\n`;
-                            message += `📧 ${completed} email reports sent to your inbox!`;
-
-                            alert(message);
-                        }
-
-                        // Timeout
-                        if (pollCount >= maxPolls) {
-                            clearInterval(pollInterval);
-
-                            if (progressDiv.parentNode) {
-                                progressDiv.parentNode.removeChild(progressDiv);
-                            }
-
-                            btn.innerHTML = originalText;
-                            btn.disabled = false;
-
-                            alert(`⏱️ Bulk review is still processing.\n\nCompleted so far: ${completed}/${total}\n\nCheck /jobs/batch/${batchId} for status.`);
-                        }
-                    } catch (pollError) {
-                        console.error('Poll error:', pollError);
-                    }
-                }, 5000);  // Poll every 5 seconds
+                // Show success alert (fire-and-forget)
+                alert(`✅ Bulk Quality Review Started!\n\n${readySentCount} jobs submitted for background processing.\n\nYou will receive ${readySentCount} separate email reports when complete.\n\nEstimated time: ~${estimatedMinutes} minutes (3 concurrent workers)\n\nCheck /jobs/stats or /jobs/batch/${batchId} for live status.`);
 
             } catch (error) {
-                const progressDiv = document.getElementById('bulk-review-progress');
-                if (progressDiv && progressDiv.parentNode) {
-                    progressDiv.parentNode.removeChild(progressDiv);
-                }
-
                 const btn = event.target;
                 if (btn) {
-                    btn.innerHTML = btn.getAttribute('data-original-text') || '🔍 REVIEW ALL READY/SENT';
+                    btn.innerHTML = originalText;
                     btn.disabled = false;
                 }
 

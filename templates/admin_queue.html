@@ -1162,7 +1162,7 @@
 
         async function bulkReviewQuality() {
             // Get ready/sent tickers
-            const readySentTickers = Object.values(queueStats).filter(t =>
+            const readySentTickers = (queueStats.tickers || []).filter(t =>
                 t.status === 'ready' || t.status === 'sent'
             );
             const readySentCount = readySentTickers.length;

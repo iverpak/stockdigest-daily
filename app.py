@@ -27237,7 +27237,8 @@ def get_queue_status(token: str = Query(...)):
                      FROM ticker_processing_batches
                      WHERE created_at >= CURRENT_DATE
                      AND config->>'mode' = 'daily') as expected,
-                    COUNT(*) FILTER (WHERE j.status = 'failed') as failed_run
+                    COUNT(*) FILTER (WHERE j.status = 'failed') as failed_run,
+                    COUNT(*) FILTER (WHERE j.status = 'completed') as completed
                 FROM ticker_processing_jobs j
                 JOIN ticker_processing_batches b ON j.batch_id = b.batch_id
                 WHERE b.created_at >= CURRENT_DATE
@@ -27246,6 +27247,7 @@ def get_queue_status(token: str = Query(...)):
             job_stats = cur.fetchone()
             expected_count = job_stats['expected'] or 0
             failed_run_count = job_stats['failed_run'] or 0
+            completed_count = job_stats['completed'] or 0
 
             # Query 2: Get email queue (completed emails) - PRODUCTION ONLY
             cur.execute("""
@@ -27344,6 +27346,7 @@ def get_queue_status(token: str = Query(...)):
                 "expected": stats["expected"],
                 "processing": stats["processing"],
                 "failed_run": stats["failed_run"],
+                "completed": completed_count,
                 "ready": stats["ready"],
                 "cancelled": stats["cancelled"],
                 "sent": stats["sent"],
@@ -28499,6 +28502,224 @@ async def clear_all_reports_api(request: Request):
 
     except Exception as e:
         LOG.error(f"Failed to clear all reports: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/retry-failed-jobs")
+async def retry_failed_jobs_api(request: Request):
+    """Retry failed jobs from ticker_processing_jobs (not email_queue)"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        # Get failed jobs from ticker_processing_jobs
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT j.ticker, j.config
+                FROM ticker_processing_jobs j
+                JOIN ticker_processing_batches b ON j.batch_id = b.batch_id
+                WHERE j.status = 'failed'
+                AND b.created_at >= CURRENT_DATE
+                AND b.config->>'mode' = 'daily'
+            """)
+            failed_jobs = cur.fetchall()
+
+        if not failed_jobs:
+            return {
+                "status": "success",
+                "ticker_count": 0,
+                "message": "No failed jobs to retry"
+            }
+
+        # Build ticker_recipients dict from job configs
+        ticker_recipients = {}
+        for job in failed_jobs:
+            ticker = job['ticker']
+            config = job['config'] if isinstance(job['config'], dict) else json.loads(job['config'])
+            recipients = config.get('recipients', [])
+            ticker_recipients[ticker] = recipients
+
+        # Submit to job queue
+        tickers_list = sorted(list(ticker_recipients.keys()))
+
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO ticker_processing_batches (total_jobs, created_by, config)
+                VALUES (%s, %s, %s)
+                RETURNING batch_id
+            """, (len(tickers_list), 'admin_ui_retry_failed', json.dumps({
+                "minutes": get_lookback_minutes(),
+                "batch_size": 3,
+                "triage_batch_size": 3,
+                "mode": "daily"
+            })))
+
+            batch_id = cur.fetchone()['batch_id']
+
+            timeout_at = datetime.now(timezone.utc) + timedelta(hours=4)
+            for ticker in tickers_list:
+                cur.execute("""
+                    INSERT INTO ticker_processing_jobs (
+                        batch_id, ticker, config, timeout_at
+                    )
+                    VALUES (%s, %s, %s, %s)
+                """, (batch_id, ticker, json.dumps({
+                    "minutes": get_lookback_minutes(),
+                    "batch_size": 3,
+                    "triage_batch_size": 3,
+                    "mode": "daily",
+                    "recipients": ticker_recipients[ticker]
+                }), timeout_at))
+
+            conn.commit()
+
+        LOG.info(f"🔄 Retry failed jobs: {len(tickers_list)} tickers (batch {batch_id})")
+
+        return {
+            "status": "success",
+            "batch_id": str(batch_id),
+            "ticker_count": len(tickers_list),
+            "tickers": tickers_list,
+            "message": f"Retrying {len(tickers_list)} failed jobs"
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to retry failed jobs: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/clear-job-queue")
+async def clear_job_queue_api(request: Request):
+    """Clear only job queue (ticker_processing_jobs and batches) - not email queue"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                DELETE FROM ticker_processing_jobs
+                WHERE created_at >= CURRENT_DATE
+            """)
+            deleted_jobs = cur.rowcount
+
+            cur.execute("""
+                DELETE FROM ticker_processing_batches
+                WHERE created_at >= CURRENT_DATE
+            """)
+            deleted_batches = cur.rowcount
+
+            conn.commit()
+
+        LOG.info(f"🗑️ Cleared job queue: {deleted_jobs} jobs, {deleted_batches} batches")
+
+        return {
+            "status": "success",
+            "deleted_jobs": deleted_jobs,
+            "deleted_batches": deleted_batches,
+            "message": f"Deleted {deleted_jobs} jobs and {deleted_batches} batches"
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to clear job queue: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/clear-email-queue")
+async def clear_email_queue_api(request: Request):
+    """Clear only email queue - not job queue"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM email_queue")
+            deleted_count = cur.rowcount
+            conn.commit()
+
+        LOG.info(f"🗑️ Cleared email queue: {deleted_count} entries")
+
+        return {
+            "status": "success",
+            "deleted_count": deleted_count,
+            "message": f"Deleted {deleted_count} email queue entries"
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to clear email queue: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/regen-all-emails")
+async def regen_all_emails_api(request: Request):
+    """Regenerate Email #3 for all emails in queue (uses existing articles)"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        # Get all tickers from email_queue
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT ticker, recipients
+                FROM email_queue
+            """)
+            email_rows = cur.fetchall()
+
+        if not email_rows:
+            return {
+                "status": "success",
+                "ticker_count": 0,
+                "message": "No emails in queue to regenerate"
+            }
+
+        # Build ticker list
+        tickers_list = [row['ticker'] for row in email_rows]
+
+        # Submit regeneration jobs to queue
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO ticker_processing_batches (total_jobs, created_by, config)
+                VALUES (%s, %s, %s)
+                RETURNING batch_id
+            """, (len(tickers_list), 'admin_ui_regen_all', json.dumps({
+                "mode": "regen_email"
+            })))
+
+            batch_id = cur.fetchone()['batch_id']
+
+            timeout_at = datetime.now(timezone.utc) + timedelta(hours=4)
+            for row in email_rows:
+                cur.execute("""
+                    INSERT INTO ticker_processing_jobs (
+                        batch_id, ticker, config, timeout_at
+                    )
+                    VALUES (%s, %s, %s, %s)
+                """, (batch_id, row['ticker'], json.dumps({
+                    "mode": "regen_email",
+                    "recipients": row['recipients']
+                }), timeout_at))
+
+            conn.commit()
+
+        LOG.info(f"♻️ Regen all emails: {len(tickers_list)} tickers (batch {batch_id})")
+
+        return {
+            "status": "success",
+            "batch_id": str(batch_id),
+            "ticker_count": len(tickers_list),
+            "tickers": tickers_list,
+            "message": f"Regenerating {len(tickers_list)} emails"
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to regen all emails: {e}")
         return {"status": "error", "message": str(e)}
 
 @APP.post("/api/commit-ticker-csv")

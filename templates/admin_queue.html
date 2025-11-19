@@ -102,52 +102,73 @@
             letter-spacing: 0.5px;
         }
 
-        .metrics-panel {
-            background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
-            padding: 20px;
-            border-radius: 12px;
-            margin-bottom: 24px;
-            border: 2px solid #bae6fd;
-        }
-
-        .metrics-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 16px;
-        }
-
-        .metric-item {
+        .section-card {
             background: #ffffff;
-            padding: 12px;
-            border-radius: 8px;
-            text-align: center;
+            border-radius: 12px;
             box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            margin-bottom: 24px;
+            border: 1px solid #e5e7eb;
         }
 
-        .metric-label {
-            font-size: 11px;
+        .section-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid #f3f4f6;
+            font-size: 14px;
+            font-weight: 600;
+            color: #374151;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .section-content {
+            padding: 20px;
+        }
+
+        .section-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .mini-stat {
+            text-align: center;
+            padding: 12px 8px;
+            background: #f9fafb;
+            border-radius: 8px;
+        }
+
+        .mini-stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #1f2937;
+            line-height: 1;
+        }
+
+        .mini-stat-value.success { color: #059669; }
+        .mini-stat-value.danger { color: #dc2626; }
+        .mini-stat-value.warning { color: #d97706; }
+        .mini-stat-value.info { color: #2563eb; }
+        .mini-stat-value.muted { color: #9ca3af; }
+
+        .mini-stat-label {
+            font-size: 10px;
             color: #6b7280;
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            margin-bottom: 8px;
+            margin-top: 4px;
         }
 
-        .metric-value {
-            font-size: 18px;
-            font-weight: 700;
-            color: #1e40af;
-        }
-
-        .global-actions {
+        .section-buttons {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 12px;
-            margin-bottom: 32px;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 10px;
         }
 
-        .global-actions .btn {
+        .section-buttons .btn {
             width: 100%;
-            min-height: 48px;
+            min-height: 44px;
+            font-size: 12px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -341,62 +362,96 @@
     </div>
 
     <div class="container">
-        <!-- System Health Metrics -->
-        <div class="metrics-panel" id="metrics-panel">
-            <h3 style="margin: 0 0 12px 0; color: #1e40af;">⚙️ System Health</h3>
-            <div class="metrics-grid">
-                <div class="metric-item">
-                    <div class="metric-label">Worker Status</div>
-                    <div class="metric-value" id="metric-worker-status">-</div>
+        <!-- Job Queue Section -->
+        <div class="section-card">
+            <div class="section-header">📋 Job Queue</div>
+            <div class="section-content">
+                <div class="section-stats">
+                    <div class="mini-stat">
+                        <div class="mini-stat-value info" id="expected-count">-</div>
+                        <div class="mini-stat-label">Expected</div>
+                    </div>
+                    <div class="mini-stat">
+                        <div class="mini-stat-value warning" id="processing-count">-</div>
+                        <div class="mini-stat-label">Processing</div>
+                    </div>
+                    <div class="mini-stat">
+                        <div class="mini-stat-value danger" id="failed-run-count">-</div>
+                        <div class="mini-stat-label">Failed</div>
+                    </div>
+                    <div class="mini-stat">
+                        <div class="mini-stat-value success" id="completed-count">-</div>
+                        <div class="mini-stat-label">Completed</div>
+                    </div>
                 </div>
-                <div class="metric-item">
-                    <div class="metric-label">Memory Usage</div>
-                    <div class="metric-value" id="metric-memory">-</div>
-                </div>
-                <div class="metric-item">
-                    <div class="metric-label">Last Activity</div>
-                    <div class="metric-value" id="metric-last-activity">-</div>
-                </div>
-                <div class="metric-item">
-                    <div class="metric-label">Active Jobs</div>
-                    <div class="metric-value" id="metric-active-jobs">-</div>
-                </div>
-                <div class="metric-item">
-                    <div class="metric-label">Worker Restarts</div>
-                    <div class="metric-value" id="metric-restarts">-</div>
+                <div class="section-buttons">
+                    <button class="btn btn-primary" onclick="generateAllReports()">📊 Generate All Reports</button>
+                    <button class="btn btn-warning" onclick="cancelInProgressRuns()">🚫 Cancel In Progress</button>
+                    <button class="btn btn-primary" onclick="retryFailedJobs()">🔄 Retry Failed</button>
+                    <button class="btn btn-secondary" onclick="clearJobQueue()">🗑️ Clear Job Queue</button>
                 </div>
             </div>
         </div>
 
-        <!-- Stats -->
-        <div class="stats-grid" style="grid-template-columns: repeat(7, 1fr);">
-            <div class="stat-card">
-                <div class="stat-value info" id="expected-count">-</div>
-                <div class="stat-label">Expected</div>
+        <!-- Email Queue Section -->
+        <div class="section-card">
+            <div class="section-header">📧 Email Queue</div>
+            <div class="section-content">
+                <div class="section-stats">
+                    <div class="mini-stat">
+                        <div class="mini-stat-value success" id="ready-count">-</div>
+                        <div class="mini-stat-label">Ready</div>
+                    </div>
+                    <div class="mini-stat">
+                        <div class="mini-stat-value muted" id="cancelled-count">-</div>
+                        <div class="mini-stat-label">Cancelled</div>
+                    </div>
+                    <div class="mini-stat">
+                        <div class="mini-stat-value info" id="sent-count">-</div>
+                        <div class="mini-stat-label">Sent</div>
+                    </div>
+                    <div class="mini-stat">
+                        <div class="mini-stat-value danger" id="failed-sent-count">-</div>
+                        <div class="mini-stat-label">Failed Send</div>
+                    </div>
+                </div>
+                <div class="section-buttons">
+                    <button class="btn btn-warning" onclick="cancelReadyEmails()">⛔ Cancel Ready</button>
+                    <button class="btn btn-success" onclick="undoCancelReadyEmails()">✅ Undo Cancel</button>
+                    <button class="btn btn-success" onclick="sendAllReady()">✉️ Send All Ready</button>
+                    <button class="btn btn-secondary" onclick="clearEmailQueue()">🗑️ Clear Email Queue</button>
+                    <button class="btn btn-primary" onclick="regenAllEmails()">♻️ Regen All Emails</button>
+                    <button class="btn btn-info" onclick="bulkReviewQuality()">🔍 Review All</button>
+                </div>
             </div>
-            <div class="stat-card">
-                <div class="stat-value warning" id="processing-count">-</div>
-                <div class="stat-label">Processing</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value danger" id="failed-run-count">-</div>
-                <div class="stat-label">Failed Run</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value success" id="ready-count">-</div>
-                <div class="stat-label">Ready</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value cancelled" id="cancelled-count">-</div>
-                <div class="stat-label">Cancelled</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value info" id="sent-count">-</div>
-                <div class="stat-label">Sent</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value danger" id="failed-sent-count">-</div>
-                <div class="stat-label">Failed Sent</div>
+        </div>
+
+        <!-- System Health & Controls Section -->
+        <div class="section-card">
+            <div class="section-header">⚙️ System Health & Controls</div>
+            <div class="section-content">
+                <div class="section-stats">
+                    <div class="mini-stat">
+                        <div class="mini-stat-value" id="metric-worker-status">-</div>
+                        <div class="mini-stat-label">Worker</div>
+                    </div>
+                    <div class="mini-stat">
+                        <div class="mini-stat-value" id="metric-memory">-</div>
+                        <div class="mini-stat-label">Memory</div>
+                    </div>
+                    <div class="mini-stat">
+                        <div class="mini-stat-value" id="metric-last-activity">-</div>
+                        <div class="mini-stat-label">Activity</div>
+                    </div>
+                    <div class="mini-stat">
+                        <div class="mini-stat-value" id="metric-restarts">-</div>
+                        <div class="mini-stat-label">Restarts</div>
+                    </div>
+                </div>
+                <div class="section-buttons">
+                    <button class="btn btn-warning" onclick="restartWorker()">🔄 Restart Worker</button>
+                    <button class="btn btn-danger" onclick="restartServer()">🚀 Force Server Restart</button>
+                </div>
             </div>
         </div>
 
@@ -441,43 +496,6 @@
                     </div>
                 </div>
             </div>
-        </div>
-
-        <!-- Global Actions -->
-        <div class="global-actions">
-            <button class="btn btn-primary" onclick="generateAllReports()">
-                📊 GENERATE ALL REPORTS <span class="btn-count" id="btn-generate-count">-</span>
-            </button>
-            <button class="btn btn-danger" onclick="cancelInProgressRuns()">
-                🚫 CANCEL IN PROGRESS RUNS <span class="btn-count" id="btn-cancel-runs-count">-</span>
-            </button>
-            <button class="btn btn-primary" onclick="rerunAllQueue()">
-                🔄 RE-RUN ALL QUEUE <span class="btn-count" id="btn-rerun-all-count">-</span>
-            </button>
-            <button class="btn btn-primary" onclick="retryFailedAndCancelled()">
-                🔄 RETRY FAILED & CANCELLED <span class="btn-count" id="btn-retry-count">-</span>
-            </button>
-            <button class="btn btn-danger" onclick="cancelReadyEmails()">
-                ⛔ CANCEL READY EMAILS <span class="btn-count" id="btn-cancel-ready-count">-</span>
-            </button>
-            <button class="btn btn-warning" onclick="undoCancelReadyEmails()">
-                ✅ UNDO CANCEL READY EMAILS <span class="btn-count" id="btn-undo-cancel-count">-</span>
-            </button>
-            <button class="btn btn-success" onclick="sendAllReady()">
-                ✉️ SEND ALL READY EMAILS <span class="btn-count" id="btn-send-count">-</span>
-            </button>
-            <button class="btn btn-secondary" onclick="clearAllReports()">
-                🗑️ CLEAR ALL REPORTS <span class="btn-count" id="btn-clear-count">-</span>
-            </button>
-            <button class="btn btn-info" onclick="bulkReviewQuality()">
-                🔍 REVIEW ALL READY/SENT <span class="btn-count" id="btn-bulk-review-count">-</span>
-            </button>
-            <button class="btn btn-warning" onclick="restartWorker()">
-                🔄 RESTART WORKER THREAD
-            </button>
-            <button class="btn btn-danger" onclick="restartServer()">
-                🚀 FORCE SERVER RESTART
-            </button>
         </div>
 
         <!-- Ticker List -->
@@ -569,17 +587,17 @@
                 const data = await response.json();
                 queueStats = data; // Store for button counts
 
-                // Update stats
+                // Update Job Queue stats
                 document.getElementById('expected-count').textContent = data.expected || 0;
                 document.getElementById('processing-count').textContent = data.processing || 0;
                 document.getElementById('failed-run-count').textContent = data.failed_run || 0;
+                document.getElementById('completed-count').textContent = data.completed || 0;
+
+                // Update Email Queue stats
                 document.getElementById('ready-count').textContent = data.ready || 0;
                 document.getElementById('cancelled-count').textContent = data.cancelled || 0;
                 document.getElementById('sent-count').textContent = data.sent || 0;
                 document.getElementById('failed-sent-count').textContent = data.failed_sent || 0;
-
-                // Update button counts
-                updateButtonCounts(data);
 
                 // Update ticker list
                 const tickerList = document.getElementById('ticker-list');
@@ -657,51 +675,110 @@
             }
         }
 
-        async function updateButtonCounts(data) {
-            const total = (data.ready || 0) + (data.processing || 0) + (data.failed_run || 0) + (data.cancelled || 0) + (data.sent || 0) + (data.failed_sent || 0);
-            const failedAndCancelled = (data.failed_run || 0) + (data.cancelled || 0);
-
-            // Static counts (calculated from queue status)
-            document.getElementById('btn-rerun-all-count').textContent = total;
-            document.getElementById('btn-retry-count').textContent = failedAndCancelled;
-            document.getElementById('btn-cancel-ready-count').textContent = (data.ready || 0) + (data.processing || 0);
-            document.getElementById('btn-undo-cancel-count').textContent = data.cancelled || 0;
-            document.getElementById('btn-send-count').textContent = data.ready || 0;
-            document.getElementById('btn-clear-count').textContent = total;
-            document.getElementById('btn-bulk-review-count').textContent = (data.ready || 0) + (data.sent || 0);
-
-            // Dynamic count #1: Unique tickers from active users (for Generate All Reports button)
-            try {
-                const usersResponse = await fetch(`/api/admin/users?token=${token}`);
-                const usersData = await usersResponse.json();
-                if (usersData.status === 'success') {
-                    // Deduplicate tickers across all active users
-                    const uniqueTickers = new Set();
-                    usersData.users
-                        .filter(u => u.status === 'active')
-                        .forEach(u => {
-                            if (u.ticker1) uniqueTickers.add(u.ticker1.toUpperCase());
-                            if (u.ticker2) uniqueTickers.add(u.ticker2.toUpperCase());
-                            if (u.ticker3) uniqueTickers.add(u.ticker3.toUpperCase());
-                        });
-                    document.getElementById('btn-generate-count').textContent = uniqueTickers.size;
-                }
-            } catch (error) {
-                console.error('Failed to fetch active users count:', error);
-                document.getElementById('btn-generate-count').textContent = '?';
+        // New Job Queue functions
+        async function retryFailedJobs() {
+            const failedCount = queueStats.failed_run || 0;
+            if (failedCount === 0) {
+                alert('✅ No failed jobs to retry!');
+                return;
             }
 
-            // Dynamic count #2: Active jobs (for Cancel In Progress Runs button)
+            if (!confirm(`🔄 Retry ${failedCount} Failed Jobs?\n\nThis will reprocess jobs that failed during processing.\n\nContinue?`)) return;
+
             try {
-                const statsResponse = await fetch(`/jobs/stats`, {
-                    headers: {'X-Admin-Token': token}
+                const response = await fetch('/api/retry-failed-jobs', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token})
                 });
-                const statsData = await statsResponse.json();
-                const activeJobs = (statsData.queued || 0) + (statsData.processing || 0);
-                document.getElementById('btn-cancel-runs-count').textContent = activeJobs;
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert(`✅ Retrying ${result.ticker_count} failed jobs.\n\nBatch ID: ${result.batch_id}`);
+                    fetchQueueStatus();
+                } else {
+                    alert('Error: ' + result.message);
+                }
             } catch (error) {
-                console.error('Failed to fetch active jobs count:', error);
-                document.getElementById('btn-cancel-runs-count').textContent = '?';
+                alert('Failed to retry failed jobs');
+            }
+        }
+
+        async function clearJobQueue() {
+            if (!confirm('🗑️ Clear Job Queue?\n\nThis will delete all job records from today.\nDoes NOT affect emails already generated.\n\nContinue?')) return;
+
+            try {
+                const response = await fetch('/api/clear-job-queue', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token})
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert(`✅ Cleared ${result.deleted_jobs} jobs and ${result.deleted_batches} batches`);
+                    fetchQueueStatus();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to clear job queue');
+            }
+        }
+
+        async function clearEmailQueue() {
+            const total = (queueStats.ready || 0) + (queueStats.cancelled || 0) + (queueStats.sent || 0) + (queueStats.failed_sent || 0);
+            if (total === 0) {
+                alert('Email queue is already empty.');
+                return;
+            }
+
+            if (!confirm(`🗑️ Clear Email Queue?\n\nThis will delete ${total} email records.\nDoes NOT affect job processing.\n\nContinue?`)) return;
+
+            try {
+                const response = await fetch('/api/clear-email-queue', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token})
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert(`✅ Cleared ${result.deleted_count} email queue entries`);
+                    fetchQueueStatus();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to clear email queue');
+            }
+        }
+
+        async function regenAllEmails() {
+            const total = (queueStats.ready || 0) + (queueStats.cancelled || 0) + (queueStats.sent || 0) + (queueStats.failed_sent || 0);
+            if (total === 0) {
+                alert('No emails in queue to regenerate.');
+                return;
+            }
+
+            if (!confirm(`♻️ Regenerate All ${total} Emails?\n\nThis will re-run Phase 1+2+3 for all emails in queue.\nDoes NOT re-ingest articles (faster).\n\nEstimated time: ${total * 1} minutes\n\nContinue?`)) return;
+
+            try {
+                const response = await fetch('/api/regen-all-emails', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token})
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert(`✅ Regenerating ${result.ticker_count} emails.\n\nBatch ID: ${result.batch_id}\n\nYou'll receive preview emails as each completes.`);
+                    fetchQueueStatus();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to regenerate emails');
             }
         }
 

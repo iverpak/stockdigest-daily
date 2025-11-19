@@ -16577,7 +16577,7 @@ async def process_8k_summary_phase(job: dict):
             LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Extracted Exhibit {exhibit_num}: {char_count:,} chars")
 
             # Classify exhibit type for future filtering
-            exhibit_type = classify_exhibit_type(exhibit_num, exhibit_desc, char_count)
+            exhibit_type = classify_exhibit_type(exhibit_num, exhibit_desc, char_count, item_codes)
             LOG.info(f"[{ticker}] 🏷️  [JOB {job_id}] Exhibit {exhibit_num} classified as: {exhibit_type}")
 
             # Send separate email for this exhibit

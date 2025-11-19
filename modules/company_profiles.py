@@ -750,54 +750,29 @@ def get_main_8k_url(documents_url: str) -> Optional[str]:
         return None
 
 
-def classify_exhibit_type(exhibit_num: str, description: str, char_count: int) -> str:
+def classify_exhibit_type(exhibit_num: str, description: str, char_count: int, item_codes: str = None) -> str:
     """
-    Classify exhibit based on number, description, and size.
+    Classify exhibit based on item code and exhibit number.
 
-    Uses heuristics to automatically categorize exhibits for easy filtering
-    and future integration with executive summary generation.
+    Uses SEC filing structure for deterministic classification:
+    - Item 2.02 (Results of Operations) + Exhibit 99.1/99.2 = earnings_release
+    - Everything else = press_release
 
     Args:
         exhibit_num: Exhibit number (e.g., "99.1", "99.2")
         description: Exhibit description from SEC
         char_count: Character count of HTML content
+        item_codes: Item codes from 8-K (e.g., "2.02, 9.01")
 
     Returns:
-        "earnings_release" | "investor_presentation" | "press_release" | "other"
+        "earnings_release" | "press_release"
     """
-    desc_lower = description.lower()
-
-    # Earnings Release indicators
-    if any(keyword in desc_lower for keyword in [
-        'earnings release',
-        'financial results',
-        'quarterly results',
-        'quarterly earnings'
-    ]):
+    # Item 2.02 (Results of Operations) + Exhibit 99.1 or 99.2 = Earnings Release
+    if item_codes and '2.02' in item_codes and exhibit_num in ['99.1', '99.2']:
         return 'earnings_release'
 
-    # Investor Presentation indicators (usually larger, slides)
-    if any(keyword in desc_lower for keyword in [
-        'supplemental',
-        'presentation',
-        'investor deck',
-        'slides',
-        'supplemental information'
-    ]):
-        # Large files are likely presentation decks
-        if char_count > 80000:  # > 80KB
-            return 'investor_presentation'
-
-    # Press Release indicators
-    if 'press release' in desc_lower:
-        return 'press_release'
-
-    # Fallback heuristic: 99.2 and smaller size likely earnings release
-    if exhibit_num == '99.2' and char_count < 100000:
-        return 'earnings_release'
-
-    # Default
-    return 'other'
+    # All other 8-Ks = general press release
+    return 'press_release'
 
 
 def quick_parse_8k_header(sec_html_url: str, rate_limit_delay: float = 0.15) -> Dict:

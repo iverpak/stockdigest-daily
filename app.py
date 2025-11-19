@@ -16467,7 +16467,7 @@ async def process_press_release_phase(job: dict):
                     # Extract metadata and JSON output
                     result_metadata = parsed_result.get('metadata', {})
                     report_title = result_metadata.get('report_title', pr_title)
-                    json_output_parsed = parsed_result.get('json_output', {})
+                    json_output_parsed = parsed_result.get('json_data', {})
 
                     # Save to legacy parsed_press_release table for backward compatibility
                     with db() as conn:
@@ -16805,7 +16805,7 @@ async def process_8k_summary_phase(job: dict):
                         # Extract metadata from result
                         result_metadata = parsed_result.get('metadata', {})
                         report_title = result_metadata.get('report_title', f"Exhibit {exhibit_num}")
-                        json_output = parsed_result.get('json_output', {})
+                        json_output = parsed_result.get('json_data', {})
 
                         # Save to legacy parsed_press_release table for backward compatibility
                         with db() as conn:

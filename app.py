@@ -16745,6 +16745,7 @@ async def process_8k_summary_phase(job: dict):
                         LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Parsed PR saved for Exhibit {exhibit_num} (source_id={source_id})")
 
                         # Send email with parsed summary (using transcript email template)
+                        LOG.info(f"[{ticker}] 📋 [JOB {job_id}] Exhibit {exhibit_num} classified as '{exhibit_type}' (item_codes={item_codes})")
                         if exhibit_type == 'earnings_release' and config.get('send_email', True):
                             try:
                                 LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending parsed earnings release email...")
@@ -16782,6 +16783,8 @@ async def process_8k_summary_phase(job: dict):
                             except Exception as email_error:
                                 LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send parsed email: {email_error}")
                                 # Continue - parsed PR was saved successfully
+                        else:
+                            LOG.info(f"[{ticker}] ⏭️ [JOB {job_id}] Skipping email for Exhibit {exhibit_num} (type={exhibit_type}, send_email={config.get('send_email', True)})")
                     else:
                         LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Parsed PR generation returned empty for Exhibit {exhibit_num}")
 
@@ -25314,7 +25317,7 @@ async def email_research_api(request: Request):
                 cur.execute("""
                     SELECT id, ticker, company_name, source_type, document_date,
                            document_title, parsed_summary, exhibit_number,
-                           ai_model, generation_time_seconds
+                           ai_model, processing_duration_seconds
                     FROM parsed_press_releases
                     WHERE id = %s AND ticker = %s
                     LIMIT 1

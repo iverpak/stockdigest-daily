@@ -16753,23 +16753,22 @@ async def process_8k_summary_phase(job: dict):
                                 stock_data = get_filing_stock_data(ticker)
 
                                 # Generate email using transcript template
-                                email_html = generate_transcript_email(
+                                email_result = generate_transcript_email(
                                     ticker=ticker,
                                     company_name=ticker_config.get('company_name', ticker),
-                                    report_type='earnings_release',
+                                    report_type='transcript',  # Use transcript type for earnings releases
                                     quarter=result_metadata.get('fiscal_quarter', 'Q?'),
                                     year=result_metadata.get('fiscal_year', ''),
                                     summary_text=parsed_result['parsed_summary'],
-                                    ai_model=result_metadata.get('model', 'gemini-2.5-flash'),
-                                    generation_time=result_metadata.get('generation_time_seconds', 0),
                                     stock_price=stock_data.get('stock_price'),
-                                    daily_return_pct=stock_data.get('daily_return_pct'),
+                                    price_change_pct=stock_data.get('daily_return_pct'),
                                     price_change_color=stock_data.get('price_change_color', '#666'),
                                     ytd_return_pct=stock_data.get('ytd_return_pct'),
                                     ytd_return_color=stock_data.get('ytd_return_color', '#666'),
                                     market_status=stock_data.get('market_status', 'LAST CLOSE'),
                                     return_label=stock_data.get('return_label', '1D')
                                 )
+                                email_html = email_result.get('html', '')
 
                                 # Send email
                                 email_subject = f"📊 Parsed Earnings: {ticker} - {report_title or f'Ex {exhibit_num}'}"
@@ -25436,22 +25435,20 @@ async def email_research_api(request: Request):
 
             email_data = generate_transcript_email(
                 ticker=ticker,
-                company_name=doc.get('company_name', company_name),
-                report_type='earnings_release',
+                company_name=doc.get('company_name') or company_name,
+                report_type='transcript',  # Use transcript type for earnings releases
                 quarter=quarter,
                 year=year,
                 summary_text=content,
-                ai_model=doc.get('ai_model', 'gemini-2.5-flash'),
-                generation_time=doc.get('generation_time_seconds', 0),
                 stock_price=stock_data.get('stock_price'),
-                daily_return_pct=stock_data.get('daily_return_pct'),
+                price_change_pct=stock_data.get('daily_return_pct'),
                 price_change_color=stock_data.get('price_change_color', '#666'),
                 ytd_return_pct=stock_data.get('ytd_return_pct'),
                 ytd_return_color=stock_data.get('ytd_return_color', '#666'),
                 market_status=stock_data.get('market_status', 'LAST CLOSE'),
                 return_label=stock_data.get('return_label', '1D')
             )
-            html_body = email_data['html']
+            html_body = email_data.get('html', '')
             # Keep subject from data fetch (includes clean title)
 
         send_email(subject=subject, html_body=html_body, to=DIGEST_TO)

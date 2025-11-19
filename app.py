@@ -27218,13 +27218,17 @@ def get_queue_status(token: str = Query(...)):
             """)
             active_jobs = cur.fetchall()
 
-            # Query 1b: Get job stats (expected = total today, failed_run = job failures)
+            # Query 1b: Get job stats from production batches (mode='daily')
+            # Expected = total_jobs from today's production batch (captured at run start)
+            # Failed = count of failed jobs in those batches
             cur.execute("""
                 SELECT
-                    COUNT(*) as expected,
-                    COUNT(*) FILTER (WHERE status = 'failed') as failed_run
-                FROM ticker_processing_jobs
-                WHERE created_at >= CURRENT_DATE
+                    COALESCE(SUM(b.total_jobs), 0) as expected,
+                    COUNT(j.job_id) FILTER (WHERE j.status = 'failed') as failed_run
+                FROM ticker_processing_batches b
+                LEFT JOIN ticker_processing_jobs j ON j.batch_id = b.batch_id
+                WHERE b.created_at >= CURRENT_DATE
+                AND b.config->>'mode' = 'daily'
             """)
             job_stats = cur.fetchone()
             expected_count = job_stats['expected'] or 0
@@ -28452,15 +28456,32 @@ async def clear_all_reports_api(request: Request):
         with db() as conn, conn.cursor() as cur:
             # Delete all email queue entries
             cur.execute("DELETE FROM email_queue")
-            deleted_count = cur.rowcount
+            deleted_emails = cur.rowcount
+
+            # Also delete today's job records (provides clean slate)
+            cur.execute("""
+                DELETE FROM ticker_processing_jobs
+                WHERE created_at >= CURRENT_DATE
+            """)
+            deleted_jobs = cur.rowcount
+
+            # Delete today's batch records
+            cur.execute("""
+                DELETE FROM ticker_processing_batches
+                WHERE created_at >= CURRENT_DATE
+            """)
+            deleted_batches = cur.rowcount
+
             conn.commit()
 
-        LOG.info(f"🗑️ Cleared all reports: {deleted_count} entries deleted")
+        LOG.info(f"🗑️ Cleared all reports: {deleted_emails} emails, {deleted_jobs} jobs, {deleted_batches} batches deleted")
 
         return {
             "status": "success",
-            "deleted_count": deleted_count,
-            "message": f"Deleted {deleted_count} queue entries"
+            "deleted_emails": deleted_emails,
+            "deleted_jobs": deleted_jobs,
+            "deleted_batches": deleted_batches,
+            "message": f"Deleted {deleted_emails} queue entries, {deleted_jobs} jobs, {deleted_batches} batches"
         }
 
     except Exception as e:

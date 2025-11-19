@@ -2453,16 +2453,20 @@ def get_all_parsed_press_releases(
 
         cur.execute("""
             SELECT
-                id, ticker, company_name, source_type, source_id,
-                document_date, document_title, source_url,
-                exhibit_number, item_codes,
-                LENGTH(parsed_summary) as char_count,
-                ai_model,
-                processing_duration_seconds,
-                fed_to_phase1,
-                generated_at
-            FROM parsed_press_releases
-            ORDER BY document_date DESC
+                cr.id, cr.ticker, cr.company_name, cr.source_type, cr.source_id,
+                cr.filing_date as document_date, cr.report_title as document_title,
+                NULL as source_url,
+                NULL as exhibit_number,
+                NULL as item_codes,
+                LENGTH(cr.summary_html) as char_count,
+                cr.ai_model,
+                cr.processing_duration_seconds,
+                FALSE as fed_to_phase1,
+                cr.fiscal_year,
+                cr.fiscal_quarter,
+                cr.generated_at
+            FROM company_releases cr
+            ORDER BY cr.filing_date DESC
             LIMIT %s
         """, (limit,))
 

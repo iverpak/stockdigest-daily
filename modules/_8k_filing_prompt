@@ -155,9 +155,9 @@ You MUST output valid JSON with this EXACT structure:
 
 {
   "metadata": {
-    "report_title": "string (e.g., 'Q2 2025 Earnings Release')",
-    "fiscal_quarter": "string (e.g., 'Q2' or 'FY' for full year)",
-    "fiscal_year": "string (e.g., '2025')"
+    "report_title": "string - Extract from document header/first page, or generate from content",
+    "fiscal_quarter": "string - 'Q1', 'Q2', 'Q3', 'Q4', or 'FY' for annual. Empty string if not an earnings release.",
+    "fiscal_year": "number - 2024, 2025, etc. as integer. Empty string if not an earnings release."
   },
   "sections": {
     "bottom_line": {

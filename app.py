@@ -1883,6 +1883,10 @@ def ensure_schema():
                     job_id VARCHAR(50),
                     generated_at TIMESTAMPTZ DEFAULT NOW(),
 
+                    -- Fiscal period (for earnings releases)
+                    fiscal_year INTEGER,        -- 2024, 2025, etc. NULL for non-earnings
+                    fiscal_quarter VARCHAR(5),  -- 'Q1', 'Q2', 'Q3', 'Q4', 'FY', NULL for non-earnings
+
                     -- Unique constraint
                     CONSTRAINT company_releases_unique UNIQUE(ticker, filing_date, report_title)
                 );
@@ -1891,6 +1895,11 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_company_releases_ticker ON company_releases(ticker);
                 CREATE INDEX IF NOT EXISTS idx_company_releases_filing_date ON company_releases(filing_date DESC);
                 CREATE INDEX IF NOT EXISTS idx_company_releases_type ON company_releases(release_type);
+
+                -- Fiscal period index (matches sec_filings pattern)
+                CREATE INDEX IF NOT EXISTS idx_company_releases_fiscal_period
+                ON company_releases(ticker, fiscal_year DESC, fiscal_quarter DESC)
+                WHERE fiscal_year IS NOT NULL;
 
                 -- COMPANY PROFILES: Store AI-generated 10-K company profiles
                 -- SEC FILINGS: Unified table for 10-K, 10-Q, and investor presentations
@@ -16466,7 +16475,26 @@ async def process_press_release_phase(job: dict):
                 if parsed_result and parsed_result.get('parsed_summary'):
                     # Extract metadata and JSON output
                     result_metadata = parsed_result.get('metadata', {})
-                    report_title = result_metadata.get('report_title', pr_title)
+
+                    # Override report_title with FMP's actual title (FMP provides better titles)
+                    report_title = pr_title
+
+                    # Extract fiscal period from Gemini (FMP doesn't provide structured period data)
+                    fiscal_quarter = result_metadata.get('fiscal_quarter', '').strip()
+                    fiscal_year_raw = result_metadata.get('fiscal_year', '')
+
+                    # Convert fiscal_year to INTEGER (Gemini might return string or number)
+                    fiscal_year = None
+                    if fiscal_year_raw:
+                        try:
+                            fiscal_year = int(fiscal_year_raw)
+                        except (ValueError, TypeError):
+                            LOG.warning(f"[{ticker}] Could not convert fiscal_year to int: {fiscal_year_raw}")
+
+                    # Convert empty strings to NULL for database
+                    fiscal_quarter_db = fiscal_quarter if fiscal_quarter else None
+                    fiscal_year_db = fiscal_year
+
                     json_output_parsed = parsed_result.get('json_data', {})
 
                     # Save to legacy parsed_press_release table for backward compatibility
@@ -16534,13 +16562,16 @@ async def process_press_release_phase(job: dict):
                                         ticker, company_name, release_type, filing_date, report_title,
                                         source_id, source_type, summary_json, summary_html,
                                         ai_provider, ai_model, processing_duration_seconds,
-                                        token_count_input, token_count_output, job_id, generated_at
+                                        token_count_input, token_count_output, job_id,
+                                        fiscal_year, fiscal_quarter, generated_at
                                     )
-                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                                     ON CONFLICT (ticker, filing_date, report_title)
                                     DO UPDATE SET
                                         summary_json = EXCLUDED.summary_json,
                                         summary_html = EXCLUDED.summary_html,
+                                        fiscal_year = EXCLUDED.fiscal_year,
+                                        fiscal_quarter = EXCLUDED.fiscal_quarter,
                                         generated_at = NOW()
                                 """, (
                                     ticker,
@@ -16557,7 +16588,9 @@ async def process_press_release_phase(job: dict):
                                     result_metadata.get('generation_time_seconds', 0),
                                     result_metadata.get('token_count_input', 0),
                                     result_metadata.get('token_count_output', 0),
-                                    job_id
+                                    job_id,
+                                    fiscal_year_db,
+                                    fiscal_quarter_db
                                 ))
                                 conn.commit()
 
@@ -16805,6 +16838,23 @@ async def process_8k_summary_phase(job: dict):
                         # Extract metadata from result
                         result_metadata = parsed_result.get('metadata', {})
                         report_title = result_metadata.get('report_title', f"Exhibit {exhibit_num}")
+
+                        # Extract fiscal period from Gemini
+                        fiscal_quarter = result_metadata.get('fiscal_quarter', '').strip()
+                        fiscal_year_raw = result_metadata.get('fiscal_year', '')
+
+                        # Convert fiscal_year to INTEGER (Gemini might return string or number)
+                        fiscal_year = None
+                        if fiscal_year_raw:
+                            try:
+                                fiscal_year = int(fiscal_year_raw)
+                            except (ValueError, TypeError):
+                                LOG.warning(f"[{ticker}] Could not convert fiscal_year to int: {fiscal_year_raw}")
+
+                        # Convert empty strings to NULL for database
+                        fiscal_quarter_db = fiscal_quarter if fiscal_quarter else None
+                        fiscal_year_db = fiscal_year
+
                         json_output = parsed_result.get('json_data', {})
 
                         # Save to legacy parsed_press_release table for backward compatibility
@@ -16872,13 +16922,16 @@ async def process_8k_summary_phase(job: dict):
                                             ticker, company_name, release_type, filing_date, report_title,
                                             source_id, source_type, summary_json, summary_html,
                                             ai_provider, ai_model, processing_duration_seconds,
-                                            token_count_input, token_count_output, job_id, generated_at
+                                            token_count_input, token_count_output, job_id,
+                                            fiscal_year, fiscal_quarter, generated_at
                                         )
-                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                                         ON CONFLICT (ticker, filing_date, report_title)
                                         DO UPDATE SET
                                             summary_json = EXCLUDED.summary_json,
                                             summary_html = EXCLUDED.summary_html,
+                                            fiscal_year = EXCLUDED.fiscal_year,
+                                            fiscal_quarter = EXCLUDED.fiscal_quarter,
                                             generated_at = NOW()
                                     """, (
                                         ticker,
@@ -16895,7 +16948,9 @@ async def process_8k_summary_phase(job: dict):
                                         result_metadata.get('generation_time_seconds', 0),
                                         result_metadata.get('token_count_input', 0),
                                         result_metadata.get('token_count_output', 0),
-                                        job_id
+                                        job_id,
+                                        fiscal_year_db,
+                                        fiscal_quarter_db
                                     ))
                                     conn.commit()
 

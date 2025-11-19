@@ -27233,10 +27233,13 @@ def get_queue_status(token: str = Query(...)):
             # Failed = count of failed jobs in those batches
             cur.execute("""
                 SELECT
-                    COALESCE(SUM(b.total_jobs), 0) as expected,
-                    COUNT(j.job_id) FILTER (WHERE j.status = 'failed') as failed_run
-                FROM ticker_processing_batches b
-                LEFT JOIN ticker_processing_jobs j ON j.batch_id = b.batch_id
+                    (SELECT COALESCE(SUM(total_jobs), 0)
+                     FROM ticker_processing_batches
+                     WHERE created_at >= CURRENT_DATE
+                     AND config->>'mode' = 'daily') as expected,
+                    COUNT(*) FILTER (WHERE j.status = 'failed') as failed_run
+                FROM ticker_processing_jobs j
+                JOIN ticker_processing_batches b ON j.batch_id = b.batch_id
                 WHERE b.created_at >= CURRENT_DATE
                 AND b.config->>'mode' = 'daily'
             """)

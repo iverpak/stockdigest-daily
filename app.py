@@ -7209,9 +7209,10 @@ def extract_yahoo_finance_source_optimized(url: str) -> Optional[str]:
             return None
             
         LOG.info(f"Extracting Yahoo Finance source from: {url}")
-        
+
         response = requests.get(url, timeout=15, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept-Encoding': 'identity'  # Prevent gzip decompression errors from Yahoo
         })
         
         if response.status_code != 200:

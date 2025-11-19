@@ -100,6 +100,7 @@ from modules.company_profiles import (
     classify_exhibit_type,    # NEW: Auto-classify exhibits (earnings_release, investor_presentation, etc.)
     # Parsed press releases (Nov 2025 - unified Gemini summaries for FMP PRs and 8-K exhibits)
     generate_parsed_press_release_with_gemini,
+    generate_earnings_release_with_gemini,  # NEW: Comprehensive earnings release analysis
     save_parsed_press_release_to_database,
     get_parsed_press_releases_for_ticker,
     get_all_parsed_press_releases,
@@ -16681,36 +16682,53 @@ async def process_8k_summary_phase(job: dict):
             LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Exhibit {exhibit_num} saved to database")
 
             # Generate parsed PR summary with Gemini
+            # Route earnings releases to comprehensive analysis, others to basic PR prompt
             if source_id:
                 LOG.info(f"[{ticker}] 🔄 [JOB {job_id}] Generating parsed PR for Exhibit {exhibit_num}...")
 
                 try:
-                    parsed_result = generate_parsed_press_release_with_gemini(
-                        ticker=ticker,
-                        company_name=ticker_config.get('company_name', ticker),
-                        content=raw_content,  # Raw 8-K content
-                        document_title=f"{filing_title} - Exhibit {exhibit_num}",
-                        source_type='8k',
-                        item_codes=item_codes,
-                        gemini_api_key=GEMINI_API_KEY
-                    )
+                    # Route based on exhibit type
+                    if exhibit_type == 'earnings_release':
+                        # Use comprehensive earnings release analysis (JSON → Markdown)
+                        LOG.info(f"[{ticker}] 📊 [JOB {job_id}] Using earnings release prompt for Exhibit {exhibit_num}")
+                        parsed_result = generate_earnings_release_with_gemini(
+                            ticker=ticker,
+                            company_name=ticker_config.get('company_name', ticker),
+                            content=raw_content,
+                            document_title=f"{filing_title} - Exhibit {exhibit_num}",
+                            item_codes=item_codes,
+                            gemini_api_key=GEMINI_API_KEY
+                        )
+                    else:
+                        # Use lightweight PR prompt for legal docs, agreements, etc.
+                        parsed_result = generate_parsed_press_release_with_gemini(
+                            ticker=ticker,
+                            company_name=ticker_config.get('company_name', ticker),
+                            content=raw_content,
+                            document_title=f"{filing_title} - Exhibit {exhibit_num}",
+                            source_type='8k',
+                            item_codes=item_codes,
+                            gemini_api_key=GEMINI_API_KEY
+                        )
 
                     if parsed_result and parsed_result.get('parsed_summary'):
                         with db() as conn:
+                            # Extract metadata from nested dict (both functions return metadata nested)
+                            result_metadata = parsed_result.get('metadata', {})
                             save_parsed_press_release_to_database(
                                 ticker=ticker,
                                 company_name=ticker_config.get('company_name', ticker),
                                 source_type='8k',
                                 source_id=source_id,
                                 document_date=filing_date,
-                                document_title=filing_title,
+                                document_title=f"{ticker} - Ex {exhibit_num}: {exhibit_desc}",
                                 source_url=exhibit_url,
                                 parsed_summary=parsed_result['parsed_summary'],
                                 metadata={
-                                    'model': parsed_result.get('model', 'gemini-2.5-flash'),
-                                    'token_count_input': parsed_result.get('token_count_input', 0),
-                                    'token_count_output': parsed_result.get('token_count_output', 0),
-                                    'generation_time_seconds': parsed_result.get('generation_time_seconds', 0)
+                                    'model': result_metadata.get('model', 'gemini-2.5-flash'),
+                                    'token_count_input': result_metadata.get('token_count_input', 0),
+                                    'token_count_output': result_metadata.get('token_count_output', 0),
+                                    'generation_time_seconds': result_metadata.get('generation_time_seconds', 0)
                                 },
                                 exhibit_number=exhibit_num,
                                 item_codes=item_codes,

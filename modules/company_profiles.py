@@ -1902,6 +1902,331 @@ DOCUMENT CONTENT:
         return None
 
 
+def load_earnings_release_prompt() -> str:
+    """Load the earnings release prompt from file."""
+    try:
+        prompt_path = os.path.join(os.path.dirname(__file__), '_earnings_release_prompt')
+        with open(prompt_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except Exception as e:
+        LOG.error(f"Failed to load earnings release prompt: {e}")
+        raise
+
+
+def convert_earnings_json_to_markdown(json_data: dict, ticker: str, company_name: str) -> str:
+    """
+    Convert earnings release JSON output to markdown format for storage and display.
+
+    Args:
+        json_data: Parsed JSON from Gemini
+        ticker: Stock ticker
+        company_name: Company name
+
+    Returns:
+        Markdown formatted string
+    """
+    sections = json_data.get('sections', {})
+    lines = []
+
+    # Header
+    lines.append(f"# {company_name} ({ticker}) - Earnings Release Summary\n")
+
+    # Bottom Line
+    if 'bottom_line' in sections and sections['bottom_line'].get('content'):
+        lines.append("## Bottom Line\n")
+        lines.append(sections['bottom_line']['content'])
+        lines.append("")
+
+    # Financial Results
+    if 'financial_results' in sections and sections['financial_results']:
+        lines.append("## Financial Results\n")
+        for bullet in sections['financial_results']:
+            topic = bullet.get('topic_label', '')
+            content = bullet.get('content', '')
+            lines.append(f"**{topic}**")
+            lines.append(content)
+            lines.append("")
+
+    # Operational Metrics
+    if 'operational_metrics' in sections and sections['operational_metrics']:
+        lines.append("## Operational Metrics\n")
+        for bullet in sections['operational_metrics']:
+            topic = bullet.get('topic_label', '')
+            content = bullet.get('content', '')
+            lines.append(f"**{topic}**")
+            lines.append(content)
+            lines.append("")
+
+    # Major Developments
+    if 'major_developments' in sections and sections['major_developments']:
+        lines.append("## Major Developments\n")
+        for bullet in sections['major_developments']:
+            topic = bullet.get('topic_label', '')
+            content = bullet.get('content', '')
+            lines.append(f"**{topic}**")
+            lines.append(content)
+            lines.append("")
+
+    # Guidance
+    if 'guidance' in sections and sections['guidance']:
+        lines.append("## Guidance\n")
+        for bullet in sections['guidance']:
+            topic = bullet.get('topic_label', '')
+            content = bullet.get('content', '')
+            lines.append(f"**{topic}**")
+            lines.append(content)
+            lines.append("")
+
+    # Strategic Initiatives
+    if 'strategic_initiatives' in sections and sections['strategic_initiatives']:
+        lines.append("## Strategic Initiatives\n")
+        for bullet in sections['strategic_initiatives']:
+            topic = bullet.get('topic_label', '')
+            content = bullet.get('content', '')
+            lines.append(f"**{topic}**")
+            lines.append(content)
+            lines.append("")
+
+    # Risk Factors
+    if 'risk_factors' in sections and sections['risk_factors']:
+        lines.append("## Risk Factors\n")
+        for bullet in sections['risk_factors']:
+            topic = bullet.get('topic_label', '')
+            content = bullet.get('content', '')
+            lines.append(f"**{topic}**")
+            lines.append(content)
+            lines.append("")
+
+    # Industry & Competitive Landscape
+    if 'industry_competitive' in sections and sections['industry_competitive']:
+        lines.append("## Industry & Competitive Landscape\n")
+        for bullet in sections['industry_competitive']:
+            topic = bullet.get('topic_label', '')
+            content = bullet.get('content', '')
+            lines.append(f"**{topic}**")
+            lines.append(content)
+            lines.append("")
+
+    # Capital Allocation
+    if 'capital_allocation' in sections and sections['capital_allocation']:
+        lines.append("## Capital Allocation\n")
+        for bullet in sections['capital_allocation']:
+            topic = bullet.get('topic_label', '')
+            content = bullet.get('content', '')
+            lines.append(f"**{topic}**")
+            lines.append(content)
+            lines.append("")
+
+    # Upside Scenario
+    if 'upside_scenario' in sections and sections['upside_scenario'].get('content'):
+        lines.append("## Upside Scenario\n")
+        lines.append(sections['upside_scenario']['content'])
+        lines.append("")
+
+    # Downside Scenario
+    if 'downside_scenario' in sections and sections['downside_scenario'].get('content'):
+        lines.append("## Downside Scenario\n")
+        lines.append(sections['downside_scenario']['content'])
+        lines.append("")
+
+    # Key Variables
+    if 'key_variables' in sections and sections['key_variables']:
+        lines.append("## Key Variables to Monitor\n")
+        for bullet in sections['key_variables']:
+            topic = bullet.get('topic_label', '')
+            content = bullet.get('content', '')
+            lines.append(f"**{topic}**")
+            lines.append(content)
+            lines.append("")
+
+    return "\n".join(lines)
+
+
+def generate_earnings_release_with_gemini(
+    ticker: str,
+    company_name: str,
+    content: str,
+    document_title: str,
+    item_codes: str = None,
+    gemini_api_key: str = None,
+    is_pdf: bool = False,
+    pdf_bytes: bytes = None
+) -> Optional[Dict]:
+    """
+    Generate structured summary of earnings release using Gemini 2.5 Flash.
+
+    This creates a comprehensive JSON output with 11 sections that can be
+    converted to markdown for storage in parsed_press_releases.
+
+    Args:
+        ticker: Stock ticker (e.g., 'AAPL')
+        company_name: Company name for context
+        content: Full text of earnings release (HTML or plain text)
+        document_title: Title of the document
+        item_codes: 8-K item codes for context (e.g., "2.02")
+        gemini_api_key: Gemini API key
+        is_pdf: Whether content is PDF (use pdf_bytes instead)
+        pdf_bytes: Raw PDF bytes for multimodal processing
+
+    Returns:
+        {
+            'parsed_summary': str (markdown formatted),
+            'json_data': dict (raw JSON output),
+            'metadata': {
+                'model': str,
+                'generation_time_seconds': int,
+                'token_count_input': int,
+                'token_count_output': int
+            }
+        }
+    """
+    if not gemini_api_key:
+        LOG.error("❌ Gemini API key not configured for earnings release generation")
+        return None
+
+    if not is_pdf and (not content or len(content.strip()) < 100):
+        LOG.error(f"❌ Content too short for {ticker} ({len(content) if content else 0} chars)")
+        return None
+
+    if is_pdf and not pdf_bytes:
+        LOG.error(f"❌ PDF bytes not provided for {ticker}")
+        return None
+
+    try:
+        import google.generativeai as genai
+        import base64
+        import json
+
+        genai.configure(api_key=gemini_api_key)
+
+        # Load prompt
+        prompt_template = load_earnings_release_prompt()
+
+        # Build context header
+        source_context = "Earnings Release (8-K)"
+        if item_codes:
+            source_context += f" - Items: {item_codes}"
+
+        LOG.info(f"Generating earnings release summary for {ticker} - {source_context}")
+        LOG.info(f"Document: {document_title[:80]}...")
+
+        # Gemini 2.5 Flash
+        model = genai.GenerativeModel('gemini-2.5-flash')
+
+        generation_config = {
+            "temperature": 0.0,  # Maximum determinism
+            "max_output_tokens": 16000,  # Sufficient for comprehensive analysis
+            "response_mime_type": "application/json"  # Request JSON output
+        }
+
+        start_time = datetime.now(timezone.utc)
+
+        if is_pdf and pdf_bytes:
+            # Multimodal PDF processing
+            LOG.info(f"Processing PDF ({len(pdf_bytes):,} bytes) with multimodal...")
+
+            pdf_part = {
+                "inline_data": {
+                    "mime_type": "application/pdf",
+                    "data": base64.b64encode(pdf_bytes).decode('utf-8')
+                }
+            }
+
+            user_content = f"""Company: {company_name} ({ticker})
+Document Type: {source_context}
+Title: {document_title}
+
+Analyze this earnings release PDF and extract all material information."""
+
+            response = model.generate_content(
+                [prompt_template, user_content, pdf_part],
+                generation_config=generation_config
+            )
+        else:
+            # Text-based processing
+            content_length = len(content) if content else 0
+            LOG.info(f"Content length: {content_length:,} chars")
+
+            user_content = f"""Company: {company_name} ({ticker})
+Document Type: {source_context}
+Title: {document_title}
+
+---
+DOCUMENT CONTENT:
+
+{content[:400000]}
+"""
+
+            # Combine prompt with content
+            full_prompt = f"{prompt_template}\n\n---\n\n{user_content}"
+
+            response = model.generate_content(
+                full_prompt,
+                generation_config=generation_config
+            )
+
+        end_time = datetime.now(timezone.utc)
+        generation_time = int((end_time - start_time).total_seconds())
+
+        # Parse JSON response
+        response_text = response.text.strip()
+
+        # Handle potential markdown code blocks
+        if response_text.startswith('```'):
+            # Extract JSON from code block
+            lines = response_text.split('\n')
+            json_lines = []
+            in_block = False
+            for line in lines:
+                if line.startswith('```json'):
+                    in_block = True
+                    continue
+                elif line.startswith('```'):
+                    in_block = False
+                    continue
+                elif in_block:
+                    json_lines.append(line)
+            response_text = '\n'.join(json_lines)
+
+        try:
+            json_data = json.loads(response_text)
+        except json.JSONDecodeError as e:
+            LOG.error(f"❌ Failed to parse JSON response: {e}")
+            LOG.error(f"Response preview: {response_text[:500]}...")
+            return None
+
+        # Convert JSON to markdown
+        markdown_summary = convert_earnings_json_to_markdown(json_data, ticker, company_name)
+
+        # Get token counts
+        token_count_input = 0
+        token_count_output = 0
+        if hasattr(response, 'usage_metadata'):
+            token_count_input = getattr(response.usage_metadata, 'prompt_token_count', 0)
+            token_count_output = getattr(response.usage_metadata, 'candidates_token_count', 0)
+
+        # Log success
+        word_count = len(markdown_summary.split())
+        LOG.info(f"✅ Generated earnings release summary for {ticker}: {word_count} words in {generation_time}s")
+        LOG.info(f"   Tokens: {token_count_input:,} input, {token_count_output:,} output")
+
+        return {
+            'parsed_summary': markdown_summary,
+            'json_data': json_data,
+            'metadata': {
+                'model': 'gemini-2.5-flash',
+                'generation_time_seconds': generation_time,
+                'token_count_input': token_count_input,
+                'token_count_output': token_count_output
+            }
+        }
+
+    except Exception as e:
+        LOG.error(f"❌ Gemini generation failed for {ticker} earnings release: {e}")
+        LOG.error(traceback.format_exc())
+        return None
+
+
 def save_parsed_press_release_to_database(
     ticker: str,
     company_name: str,

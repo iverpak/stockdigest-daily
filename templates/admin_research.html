@@ -831,12 +831,13 @@
 
                 if (item.has_summary) {
                     // Build action buttons for generated 8-K (match library pattern)
-                    // Note: cascade=true for Generate Research to delete both raw 8K and parsed PR
+                    // Note: No exhibit_number = delete ALL exhibits for this accession
+                    // cascade=true to also delete associated parsed PRs
                     const docId = JSON.stringify({
                         ticker: ticker,
                         type: '8k_filings',
                         accession_number: item.accession_number,
-                        exhibit_number: item.exhibit_number || '99.1',  // Default to 99.1 if not specified
+                        // No exhibit_number - deletes all exhibits for this accession
                         cascade: true  // Generate Research deletes both raw and parsed
                     }).replace(/"/g, '&quot;');
 

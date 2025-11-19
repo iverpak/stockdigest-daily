@@ -23832,79 +23832,121 @@ def get_all_8k_filings(token: str = Query(...)):
 @APP.post("/api/admin/delete-8k-filing")
 async def delete_8k_filing_api(request: Request):
     """
-    Delete specific 8-K exhibit by ticker, accession_number, and exhibit_number.
+    Delete 8-K exhibit(s) by ticker and accession_number.
+
+    Two modes:
+    1. With exhibit_number: Delete just that exhibit (View Research)
+    2. Without exhibit_number: Delete ALL exhibits for that accession + cascade to parsed PRs (Generate Research)
 
     Body: {
         "ticker": "AAPL",
         "accession_number": "0001193125-25-012345",
-        "exhibit_number": "99.1",
+        "exhibit_number": "99.1",  // Optional - if missing, deletes all exhibits
         "token": "...",
-        "cascade": true  // Optional: also delete associated parsed PR (from Generate Research)
+        "cascade": true  // Optional: also delete associated parsed PRs
     }
-
-    If cascade=true, also deletes any parsed_press_releases with source_type='8k' pointing to this exhibit.
     """
     body = await request.json()
     token = body.get('token')
     ticker = body.get('ticker')
     accession_number = body.get('accession_number')
-    exhibit_number = body.get('exhibit_number')
+    exhibit_number = body.get('exhibit_number')  # Optional
     cascade = body.get('cascade', False)
 
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
-    if not all([ticker, accession_number, exhibit_number]):
-        return {"status": "error", "message": "Missing required fields: ticker, accession_number, exhibit_number"}
+    if not all([ticker, accession_number]):
+        return {"status": "error", "message": "Missing required fields: ticker, accession_number"}
 
     try:
         with db() as conn, conn.cursor() as cur:
-            # First get the 8-K id for cascade delete
-            cur.execute("""
-                SELECT id, exhibit_description
-                FROM sec_8k_filings
-                WHERE ticker = %s
-                  AND accession_number = %s
-                  AND exhibit_number = %s
-            """, (ticker, accession_number, exhibit_number))
+            if exhibit_number:
+                # Mode 1: Delete specific exhibit only (View Research)
+                cur.execute("""
+                    SELECT id, exhibit_description
+                    FROM sec_8k_filings
+                    WHERE ticker = %s
+                      AND accession_number = %s
+                      AND exhibit_number = %s
+                """, (ticker, accession_number, exhibit_number))
 
-            row = cur.fetchone()
-            if not row:
+                row = cur.fetchone()
+                if not row:
+                    return {
+                        "status": "error",
+                        "message": f"Exhibit {exhibit_number} not found for {ticker}"
+                    }
+
+                filing_id = row['id'] if isinstance(row, dict) else row[0]
+                description = row['exhibit_description'] if isinstance(row, dict) else row[1]
+
+                deleted_items = [f"Exhibit {exhibit_number}"]
+
+                # Cascade delete parsed PR if requested
+                if cascade:
+                    cur.execute("""
+                        DELETE FROM parsed_press_releases
+                        WHERE source_type = '8k' AND source_id = %s
+                        RETURNING id
+                    """, (filing_id,))
+                    if cur.fetchone():
+                        deleted_items.append("parsed PR")
+
+                # Delete the exhibit
+                cur.execute("DELETE FROM sec_8k_filings WHERE id = %s", (filing_id,))
+
+                conn.commit()
+                LOG.info(f"🗑️ Deleted 8-K exhibit {exhibit_number} for {ticker}")
                 return {
-                    "status": "error",
-                    "message": f"Exhibit {exhibit_number} not found for {ticker}"
+                    "status": "success",
+                    "message": f"Deleted {', '.join(deleted_items)}: {description}"
                 }
 
-            filing_id = row['id'] if isinstance(row, dict) else row[0]
-            description = row['exhibit_description'] if isinstance(row, dict) else row[1]
-
-            deleted_items = [f"Exhibit {exhibit_number}"]
-
-            # Cascade delete parsed PR if requested
-            if cascade:
+            else:
+                # Mode 2: Delete ALL exhibits for this accession (Generate Research)
+                # First get all exhibit IDs for cascade delete
                 cur.execute("""
-                    DELETE FROM parsed_press_releases
-                    WHERE source_type = '8k' AND source_id = %s
-                    RETURNING id
-                """, (filing_id,))
-                parsed_deleted = cur.fetchone()
-                if parsed_deleted:
-                    deleted_items.append("parsed PR")
-                    LOG.info(f"🗑️ Cascade deleted parsed PR for 8-K {filing_id}")
+                    SELECT id, exhibit_number
+                    FROM sec_8k_filings
+                    WHERE ticker = %s AND accession_number = %s
+                """, (ticker, accession_number))
 
-            # Delete the 8-K exhibit
-            cur.execute("""
-                DELETE FROM sec_8k_filings
-                WHERE id = %s
-            """, (filing_id,))
+                rows = cur.fetchall()
+                if not rows:
+                    return {
+                        "status": "error",
+                        "message": f"No exhibits found for {ticker} accession {accession_number}"
+                    }
 
-            conn.commit()
+                filing_ids = [r['id'] if isinstance(r, dict) else r[0] for r in rows]
+                exhibit_nums = [r['exhibit_number'] if isinstance(r, dict) else r[1] for r in rows]
 
-            LOG.info(f"🗑️ Deleted 8-K exhibit {exhibit_number} for {ticker} ({description})")
-            return {
-                "status": "success",
-                "message": f"Deleted {', '.join(deleted_items)}: {description}"
-            }
+                deleted_items = [f"{len(filing_ids)} exhibit(s)"]
+
+                # Cascade delete ALL parsed PRs for these exhibits
+                if cascade and filing_ids:
+                    cur.execute("""
+                        DELETE FROM parsed_press_releases
+                        WHERE source_type = '8k' AND source_id = ANY(%s)
+                        RETURNING id
+                    """, (filing_ids,))
+                    parsed_count = len(cur.fetchall())
+                    if parsed_count:
+                        deleted_items.append(f"{parsed_count} parsed PR(s)")
+
+                # Delete all exhibits
+                cur.execute("""
+                    DELETE FROM sec_8k_filings
+                    WHERE ticker = %s AND accession_number = %s
+                """, (ticker, accession_number))
+
+                conn.commit()
+                LOG.info(f"🗑️ Deleted all 8-K exhibits for {ticker} accession {accession_number}: {exhibit_nums}")
+                return {
+                    "status": "success",
+                    "message": f"Deleted {', '.join(deleted_items)} for {ticker}"
+                }
 
     except Exception as e:
         LOG.error(f"Failed to delete 8-K exhibit: {e}")

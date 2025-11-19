@@ -93,6 +93,11 @@ JSON OUTPUT SCHEMA - MANDATORY STRUCTURE
 You MUST output valid JSON with this EXACT structure:
 
 {
+  "metadata": {
+    "report_title": "string (e.g., 'Q2 2025 Earnings Release')",
+    "fiscal_quarter": "string (e.g., 'Q2' or 'FY' for full year)",
+    "fiscal_year": "string (e.g., '2025')"
+  },
   "sections": {
     "bottom_line": {
       "content": "string (≤150 words)",
@@ -147,11 +152,17 @@ Bottom Line section:
 - ≤150 words HARD CAP
 
 CRITICAL JSON REQUIREMENTS:
-1. ALL 12 sections must be present inside "sections" object (even if empty)
-2. Empty bullet sections = [] (empty array), NOT null, NOT omitted
-3. All strings must be properly escaped (quotes, newlines, etc.)
-4. No trailing commas
-5. Must be parseable by json.loads() in Python
+1. "metadata" object must be present with report_title, fiscal_quarter, fiscal_year
+2. ALL 12 sections must be present inside "sections" object (even if empty)
+3. Empty bullet sections = [] (empty array), NOT null, NOT omitted
+4. All strings must be properly escaped (quotes, newlines, etc.)
+5. No trailing commas
+6. Must be parseable by json.loads() in Python
+
+METADATA GUIDELINES:
+- report_title: Clean, readable title like "Q2 2025 Earnings Release" or "Second Quarter 2025 Results"
+- fiscal_quarter: "Q1", "Q2", "Q3", "Q4", or "FY" for full year results
+- fiscal_year: Four-digit year (e.g., "2025")
 
 SECTION ORDER (must appear in this exact order):
 1. bottom_line

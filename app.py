@@ -16715,13 +16715,21 @@ async def process_8k_summary_phase(job: dict):
                         with db() as conn:
                             # Extract metadata from nested dict (both functions return metadata nested)
                             result_metadata = parsed_result.get('metadata', {})
+
+                            # Use report_title if available (from earnings release prompt)
+                            report_title = result_metadata.get('report_title', '')
+                            if report_title:
+                                clean_document_title = f"{ticker} - {report_title}"
+                            else:
+                                clean_document_title = f"{ticker} - Ex {exhibit_num}: {exhibit_desc[:50]}"
+
                             save_parsed_press_release_to_database(
                                 ticker=ticker,
                                 company_name=ticker_config.get('company_name', ticker),
                                 source_type='8k',
                                 source_id=source_id,
                                 document_date=filing_date,
-                                document_title=f"{ticker} - Ex {exhibit_num}: {exhibit_desc}",
+                                document_title=clean_document_title,
                                 source_url=exhibit_url,
                                 parsed_summary=parsed_result['parsed_summary'],
                                 metadata={
@@ -16735,6 +16743,46 @@ async def process_8k_summary_phase(job: dict):
                                 db_connection=conn
                             )
                         LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Parsed PR saved for Exhibit {exhibit_num} (source_id={source_id})")
+
+                        # Send email with parsed summary (using transcript email template)
+                        if exhibit_type == 'earnings_release' and config.get('send_email', True):
+                            try:
+                                LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending parsed earnings release email...")
+
+                                # Get stock data for email header
+                                stock_data = get_filing_stock_data(ticker)
+
+                                # Generate email using transcript template
+                                email_html = generate_transcript_email(
+                                    ticker=ticker,
+                                    company_name=ticker_config.get('company_name', ticker),
+                                    report_type='earnings_release',
+                                    quarter=result_metadata.get('fiscal_quarter', 'Q?'),
+                                    year=result_metadata.get('fiscal_year', ''),
+                                    summary_text=parsed_result['parsed_summary'],
+                                    ai_model=result_metadata.get('model', 'gemini-2.5-flash'),
+                                    generation_time=result_metadata.get('generation_time_seconds', 0),
+                                    stock_price=stock_data.get('stock_price'),
+                                    daily_return_pct=stock_data.get('daily_return_pct'),
+                                    price_change_color=stock_data.get('price_change_color', '#666'),
+                                    ytd_return_pct=stock_data.get('ytd_return_pct'),
+                                    ytd_return_color=stock_data.get('ytd_return_color', '#666'),
+                                    market_status=stock_data.get('market_status', 'LAST CLOSE'),
+                                    return_label=stock_data.get('return_label', '1D')
+                                )
+
+                                # Send email
+                                email_subject = f"📊 Parsed Earnings: {ticker} - {report_title or f'Ex {exhibit_num}'}"
+                                send_email(
+                                    to_email=ADMIN_EMAIL,
+                                    subject=email_subject,
+                                    html_content=email_html
+                                )
+                                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Parsed earnings email sent")
+
+                            except Exception as email_error:
+                                LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send parsed email: {email_error}")
+                                # Continue - parsed PR was saved successfully
                     else:
                         LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Parsed PR generation returned empty for Exhibit {exhibit_num}")
 

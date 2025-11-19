@@ -1906,11 +1906,13 @@ def convert_earnings_json_to_markdown(json_data: dict, ticker: str, company_name
     Returns:
         Markdown formatted string
     """
+    metadata = json_data.get('metadata', {})
     sections = json_data.get('sections', {})
     lines = []
 
-    # Header
-    lines.append(f"# {company_name} ({ticker}) - Earnings Release Summary\n")
+    # Header - use report_title if available
+    report_title = metadata.get('report_title', 'Earnings Release Summary')
+    lines.append(f"# {company_name} ({ticker}) - {report_title}\n")
 
     # Bottom Line
     if 'bottom_line' in sections and sections['bottom_line'].get('content'):
@@ -2191,6 +2193,14 @@ DOCUMENT CONTENT:
         LOG.info(f"✅ Generated earnings release summary for {ticker}: {word_count} words in {generation_time}s")
         LOG.info(f"   Tokens: {token_count_input:,} input, {token_count_output:,} output")
 
+        # Extract report metadata from AI output
+        ai_metadata = json_data.get('metadata', {})
+        report_title = ai_metadata.get('report_title', 'Earnings Release Summary')
+        fiscal_quarter = ai_metadata.get('fiscal_quarter', '')
+        fiscal_year = ai_metadata.get('fiscal_year', '')
+
+        LOG.info(f"   Report: {report_title} ({fiscal_quarter} {fiscal_year})")
+
         return {
             'parsed_summary': markdown_summary,
             'json_data': json_data,
@@ -2198,7 +2208,10 @@ DOCUMENT CONTENT:
                 'model': 'gemini-2.5-flash',
                 'generation_time_seconds': generation_time,
                 'token_count_input': token_count_input,
-                'token_count_output': token_count_output
+                'token_count_output': token_count_output,
+                'report_title': report_title,
+                'fiscal_quarter': fiscal_quarter,
+                'fiscal_year': fiscal_year
             }
         }
 

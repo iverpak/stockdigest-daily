@@ -2421,14 +2421,16 @@ def get_all_parsed_press_releases(
 
 def delete_parsed_press_release(
     parsed_pr_id: int,
-    db_connection
+    db_connection,
+    cascade: bool = False
 ) -> bool:
     """
-    Delete a parsed press release by ID with cascade delete of source 8-K.
+    Delete a parsed press release by ID, optionally with cascade delete of source 8-K.
 
     Args:
         parsed_pr_id: ID of parsed press release to delete
         db_connection: Database connection
+        cascade: If True, also delete source 8-K (only for Generate Research tab)
 
     Returns:
         True on success, False on error
@@ -2436,20 +2438,21 @@ def delete_parsed_press_release(
     try:
         cur = db_connection.cursor()
 
-        # First, get source info for cascade delete
-        cur.execute("""
-            SELECT source_type, source_id FROM parsed_press_releases
-            WHERE id = %s
-        """, (parsed_pr_id,))
+        if cascade:
+            # Get source info for cascade delete
+            cur.execute("""
+                SELECT source_type, source_id FROM parsed_press_releases
+                WHERE id = %s
+            """, (parsed_pr_id,))
 
-        source_info = cur.fetchone()
-        if not source_info:
-            LOG.warning(f"⚠️ No parsed PR found with id={parsed_pr_id}")
-            cur.close()
-            return False
+            source_info = cur.fetchone()
+            if not source_info:
+                LOG.warning(f"⚠️ No parsed PR found with id={parsed_pr_id}")
+                cur.close()
+                return False
 
-        source_type = source_info[0]
-        source_id = source_info[1]
+            source_type = source_info[0]
+            source_id = source_info[1]
 
         # Delete the parsed PR
         cur.execute("""
@@ -2457,10 +2460,17 @@ def delete_parsed_press_release(
             WHERE id = %s
         """, (parsed_pr_id,))
 
-        LOG.info(f"✅ Deleted parsed PR id={parsed_pr_id}")
+        deleted = cur.rowcount > 0
+        if deleted:
+            LOG.info(f"✅ Deleted parsed PR id={parsed_pr_id}")
+        else:
+            LOG.warning(f"⚠️ No parsed PR found with id={parsed_pr_id}")
+            db_connection.commit()
+            cur.close()
+            return False
 
-        # Cascade delete source 8-K if applicable
-        if source_type == '8k' and source_id:
+        # Cascade delete source 8-K if requested
+        if cascade and source_type == '8k' and source_id:
             cur.execute("""
                 DELETE FROM sec_8k_filings
                 WHERE id = %s

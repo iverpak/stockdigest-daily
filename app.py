@@ -23838,16 +23838,18 @@ async def delete_8k_filing_api(request: Request):
         "ticker": "AAPL",
         "accession_number": "0001193125-25-012345",
         "exhibit_number": "99.1",
-        "token": "..."
+        "token": "...",
+        "cascade": true  // Optional: also delete associated parsed PR (from Generate Research)
     }
 
-    Deletes ONLY the specified exhibit.
+    If cascade=true, also deletes any parsed_press_releases with source_type='8k' pointing to this exhibit.
     """
     body = await request.json()
     token = body.get('token')
     ticker = body.get('ticker')
     accession_number = body.get('accession_number')
     exhibit_number = body.get('exhibit_number')
+    cascade = body.get('cascade', False)
 
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
@@ -23857,29 +23859,52 @@ async def delete_8k_filing_api(request: Request):
 
     try:
         with db() as conn, conn.cursor() as cur:
-            # Delete specific exhibit only
+            # First get the 8-K id for cascade delete
             cur.execute("""
-                DELETE FROM sec_8k_filings
+                SELECT id, exhibit_description
+                FROM sec_8k_filings
                 WHERE ticker = %s
                   AND accession_number = %s
                   AND exhibit_number = %s
-                RETURNING exhibit_number, exhibit_description
             """, (ticker, accession_number, exhibit_number))
 
-            deleted = cur.fetchone()
-            conn.commit()
-
-            if deleted:
-                LOG.info(f"🗑️ Deleted 8-K exhibit {exhibit_number} for {ticker} ({deleted['exhibit_description']})")
-                return {
-                    "status": "success",
-                    "message": f"Deleted Exhibit {exhibit_number}: {deleted['exhibit_description']}"
-                }
-            else:
+            row = cur.fetchone()
+            if not row:
                 return {
                     "status": "error",
                     "message": f"Exhibit {exhibit_number} not found for {ticker}"
                 }
+
+            filing_id = row['id'] if isinstance(row, dict) else row[0]
+            description = row['exhibit_description'] if isinstance(row, dict) else row[1]
+
+            deleted_items = [f"Exhibit {exhibit_number}"]
+
+            # Cascade delete parsed PR if requested
+            if cascade:
+                cur.execute("""
+                    DELETE FROM parsed_press_releases
+                    WHERE source_type = '8k' AND source_id = %s
+                    RETURNING id
+                """, (filing_id,))
+                parsed_deleted = cur.fetchone()
+                if parsed_deleted:
+                    deleted_items.append("parsed PR")
+                    LOG.info(f"🗑️ Cascade deleted parsed PR for 8-K {filing_id}")
+
+            # Delete the 8-K exhibit
+            cur.execute("""
+                DELETE FROM sec_8k_filings
+                WHERE id = %s
+            """, (filing_id,))
+
+            conn.commit()
+
+            LOG.info(f"🗑️ Deleted 8-K exhibit {exhibit_number} for {ticker} ({description})")
+            return {
+                "status": "success",
+                "message": f"Deleted {', '.join(deleted_items)}: {description}"
+            }
 
     except Exception as e:
         LOG.error(f"Failed to delete 8-K exhibit: {e}")
@@ -24164,11 +24189,9 @@ async def generate_parsed_pr_api(request: Request):
 @APP.post("/api/admin/delete-parsed-pr")
 async def delete_parsed_pr_api(request: Request):
     """
-    Delete a parsed press release by ID with CASCADE to source.
+    Delete a parsed press release by ID (NO cascade - only deletes the parsed PR).
 
-    Deletes both:
-    - The parsed PR (Gemini summary) from parsed_press_releases
-    - The source (Claude summary from press_releases OR raw from sec_8k_filings)
+    From View Research tab, this only deletes the Gemini summary, NOT the source.
 
     Body: {
         "token": "...",
@@ -24187,9 +24210,9 @@ async def delete_parsed_pr_api(request: Request):
 
     try:
         with db() as conn, conn.cursor() as cur:
-            # 1. Get the parsed PR to find source
+            # Get ticker for logging
             cur.execute("""
-                SELECT source_type, source_id, ticker
+                SELECT ticker, document_title
                 FROM parsed_press_releases
                 WHERE id = %s
             """, (parsed_pr_id,))
@@ -24200,33 +24223,21 @@ async def delete_parsed_pr_api(request: Request):
 
             # Handle both dict and tuple cursor types
             if isinstance(row, dict):
-                source_type = row['source_type']
-                source_id = row['source_id']
                 ticker = row['ticker']
+                title = row['document_title']
             else:
-                source_type, source_id, ticker = row
+                ticker, title = row
 
-            deleted_items = []
-
-            # 2. Delete the parsed PR
+            # Delete ONLY the parsed PR (no cascade)
             cur.execute("DELETE FROM parsed_press_releases WHERE id = %s", (parsed_pr_id,))
-            deleted_items.append(f"parsed_pr #{parsed_pr_id}")
-
-            # 3. Delete the source
-            if source_type == 'fmp':
-                cur.execute("DELETE FROM press_releases WHERE id = %s", (source_id,))
-                deleted_items.append(f"press_release #{source_id}")
-            elif source_type == '8k':
-                cur.execute("DELETE FROM sec_8k_filings WHERE id = %s", (source_id,))
-                deleted_items.append(f"8k_filing #{source_id}")
 
             conn.commit()
 
-            LOG.info(f"✅ Cascade deleted for {ticker}: {', '.join(deleted_items)}")
+            LOG.info(f"✅ Deleted parsed PR #{parsed_pr_id} for {ticker}")
 
             return {
                 "status": "success",
-                "message": f"Deleted {ticker}: {', '.join(deleted_items)}"
+                "message": f"Deleted parsed PR: {title or f'#{parsed_pr_id}'}"
             }
 
     except Exception as e:

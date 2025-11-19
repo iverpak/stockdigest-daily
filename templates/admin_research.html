@@ -831,10 +831,13 @@
 
                 if (item.has_summary) {
                     // Build action buttons for generated 8-K (match library pattern)
+                    // Note: cascade=true for Generate Research to delete both raw 8K and parsed PR
                     const docId = JSON.stringify({
                         ticker: ticker,
                         type: '8k_filings',
-                        accession_number: item.accession_number
+                        accession_number: item.accession_number,
+                        exhibit_number: item.exhibit_number || '99.1',  // Default to 99.1 if not specified
+                        cascade: true  // Generate Research deletes both raw and parsed
                     }).replace(/"/g, '&quot;');
 
                     return `
@@ -1748,7 +1751,7 @@
         async function deleteDocument(docInfo) {
             const docLabel = docInfo.type === '10q' ? `${docInfo.fiscal_quarter} ${docInfo.fiscal_year}` :
                            docInfo.type === '10k' ? `FY ${docInfo.fiscal_year}` :
-                           docInfo.type === '8k_filings' ? `Exhibit ${docInfo.exhibit_number}` :
+                           docInfo.type === '8k_filings' ? `8-K Filing` :
                            docInfo.type === 'parsed_prs' ? `Parsed PR (${docInfo.source_type})` :
                            docInfo.type;
 
@@ -1783,7 +1786,13 @@
                     body = { token, ticker: docInfo.ticker, report_date: docInfo.report_date, pr_title: docInfo.pr_title, report_type: 'press_release' };
                 } else if (docInfo.type === '8k_filings') {
                     endpoint = '/api/admin/delete-8k-filing';
-                    body = { token, ticker: docInfo.ticker, accession_number: docInfo.accession_number, exhibit_number: docInfo.exhibit_number };
+                    body = {
+                        token,
+                        ticker: docInfo.ticker,
+                        accession_number: docInfo.accession_number,
+                        exhibit_number: docInfo.exhibit_number,
+                        cascade: docInfo.cascade || false  // Cascade from Generate Research tab
+                    };
                 } else if (docInfo.type === 'parsed_prs') {
                     endpoint = '/api/admin/delete-parsed-pr';
                     body = { token, id: docInfo.id };

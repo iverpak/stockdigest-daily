@@ -147,6 +147,10 @@
 
         .global-actions .btn {
             width: 100%;
+            min-height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
 
         .btn {
@@ -666,13 +670,21 @@
             document.getElementById('btn-clear-count').textContent = total;
             document.getElementById('btn-bulk-review-count').textContent = (data.ready || 0) + (data.sent || 0);
 
-            // Dynamic count #1: Active users (for Generate All Reports button)
+            // Dynamic count #1: Unique tickers from active users (for Generate All Reports button)
             try {
                 const usersResponse = await fetch(`/api/admin/users?token=${token}`);
                 const usersData = await usersResponse.json();
                 if (usersData.status === 'success') {
-                    const activeUserCount = usersData.users.filter(u => u.status === 'active').length;
-                    document.getElementById('btn-generate-count').textContent = activeUserCount;
+                    // Deduplicate tickers across all active users
+                    const uniqueTickers = new Set();
+                    usersData.users
+                        .filter(u => u.status === 'active')
+                        .forEach(u => {
+                            if (u.ticker1) uniqueTickers.add(u.ticker1.toUpperCase());
+                            if (u.ticker2) uniqueTickers.add(u.ticker2.toUpperCase());
+                            if (u.ticker3) uniqueTickers.add(u.ticker3.toUpperCase());
+                        });
+                    document.getElementById('btn-generate-count').textContent = uniqueTickers.size;
                 }
             } catch (error) {
                 console.error('Failed to fetch active users count:', error);

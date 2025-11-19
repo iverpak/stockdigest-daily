@@ -17788,7 +17788,7 @@ def restart_worker_thread():
 
 def worker_heartbeat_monitor_loop():
     """Monitor worker health and restart if frozen"""
-    global _last_worker_activity
+    global _last_worker_activity, _worker_restart_count
 
     LOG.info("💓 Worker heartbeat monitor started (checks every 60 seconds, 5-minute threshold)")
 
@@ -17798,17 +17798,27 @@ def worker_heartbeat_monitor_loop():
 
             # Check if worker thread is alive
             if not _job_worker_running or not _job_worker_thread or not _job_worker_thread.is_alive():
-                LOG.warning("⚠️ Worker thread is not running - attempting restart...")
-                restart_worker_thread()
+                LOG.warning("⚠️ Worker thread is not running - attempting thread restart...")
+                try:
+                    start_job_worker()
+                    _worker_restart_count += 1
+                    LOG.info(f"✅ Worker thread restarted (total restarts: {_worker_restart_count})")
+                except Exception as e:
+                    LOG.error(f"Failed to restart worker thread: {e} - exiting for Render restart")
+                    restart_worker_thread()
                 continue
 
-            # Check for recent worker activity
+            # Check for recent worker activity (includes completed jobs for better tracking)
             with db() as conn, conn.cursor() as cur:
-                # Look for any job that has been updated in the last 5 minutes
+                # Look for any recent job activity (processing, queued, or recently completed)
                 cur.execute("""
-                    SELECT MAX(last_updated) as latest_activity
+                    SELECT MAX(GREATEST(
+                        COALESCE(last_updated, '1970-01-01'::timestamp),
+                        COALESCE(completed_at, '1970-01-01'::timestamp)
+                    )) as latest_activity
                     FROM ticker_processing_jobs
-                    WHERE status IN ('processing', 'queued')
+                    WHERE status IN ('processing', 'queued', 'completed')
+                    AND (last_updated > NOW() - INTERVAL '1 hour' OR completed_at > NOW() - INTERVAL '1 hour')
                 """)
                 row = cur.fetchone()
                 latest_activity = row['latest_activity'] if row else None

@@ -29712,15 +29712,11 @@ def process_hourly_alerts():
     6. Sends one email per user with all their tickers' articles
 
     Performance: ~20-40 seconds (was ~10 minutes with sequential processing)
+
+    Schedule: Cron controls timing (0 13-23,0-3 * * * = 8 AM - 10 PM EST / 9 AM - 11 PM EDT)
     """
     eastern = pytz.timezone('America/Toronto')
     now_est = datetime.now(timezone.utc).astimezone(eastern)
-    current_hour = now_est.hour
-
-    # Check if we're in the alert window (9 AM - 10 PM EST inclusive)
-    if not (9 <= current_hour <= 22):
-        LOG.info(f"⏸️ Hourly alerts: Outside alert window (current hour: {current_hour} EST). Exiting.")
-        return
 
     LOG.info(f"📰 Starting hourly alerts processing at {now_est.strftime('%I:%M %p')} EST")
 

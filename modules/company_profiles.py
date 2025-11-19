@@ -755,8 +755,8 @@ def classify_exhibit_type(exhibit_num: str, description: str, char_count: int, i
     Classify exhibit based on item code and exhibit number.
 
     Uses SEC filing structure for deterministic classification:
-    - Item 2.02 (Results of Operations) + Exhibit 99.1/99.2 = earnings_release
-    - Everything else = press_release
+    - Heavy-duty items (1.01, 2.01, 2.02) + Exhibit 99.1/99.2 = comprehensive analysis
+    - Everything else = lightweight press release
 
     Args:
         exhibit_num: Exhibit number (e.g., "99.1", "99.2")
@@ -767,9 +767,15 @@ def classify_exhibit_type(exhibit_num: str, description: str, char_count: int, i
     Returns:
         "earnings_release" | "press_release"
     """
-    # Item 2.02 (Results of Operations) + Exhibit 99.1 or 99.2 = Earnings Release
-    if item_codes and '2.02' in item_codes and exhibit_num in ['99.1', '99.2']:
-        return 'earnings_release'
+    # Heavy-duty items that need comprehensive analysis:
+    # - 1.01: Material Agreement (major deals, debt, partnerships)
+    # - 2.01: Acquisition/Disposition (M&A transactions)
+    # - 2.02: Results of Operations (earnings releases)
+    heavy_duty_items = ['1.01', '2.01', '2.02']
+
+    if item_codes and exhibit_num in ['99.1', '99.2']:
+        if any(item in item_codes for item in heavy_duty_items):
+            return 'earnings_release'
 
     # All other 8-Ks = general press release
     return 'press_release'
@@ -805,7 +811,7 @@ def quick_parse_8k_header(sec_html_url: str, rate_limit_delay: float = 0.15) -> 
     try:
         headers = {
             'User-Agent': 'StockDigest/1.0 (stockdigest.research@gmail.com)',
-            'Range': 'bytes=0-3000'  # Only fetch first 3KB
+            'Range': 'bytes=0-15000'  # Fetch first 15KB to get past iXBRL overhead
         }
 
         response = requests.get(sec_html_url, headers=headers, timeout=10)

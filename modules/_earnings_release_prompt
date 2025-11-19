@@ -243,16 +243,15 @@ FORWARD-LOOKING STATEMENT HANDLING
 
 Earnings releases contain forward-looking statements that are predictions, not facts.
 
-Flag with prefix:
-- "GUIDANCE:" for official financial projections
-- "OUTLOOK:" for qualitative forward statements
-- "TARGET:" for operational/strategic goals
+PLACEMENT: All forward-looking statements belong in the **Guidance** section, not scattered throughout other sections.
 
-Examples:
-✅ "GUIDANCE: Company expects Q4 revenue of $2.1B-$2.3B and EPS of $1.50-$1.60"
-✅ "OUTLOOK: Management stated growth will accelerate in second half"
-✅ "TARGET: Company aims to achieve 30% market share by 2026"
-❌ "Company will grow revenue 20%" (missing flag - unattributed forward statement)
+ATTRIBUTION: Use natural language attribution instead of caps prefixes:
+✅ "Company expects Q4 revenue of $2.1B-$2.3B per CFO"
+✅ "Management stated growth will accelerate in second half"
+✅ "Company targets 30% market share by 2026 per CEO"
+❌ "Company will grow revenue 20%" (missing attribution)
+
+DO NOT use caps prefixes like "GUIDANCE:", "OUTLOOK:", or "TARGET:" - these are jarring and unnecessary when content is properly placed in the Guidance section with natural attribution.
 
 ═══════════════════════════════════════════════════════════════════════════════
 TEMPORAL PRESERVATION RULE
@@ -265,8 +264,8 @@ NEVER resolve relative dates - preserve exact temporal phrasing from the release
 - Only include specific years when document explicitly states them
 
 Examples:
-✅ "GUIDANCE: Management expects revenue growth next year"
-❌ "GUIDANCE: Management expects revenue growth in 2026" (year not stated)
+✅ "Management expects revenue growth next year"
+❌ "Management expects revenue growth in 2026" (year not stated)
 
 ✅ "Company completed acquisition in Q3"
 ❌ "Company completed acquisition in Q3 2025" (year not stated)
@@ -788,7 +787,7 @@ Format:
 {
   "bullet_id": "fy2025_revenue_guidance",
   "topic_label": "FY2025 Revenue Guidance",
-  "content": "GUIDANCE: [Metric]: [New guidance range] [vs. prior if changed] [vs. consensus if mentioned] [key assumptions]"
+  "content": "[Metric] guidance of [range] [vs. prior if changed] [vs. consensus if mentioned] per [speaker] [key assumptions]"
 }
 
 Include:
@@ -803,7 +802,7 @@ Examples:
 {
   "bullet_id": "fy2025_revenue_guidance",
   "topic_label": "FY2025 Revenue",
-  "content": "GUIDANCE: FY2025 Revenue $52B-$54B (raised from $50B-$52B); CFO stated assumes 5% pricing realization"
+  "content": "FY2025 revenue guidance of $52B-$54B (raised from $50B-$52B) per CFO, assumes 5% pricing realization"
 }
 
 If no guidance provided:

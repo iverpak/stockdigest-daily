@@ -12,6 +12,67 @@ The content will include:
 - Management commentary and quotes
 - Business updates and strategic initiatives
 - Company ticker and name
+- **Charts, graphs, and visual presentations** (when included):
+  - Trend lines and performance trajectories
+  - Segment/geographic breakdowns
+  - Year-over-year and quarter-over-quarter comparisons
+  - Operational metrics visualizations
+  - Data that may NOT be explicitly stated in text
+
+═══════════════════════════════════════════════════════════════════════════════
+VISUAL ELEMENT ANALYSIS - CHARTS, GRAPHS, AND IMAGES
+═══════════════════════════════════════════════════════════════════════════════
+
+Some earnings releases include visual elements (charts, graphs, infographics).
+When present, analyze these with the same rigor as text content.
+
+WHAT TO EXTRACT FROM VISUALS:
+
+1. **Data Points Not in Text**
+   - Specific values shown in bar heights, line points, pie segments
+   - Axis labels and data markers
+   - Annotations and callouts on charts
+
+2. **Trend Analysis**
+   - Direction: Improving, declining, flat, volatile
+   - Inflection points: When trends changed direction
+   - Rate of change: Accelerating, decelerating, steady
+   - Historical context: How current period compares visually to past
+
+3. **Breakdown Analysis**
+   - Segment contributions (which segments dominate visually)
+   - Geographic distribution
+   - Product line performance
+   - Customer class mix
+
+4. **Comparative Patterns**
+   - YoY/QoQ visual comparisons
+   - Actual vs target/guidance visualizations
+   - Company vs industry benchmarks if shown
+
+ATTRIBUTION FOR VISUAL DATA:
+
+When extracting from charts, use these attribution phrases:
+✅ "Per Q3 earnings chart, deliveries showed..."
+✅ "Visual breakdown indicates segment contribution of..."
+✅ "Chart shows trend reversal in Q2 with..."
+✅ "Per revenue breakdown chart, North America represents..."
+
+DO NOT use vague references:
+❌ "The chart shows..." (which chart?)
+❌ "Visually, it appears..." (too subjective)
+
+VISUAL DATA = EXPLICIT DATA:
+
+Charts and graphs ARE management statements - they deliberately chose what to visualize.
+Treat visual data with same authority as text data.
+
+- Number shown on chart axis → Include with "per [chart name]" attribution
+- Trend visible in line graph → Report direction with "per [chart name]"
+- Breakdown in pie/bar chart → Extract percentages with "per [chart name]"
+
+CRITICAL: Not all earnings releases contain images. Apply this section only when
+visual elements are present in the document.
 
 ═══════════════════════════════════════════════════════════════════════════════
 AUDIENCE & PURPOSE - INSTITUTIONAL INVESTMENT RESEARCH
@@ -710,6 +771,21 @@ Examples:
   "content": "Free Cash Flow: $2.1B in Q3, +18% YoY; YTD FCF $5.8B per earnings release"
 }
 
+SEGMENT PERFORMANCE FROM VISUALS (when charts present):
+
+When text provides totals but charts provide breakdowns:
+- Extract segment percentages from pie/bar charts
+- Note which segments are growing/declining based on visual comparison
+- Identify largest/smallest contributors from chart proportions
+- Capture margin trends by segment if shown visually
+
+Example:
+{
+  "bullet_id": "revenue_breakdown",
+  "topic_label": "Revenue Breakdown",
+  "content": "Revenue breakdown per earnings chart: Automotive 85% ($21.3B), Energy 8% ($2.0B), Services 7% ($1.8B); chart shows Energy segment growth visually outpacing Automotive"
+}
+
 CRITICAL: Only include metrics management explicitly disclosed. If management says "revenue in line with expectations" without figure, write:
 {
   "bullet_id": "revenue_disclosure",
@@ -745,6 +821,22 @@ If minimal operational discussion, synthesize from management statements:
   "bullet_id": "fleet_performance",
   "topic_label": "Fleet Performance",
   "content": "Fleet performance: Company noted 17 TWh generation with 1.8% forced outage factor per earnings release"
+}
+
+CHART-DERIVED METRICS (when visuals present):
+
+Many operational metrics appear ONLY in charts, not in text. Extract these:
+- Production volumes by quarter (often only in visual timelines)
+- Utilization trends (may only appear in line graphs)
+- Geographic breakdown percentages (often only in pie charts)
+- Sequential patterns (QoQ trends visible in bar comparisons)
+- Delivery/shipment trajectories showing acceleration or deceleration
+
+Example:
+{
+  "bullet_id": "delivery_trend",
+  "topic_label": "Delivery Trend",
+  "content": "Q3 deliveries 462K units per earnings chart; visual shows 3-quarter acceleration from Q1 435K → Q2 444K → Q3 462K"
 }
 
 NEVER skip this section. If truly no operational metrics, include at least 1-2 bullets synthesizing from financial context.
@@ -1179,6 +1271,12 @@ As you analyze the release, look for these patterns:
 
 6. **Offsetting Variables** - When metric stays flat/positive DESPITE negative factor
    Example: "CFO stated demand flat YoY despite cooler weather; management characterized as 'sign of underlying growth'"
+
+7. **Visual-Only Insights** - Data shown in charts but not stated in text (when visuals present)
+   Example: "Chart reveals delivery growth decelerating despite positive text tone - Q2→Q3 delta (+18K) smaller than Q1→Q2 delta (+25K)"
+
+8. **Text-Visual Discrepancies** - When charts tell different story than text (when visuals present)
+   Example: "CEO emphasized 'strong growth across all regions' but regional chart shows APAC flat YoY while Americas carries growth"
 
 ═══════════════════════════════════════════════════════════════════════════════
 BANNED LANGUAGE TRANSFORMATIONS

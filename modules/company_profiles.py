@@ -2126,10 +2126,65 @@ Analyze this earnings release PDF and extract all material information."""
                 generation_config=generation_config
             )
         else:
-            # Text-based processing
+            # Text-based processing with multimodal image support
             content_length = len(content) if content else 0
             LOG.info(f"Content length: {content_length:,} chars")
 
+            # Extract images from HTML content
+            from bs4 import BeautifulSoup
+            import requests
+
+            soup = BeautifulSoup(content, 'html.parser')
+            img_tags = soup.find_all('img')
+
+            # Download images and build multimodal parts
+            image_parts = []
+            if img_tags:
+                LOG.info(f"Found {len(img_tags)} images in HTML content")
+
+                for idx, img in enumerate(img_tags, 1):
+                    img_url = img.get('src', '')
+                    if not img_url or not img_url.startswith('http'):
+                        continue
+
+                    try:
+                        # Download image
+                        img_response = requests.get(
+                            img_url,
+                            headers={'User-Agent': 'StockDigest/1.0 (stockdigest.research@gmail.com)'},
+                            timeout=30
+                        )
+                        img_response.raise_for_status()
+
+                        img_bytes = img_response.content
+                        img_size = len(img_bytes)
+
+                        # Detect MIME type from URL or content-type header
+                        content_type = img_response.headers.get('content-type', 'image/jpeg')
+                        if 'png' in img_url.lower() or 'png' in content_type:
+                            mime_type = 'image/png'
+                        elif 'gif' in img_url.lower() or 'gif' in content_type:
+                            mime_type = 'image/gif'
+                        else:
+                            mime_type = 'image/jpeg'
+
+                        # Create inline_data part for Gemini
+                        image_parts.append({
+                            "inline_data": {
+                                "mime_type": mime_type,
+                                "data": base64.b64encode(img_bytes).decode('utf-8')
+                            }
+                        })
+
+                        LOG.info(f"   ✅ Downloaded image {idx}/{len(img_tags)}: {img_size:,} bytes ({mime_type})")
+
+                    except Exception as img_error:
+                        LOG.warning(f"   ⚠️ Failed to download image {idx}: {img_error}")
+                        continue
+
+                LOG.info(f"Successfully downloaded {len(image_parts)}/{len(img_tags)} images for multimodal processing")
+
+            # Build user content (text part)
             user_content = f"""Company: {company_name} ({ticker})
 Document Type: {source_context}
 Title: {document_title}
@@ -2140,13 +2195,22 @@ DOCUMENT CONTENT:
 {content[:400000]}
 """
 
-            # Combine prompt with content
-            full_prompt = f"{prompt_template}\n\n---\n\n{user_content}"
-
-            response = model.generate_content(
-                full_prompt,
-                generation_config=generation_config
-            )
+            # Build multimodal request
+            if image_parts:
+                # Multimodal: prompt + text + images
+                LOG.info(f"Sending multimodal request to Gemini ({len(image_parts)} images)")
+                parts = [prompt_template, user_content] + image_parts
+                response = model.generate_content(
+                    parts,
+                    generation_config=generation_config
+                )
+            else:
+                # Text only (no images found)
+                full_prompt = f"{prompt_template}\n\n---\n\n{user_content}"
+                response = model.generate_content(
+                    full_prompt,
+                    generation_config=generation_config
+                )
 
         end_time = datetime.now(timezone.utc)
         generation_time = int((end_time - start_time).total_seconds())

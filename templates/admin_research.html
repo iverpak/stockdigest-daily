@@ -1834,7 +1834,8 @@
                         type: docInfo.type === 'transcripts' ? 'transcript' :
                               docInfo.type === 'press_releases' ? 'press_release' :
                               docInfo.type === 'presentations' ? 'presentation' :
-                              docInfo.type === '8k_filings' ? '8k_filing' : docInfo.type,
+                              docInfo.type === '8k_filings' ? '8k_filing' :
+                              docInfo.type === 'parsed_prs' ? 'parsed_pr' : docInfo.type,
                         presentation_date: docInfo.presentation_date,
                         quarter: docInfo.quarter,
                         year: docInfo.year,

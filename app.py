@@ -25306,6 +25306,30 @@ async def email_research_api(request: Request):
                 content = doc['raw_content'] or doc['summary_text']
                 subject = f"📄 8-K Filing: {ticker} - Exhibit {doc['exhibit_number']}: {doc['exhibit_description']} ({doc['filing_date']})"
 
+            elif research_type == 'parsed_pr':
+                # Fetch from parsed_press_releases table by ID
+                doc_id = body.get('id')
+                if not doc_id:
+                    return {"status": "error", "message": "Document ID required for parsed PR"}
+
+                cur.execute("""
+                    SELECT id, ticker, company_name, source_type, document_date,
+                           document_title, parsed_summary, exhibit_number,
+                           ai_model, generation_time_seconds
+                    FROM parsed_press_releases
+                    WHERE id = %s AND ticker = %s
+                    LIMIT 1
+                """, (doc_id, ticker))
+
+                doc = cur.fetchone()
+                if not doc:
+                    return {"status": "error", "message": f"No parsed PR found for {ticker} with ID {doc_id}"}
+
+                content = doc['parsed_summary']
+                # Extract quarter/year from title if possible (e.g., "TLN - Q2 2025 Earnings Release")
+                title = doc['document_title'] or ''
+                subject = f"📊 Parsed Earnings: {ticker} - {title}"
+
         if not content:
             return {"status": "error", "message": "No content found"}
 
@@ -25400,6 +25424,35 @@ async def email_research_api(request: Request):
                 raw_content_html=content
             )
             # subject already set above
+
+        elif research_type == 'parsed_pr':
+            # Use transcript email template for parsed press releases
+            # Try to extract quarter/year from title (e.g., "Q2 2025")
+            import re
+            title = doc.get('document_title', '')
+            quarter_match = re.search(r'(Q[1-4])\s*(\d{4})', title)
+            quarter = quarter_match.group(1) if quarter_match else ''
+            year = quarter_match.group(2) if quarter_match else ''
+
+            email_data = generate_transcript_email(
+                ticker=ticker,
+                company_name=doc.get('company_name', company_name),
+                report_type='earnings_release',
+                quarter=quarter,
+                year=year,
+                summary_text=content,
+                ai_model=doc.get('ai_model', 'gemini-2.5-flash'),
+                generation_time=doc.get('generation_time_seconds', 0),
+                stock_price=stock_data.get('stock_price'),
+                daily_return_pct=stock_data.get('daily_return_pct'),
+                price_change_color=stock_data.get('price_change_color', '#666'),
+                ytd_return_pct=stock_data.get('ytd_return_pct'),
+                ytd_return_color=stock_data.get('ytd_return_color', '#666'),
+                market_status=stock_data.get('market_status', 'LAST CLOSE'),
+                return_label=stock_data.get('return_label', '1D')
+            )
+            html_body = email_data['html']
+            # Keep subject from data fetch (includes clean title)
 
         send_email(subject=subject, html_body=html_body, to=DIGEST_TO)
 

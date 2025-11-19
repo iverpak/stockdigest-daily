@@ -372,7 +372,7 @@
                     <option value="transcripts">Earnings Transcripts</option>
                     <option value="press_releases">Press Releases</option>
                     <option value="8k_filings">8-K Filings</option>
-                    <option value="parsed_prs">Parsed Press Releases</option>
+                    <option value="parsed_prs">Company Releases</option>
                 </select>
 
                 <!-- Search Box -->
@@ -1258,7 +1258,7 @@
                 'transcripts': 'transcript',
                 'press_releases': 'press release',
                 '8k_filings': '8-K filing',
-                'parsed_prs': 'parsed press release',
+                'parsed_prs': 'company release',
             };
             const typeLabel = typeLabels[currentResearchType] || 'document';
             document.getElementById('profiles-count').textContent = `Found ${profiles.length} ${typeLabel}${profiles.length !== 1 ? 's' : ''}`;
@@ -1277,7 +1277,7 @@
                     'presentations': 'No investor presentations analyzed yet.',
                     'transcripts': 'No earnings transcripts generated yet. Create one in the "Earnings Transcripts" tab!',
                     'press_releases': 'No press releases generated yet. Create one in the "Press Releases" tab!',
-                    'parsed_prs': 'No parsed press releases generated yet. New PRs and 8-Ks will be parsed automatically.',
+                    'parsed_prs': 'No company releases generated yet. New FMP press releases and 8-K filings will appear here automatically.',
                     '8k_filings': 'No 8-K filings loaded yet.',
                 };
                 const colspan = (currentResearchType === '10k' || currentResearchType === '10q') ? '6' : '7';

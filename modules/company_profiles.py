@@ -1883,14 +1883,14 @@ DOCUMENT CONTENT:
         return None
 
 
-def load_earnings_release_prompt() -> str:
-    """Load the earnings release prompt from file."""
+def load_8k_filing_prompt() -> str:
+    """Load the 8-K filing prompt from file."""
     try:
-        prompt_path = os.path.join(os.path.dirname(__file__), '_earnings_release_prompt')
+        prompt_path = os.path.join(os.path.dirname(__file__), '_8k_filing_prompt')
         with open(prompt_path, 'r', encoding='utf-8') as f:
             return f.read()
     except Exception as e:
-        LOG.error(f"Failed to load earnings release prompt: {e}")
+        LOG.error(f"Failed to load 8-K filing prompt: {e}")
         raise
 
 
@@ -2083,7 +2083,7 @@ def generate_earnings_release_with_gemini(
         genai.configure(api_key=gemini_api_key)
 
         # Load prompt
-        prompt_template = load_earnings_release_prompt()
+        prompt_template = load_8k_filing_prompt()
 
         # Build context header
         source_context = "Earnings Release (8-K)"
@@ -2553,3 +2553,248 @@ def delete_parsed_press_release(
     except Exception as e:
         LOG.error(f"❌ Failed to delete parsed PR id={parsed_pr_id}: {e}")
         return False
+# ==============================================================================
+# COMPANY RELEASE EMAIL SYSTEM (8-K + FMP Press Releases)
+# ==============================================================================
+# Separate from transcript workflow - handles Gemini JSON output from
+# _8k_filing_prompt and generates emails using same visual design as transcripts.
+# ==============================================================================
+
+import re
+from typing import Dict, List, Any
+from datetime import datetime
+import pytz
+from jinja2 import Template
+
+
+def parse_company_release_sections(json_output: dict) -> Dict[str, List[str]]:
+    """
+    Parse Gemini JSON output from _8k_filing_prompt into sections dict.
+
+    Input: Raw JSON from Gemini with structure:
+    {
+      "metadata": {
+        "report_title": "Q3 2025 Earnings Release",
+        "fiscal_quarter": "Q3",
+        "fiscal_year": "2025"
+      },
+      "sections": {
+        "bottom_line": {"content": "...", "word_count": 150},
+        "financial_results": [
+          {"bullet_id": "...", "topic_label": "...", "content": "..."}
+        ],
+        ...
+      }
+    }
+
+    Output: Dict compatible with email builder
+    {
+      "bottom_line": ["paragraph text"],
+      "financial_results": ["Topic Label: content", "Topic Label: content"],
+      "upside_scenario": ["paragraph text"],
+      ...
+    }
+    """
+    sections = {
+        "bottom_line": [],
+        "financial_results": [],
+        "operational_metrics": [],
+        "major_developments": [],
+        "guidance": [],
+        "strategic_initiatives": [],
+        "risk_factors": [],
+        "industry_competitive": [],
+        "capital_allocation": [],
+        "upside_scenario": [],
+        "downside_scenario": [],
+        "key_variables": []
+    }
+
+    if not json_output or 'sections' not in json_output:
+        return sections
+
+    json_sections = json_output['sections']
+
+    # Handle paragraph sections (bottom_line, upside/downside scenarios)
+    for section_key in ['bottom_line', 'upside_scenario', 'downside_scenario']:
+        if section_key in json_sections and json_sections[section_key]:
+            section_data = json_sections[section_key]
+            if isinstance(section_data, dict) and 'content' in section_data:
+                sections[section_key] = [section_data['content']]
+            elif isinstance(section_data, str):
+                sections[section_key] = [section_data]
+
+    # Handle bullet sections (all others)
+    bullet_sections = [
+        'financial_results', 'operational_metrics', 'major_developments',
+        'guidance', 'strategic_initiatives', 'risk_factors',
+        'industry_competitive', 'capital_allocation', 'key_variables'
+    ]
+
+    for section_key in bullet_sections:
+        if section_key in json_sections and json_sections[section_key]:
+            section_data = json_sections[section_key]
+            if isinstance(section_data, list):
+                for bullet in section_data:
+                    if isinstance(bullet, dict) and 'topic_label' in bullet and 'content' in bullet:
+                        # Format: "Topic Label: content"
+                        formatted_bullet = f"{bullet['topic_label']}: {bullet['content']}"
+                        sections[section_key].append(formatted_bullet)
+
+    return sections
+
+
+def build_company_release_html(sections: Dict[str, List[str]]) -> str:
+    """
+    Build HTML for company release sections.
+
+    - Uses regex to bold everything before `:` (like transcripts)
+    - Strips any markdown formatting
+    - Uses ## headers (no emojis)
+    - Hides empty sections
+    - Bullet vs paragraph logic
+
+    Similar structure to build_transcript_summary_html() but separate function.
+    """
+    import re
+
+    def strip_markdown_formatting(text: str) -> str:
+        """Strip markdown formatting (bold, italic) that AI sometimes adds"""
+        text = re.sub(r'\*\*([^*]+?)\*\*', r'\1', text)
+        text = re.sub(r'__([^_]+?)__', r'\1', text)
+        text = re.sub(r'\*([^*]+?)\*', r'\1', text)
+        text = re.sub(r'_([^_]+?)_', r'\1', text)
+        return text
+
+    def bold_bullet_labels(text: str) -> str:
+        """
+        Bold topic labels in format 'Topic Label: Details'
+        Regex pattern: Everything before first colon gets bolded
+        """
+        text = strip_markdown_formatting(text)
+        pattern = r'^([^:]{2,130}?:)(\s)'
+        replacement = r'<strong>\1</strong>\2'
+        return re.sub(pattern, replacement, text)
+
+    def build_section(title: str, bullets: List[str], use_bullets: bool = True) -> str:
+        """Helper to build a section with title and content"""
+        if not bullets:
+            return ""
+
+        html = f'<div style="margin-bottom: 24px;">\n'
+        html += f'  <h3 style="font-size: 15px; font-weight: 700; color: #1e40af; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 0.5px;">{title}</h3>\n'
+
+        if use_bullets:
+            html += '  <ul style="margin: 0; padding-left: 20px; color: #374151; font-size: 13px; line-height: 1.6;">\n'
+            for bullet in bullets:
+                # Apply label bolding
+                processed_bullet = bold_bullet_labels(bullet)
+                html += f'    <li style="margin-bottom: 6px;">{processed_bullet}</li>\n'
+            html += '  </ul>\n'
+        else:
+            # Paragraph format (for bottom_line, upside/downside)
+            content_filtered = [strip_markdown_formatting(line) for line in bullets if line.strip()]
+            content = '<br>'.join(content_filtered)
+            html += f'  <div style="color: #374151; font-size: 13px; line-height: 1.6;">{content}</div>\n'
+
+        html += '</div>\n'
+        return html
+
+    html = ""
+
+    # Render sections in fixed order (clean headers without emojis)
+    html += build_section("Bottom Line", sections.get("bottom_line", []), use_bullets=False)
+    html += build_section("Financial Results", sections.get("financial_results", []), use_bullets=True)
+    html += build_section("Operational Metrics", sections.get("operational_metrics", []), use_bullets=True)
+    html += build_section("Major Developments", sections.get("major_developments", []), use_bullets=True)
+    html += build_section("Guidance", sections.get("guidance", []), use_bullets=True)
+    html += build_section("Strategic Initiatives", sections.get("strategic_initiatives", []), use_bullets=True)
+    html += build_section("Risk Factors & Headwinds", sections.get("risk_factors", []), use_bullets=True)
+    html += build_section("Industry & Competitive Dynamics", sections.get("industry_competitive", []), use_bullets=True)
+    html += build_section("Capital Allocation", sections.get("capital_allocation", []), use_bullets=True)
+    html += build_section("Upside Scenario", sections.get("upside_scenario", []), use_bullets=False)
+    html += build_section("Downside Scenario", sections.get("downside_scenario", []), use_bullets=False)
+    html += build_section("Key Variables to Monitor", sections.get("key_variables", []), use_bullets=True)
+
+    return html
+
+
+def generate_company_release_email(
+    ticker: str,
+    company_name: str,
+    release_type: str,  # '8k' or 'fmp_press_release'
+    filing_date: str,   # 'Nov 19, 2024'
+    json_output: dict,  # Raw Gemini JSON
+    stock_price: str = None,
+    price_change_pct: str = None,
+    price_change_color: str = "#4ade80",
+    ytd_return_pct: str = None,
+    ytd_return_color: str = "#4ade80",
+    market_status: str = "LAST CLOSE",
+    return_label: str = "1D"
+) -> Dict[str, str]:
+    """
+    Generate company release email HTML.
+
+    Flow:
+    1. Parse JSON → sections dict
+    2. Build HTML from sections
+    3. Render template with report_type_label="COMPANY RELEASE"
+    4. Return {html, subject}
+
+    Returns:
+        {
+            "html": Full email HTML,
+            "subject": Email subject line
+        }
+    """
+    from jinja2 import Template
+    import os
+
+    LOG.info(f"Generating company release email for {ticker} ({release_type})")
+
+    # Parse sections from JSON
+    sections = parse_company_release_sections(json_output)
+
+    # Build summary HTML
+    summary_html = build_company_release_html(sections)
+
+    # Get report title from metadata
+    report_title = json_output.get('metadata', {}).get('report_title', 'Company Release')
+
+    # Load template
+    template_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'templates', 'email_research_report.html')
+    with open(template_path, 'r', encoding='utf-8') as f:
+        template_content = f.read()
+
+    research_template = Template(template_content)
+
+    # Configure labels
+    report_type_label = "COMPANY RELEASE"
+    date_label = f"Filing Date: {filing_date}"
+    filing_date_display = f"Filing Date: {filing_date}"
+
+    # Render template with variables
+    html = research_template.render(
+        report_title=f"{ticker} Research Summary",
+        report_type_label=report_type_label,
+        company_name=company_name,
+        ticker=ticker,
+        industry=None,  # Company releases don't include industry
+        fiscal_period=filing_date,
+        date_label=date_label,
+        filing_date=filing_date_display,
+        stock_price=stock_price,
+        price_change_pct=price_change_pct,
+        price_change_color=price_change_color,
+        ytd_return_pct=ytd_return_pct,
+        ytd_return_color=ytd_return_color,
+        market_status=market_status,
+        return_label=return_label,
+        content_html=summary_html
+    )
+
+    # Subject line with report title
+    subject = f"📄 {ticker} - {report_title} - {filing_date}"
+
+    return {"html": html, "subject": subject}

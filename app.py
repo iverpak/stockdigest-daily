@@ -15135,6 +15135,7 @@ def get_next_queued_job():
                 UPDATE ticker_processing_jobs
                 SET status = 'processing',
                     started_at = NOW(),
+                    timeout_at = NOW() + INTERVAL '45 minutes',
                     worker_id = %s,
                     last_updated = NOW()
                 WHERE job_id = (
@@ -17755,40 +17756,34 @@ def stop_job_worker():
         LOG.info("✅ Job worker stopped")
 
 def restart_worker_thread():
-    """Restart the worker thread (called by heartbeat monitor when worker is frozen)"""
-    global _job_worker_running, _job_worker_thread, _worker_restart_count
+    """Called when worker appears frozen - exit process for clean restart by Render"""
+    LOG.critical("💀 Worker frozen detected - requeuing jobs and exiting for Render restart")
+    LOG.critical("This ensures all threads are properly terminated and jobs can retry")
 
-    LOG.error("🔄 Worker thread appears frozen - attempting restart...")
-
-    # Stop the frozen worker
+    # Requeue all processing jobs so they can be retried after restart
     try:
-        _job_worker_running = False
-        if _job_worker_thread and _job_worker_thread.is_alive():
-            # Give it 5 seconds to gracefully stop
-            _job_worker_thread.join(timeout=5)
-            if _job_worker_thread.is_alive():
-                LOG.error("⚠️ Worker thread did not stop gracefully")
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE ticker_processing_jobs
+                SET status = 'queued',
+                    started_at = NULL,
+                    worker_id = NULL,
+                    progress = 0,
+                    error_message = COALESCE(error_message, '') || ' | Requeued: Worker frozen detected',
+                    last_updated = NOW()
+                WHERE status = 'processing'
+                RETURNING ticker
+            """)
+            requeued = [row['ticker'] for row in cur.fetchall()]
+            if requeued:
+                LOG.info(f"📋 Requeued {len(requeued)} jobs for retry after restart: {', '.join(requeued)}")
+            else:
+                LOG.info("📋 No processing jobs to requeue")
     except Exception as e:
-        LOG.error(f"Error stopping worker: {e}")
+        LOG.error(f"Failed to requeue jobs before exit: {e}")
 
-    # Increment restart counter
-    _worker_restart_count += 1
-
-    # If too many restarts, exit the process (let Render restart everything)
-    if _worker_restart_count >= 3:
-        LOG.critical(f"💀 Worker has been restarted {_worker_restart_count} times - exiting process!")
-        LOG.critical("Render will automatically restart the service with a clean slate")
-        os._exit(1)  # Force exit (bypasses cleanup, triggers Render restart)
-
-    # Restart the worker thread
-    try:
-        _job_worker_running = True
-        _job_worker_thread = threading.Thread(target=job_worker_loop, daemon=True, name=f"JobWorker-Restart-{_worker_restart_count}")
-        _job_worker_thread.start()
-        LOG.warning(f"✅ Worker thread restarted (attempt {_worker_restart_count}/3)")
-    except Exception as e:
-        LOG.error(f"Failed to restart worker thread: {e}")
-        os._exit(1)  # Can't restart worker - exit process
+    # Force exit - Render will restart the service with a clean slate
+    os._exit(1)
 
 def worker_heartbeat_monitor_loop():
     """Monitor worker health and restart if frozen"""
@@ -17844,30 +17839,77 @@ def worker_heartbeat_monitor_loop():
             time.sleep(60)  # Continue monitoring even if error
 
 def timeout_watchdog_loop():
-    """Monitor for timed-out jobs"""
-    LOG.info("⏰ Timeout watchdog started")
+    """Monitor for timed-out jobs and retry up to 3 times"""
+    LOG.info("⏰ Timeout watchdog started (with automatic retry)")
 
     while _job_worker_running:
         try:
             time.sleep(60)  # Check every minute
 
             with db() as conn, conn.cursor() as cur:
-                # Find jobs that exceeded timeout
+                # Find jobs that exceeded timeout and update based on retry count
+                # Jobs with retry_count < 3 get requeued, others fail permanently
                 cur.execute("""
                     UPDATE ticker_processing_jobs
-                    SET status = 'timeout',
-                        error_message = 'Job exceeded timeout limit',
-                        completed_at = NOW()
+                    SET
+                        status = CASE
+                            WHEN retry_count < 3 THEN 'queued'
+                            ELSE 'failed'
+                        END,
+                        retry_count = retry_count + 1,
+                        started_at = CASE WHEN retry_count < 3 THEN NULL ELSE started_at END,
+                        worker_id = CASE WHEN retry_count < 3 THEN NULL ELSE worker_id END,
+                        progress = CASE WHEN retry_count < 3 THEN 0 ELSE progress END,
+                        error_message = CASE
+                            WHEN retry_count < 3 THEN 'Timeout - retry ' || (retry_count + 1) || '/3'
+                            ELSE 'Failed after 3 timeout retries'
+                        END,
+                        completed_at = CASE
+                            WHEN retry_count >= 3 THEN NOW()
+                            ELSE NULL
+                        END,
+                        last_updated = NOW()
                     WHERE status = 'processing'
                     AND timeout_at < NOW()
-                    RETURNING job_id, ticker, worker_id
+                    RETURNING job_id, ticker, worker_id, retry_count,
+                              CASE WHEN retry_count <= 3 THEN 'queued' ELSE 'failed' END as new_status
                 """)
 
                 timed_out = cur.fetchall()
                 for job in timed_out:
-                    LOG.error(f"⏰ JOB TIMEOUT: {job['job_id']} (ticker: {job['ticker']}, worker: {job['worker_id']})")
+                    if job['new_status'] == 'queued':
+                        # Job will be retried
+                        LOG.error(f"⏰ [RETRY {job['retry_count']}/3] {job['ticker']} timed out - requeuing for retry (job_id: {job['job_id']})")
+                    else:
+                        # Job permanently failed
+                        LOG.error(f"❌ [FAILED] {job['ticker']} failed after 3 timeout retries - manual intervention required (job_id: {job['job_id']})")
 
-                    # Update batch counters
+                        # Only update batch failed counter for permanent failures
+                        cur.execute("""
+                            UPDATE ticker_processing_batches
+                            SET failed_jobs = failed_jobs + 1
+                            WHERE batch_id = (
+                                SELECT batch_id FROM ticker_processing_jobs WHERE job_id = %s
+                            )
+                        """, (job['job_id'],))
+
+                # Also check for queue timeouts (jobs stuck in queue past their timeout)
+                # This catches jobs that were never claimed (worker down, etc.)
+                cur.execute("""
+                    UPDATE ticker_processing_jobs
+                    SET status = 'failed',
+                        error_message = 'Queue timeout - job never claimed after 4 hours',
+                        completed_at = NOW()
+                    WHERE status = 'queued'
+                    AND timeout_at < NOW()
+                    RETURNING job_id, ticker
+                """)
+
+                queue_timed_out = cur.fetchall()
+                for job in queue_timed_out:
+                    LOG.error(f"❌ [QUEUE TIMEOUT] {job['ticker']} never claimed after 4 hours (job_id: {job['job_id']})")
+
+                    # Update batch failed counter
                     cur.execute("""
                         UPDATE ticker_processing_batches
                         SET failed_jobs = failed_jobs + 1
@@ -19379,9 +19421,10 @@ async def submit_job_batch(request: Request, body: JobSubmitRequest):
 
         batch_id = cur.fetchone()['batch_id']
 
-        # Create individual jobs with timeout
-        timeout_minutes = 45  # 45 minutes per ticker
-        timeout_at = datetime.now(timezone.utc) + timedelta(minutes=timeout_minutes)
+        # Create individual jobs with queue timeout (4 hours to wait in queue)
+        # Processing timeout (45 min) is set when job is claimed in get_next_queued_job()
+        queue_timeout_hours = 4
+        timeout_at = datetime.now(timezone.utc) + timedelta(hours=queue_timeout_hours)
 
         for ticker in body.tickers:
             cur.execute("""
@@ -27174,6 +27217,18 @@ def get_queue_status(token: str = Query(...)):
             """)
             active_jobs = cur.fetchall()
 
+            # Query 1b: Get job stats (expected = total today, failed_run = job failures)
+            cur.execute("""
+                SELECT
+                    COUNT(*) as expected,
+                    COUNT(*) FILTER (WHERE status = 'failed') as failed_run
+                FROM ticker_processing_jobs
+                WHERE created_at >= CURRENT_DATE
+            """)
+            job_stats = cur.fetchone()
+            expected_count = job_stats['expected'] or 0
+            failed_run_count = job_stats['failed_run'] or 0
+
             # Query 2: Get email queue (completed emails) - PRODUCTION ONLY
             cur.execute("""
                 SELECT ticker, company_name, recipients, email_subject,
@@ -27252,23 +27307,29 @@ def get_queue_status(token: str = Query(...)):
             ))
 
             # Calculate stats
+            # Note: failed_sent is email send failures from email_queue
+            # failed_run comes from ticker_processing_jobs (job failures after retries)
             stats = {
+                "expected": expected_count,
                 "processing": sum(1 for t in tickers_list if t['status'] == 'processing'),
+                "failed_run": failed_run_count,
                 "ready": sum(1 for t in tickers_list if t['status'] == 'ready'),
-                "failed": sum(1 for t in tickers_list if t['status'] == 'failed'),
+                "cancelled": sum(1 for t in tickers_list if t['status'] == 'cancelled'),
                 "sent": sum(1 for t in tickers_list if t['status'] == 'sent'),
-                "cancelled": sum(1 for t in tickers_list if t['status'] == 'cancelled')
+                "failed_sent": sum(1 for t in tickers_list if t['status'] == 'failed')
             }
 
             return {
                 "status": "success",
                 "tickers": tickers_list,
                 # Flatten stats for frontend (expects data.ready, not data.stats.ready)
+                "expected": stats["expected"],
                 "processing": stats["processing"],
+                "failed_run": stats["failed_run"],
                 "ready": stats["ready"],
-                "failed": stats["failed"],
+                "cancelled": stats["cancelled"],
                 "sent": stats["sent"],
-                "cancelled": stats["cancelled"]
+                "failed_sent": stats["failed_sent"]
             }
     except Exception as e:
         LOG.error(f"Failed to get queue status: {e}")
@@ -27369,7 +27430,8 @@ async def rerun_ticker_api(request: Request):
             batch_id = cur.fetchone()['batch_id']
 
             # Create single job
-            timeout_at = datetime.now(timezone.utc) + timedelta(minutes=45)
+            # Queue timeout (4 hours) - processing timeout (45 min) set when claimed
+            timeout_at = datetime.now(timezone.utc) + timedelta(hours=4)
             cur.execute("""
                 INSERT INTO ticker_processing_jobs (
                     batch_id, ticker, config, timeout_at
@@ -27998,7 +28060,9 @@ async def retry_failed_and_cancelled_api(request: Request):
             batch_id = cur.fetchone()['batch_id']
 
             # Create individual jobs with mode='daily' and recipients
-            timeout_at = datetime.now(timezone.utc) + timedelta(minutes=45)
+            # Queue timeout (4 hours) - processing timeout (45 min) set when claimed
+            # retry_count defaults to 0, giving fresh 3 attempts
+            timeout_at = datetime.now(timezone.utc) + timedelta(hours=4)
             for ticker in tickers_list:
                 cur.execute("""
                     INSERT INTO ticker_processing_jobs (
@@ -28098,7 +28162,8 @@ async def rerun_all_queue_api(request: Request):
             batch_id = cur.fetchone()['batch_id']
 
             # Create individual jobs with mode='daily' and recipients
-            timeout_at = datetime.now(timezone.utc) + timedelta(minutes=45)
+            # Queue timeout (4 hours) - processing timeout (45 min) set when claimed
+            timeout_at = datetime.now(timezone.utc) + timedelta(hours=4)
             for ticker in tickers_list:
                 cur.execute("""
                     INSERT INTO ticker_processing_jobs (
@@ -28264,7 +28329,8 @@ async def generate_user_reports_api(request: Request):
             batch_id = cur.fetchone()['batch_id']
 
             # Create individual jobs with mode='daily' and recipients
-            timeout_at = datetime.now(timezone.utc) + timedelta(minutes=45)
+            # Queue timeout (4 hours) - processing timeout (45 min) set when claimed
+            timeout_at = datetime.now(timezone.utc) + timedelta(hours=4)
             for ticker in tickers_list:
                 cur.execute("""
                     INSERT INTO ticker_processing_jobs (
@@ -28340,7 +28406,8 @@ async def generate_all_reports_api(request: Request):
             batch_id = cur.fetchone()['batch_id']
 
             # Create individual jobs with mode='daily' and recipients
-            timeout_at = datetime.now(timezone.utc) + timedelta(minutes=45)
+            # Queue timeout (4 hours) - processing timeout (45 min) set when claimed
+            timeout_at = datetime.now(timezone.utc) + timedelta(hours=4)
             for ticker in tickers_list:
                 cur.execute("""
                     INSERT INTO ticker_processing_jobs (
@@ -29265,7 +29332,8 @@ def process_daily_workflow():
             batch_id = cur.fetchone()['batch_id']
 
             # Create individual jobs with mode='daily' and recipients
-            timeout_at = datetime.now(timezone.utc) + timedelta(minutes=45)
+            # Queue timeout (4 hours) - processing timeout (45 min) set when claimed
+            timeout_at = datetime.now(timezone.utc) + timedelta(hours=4)
             for ticker in tickers_list:
                 cur.execute("""
                     INSERT INTO ticker_processing_jobs (

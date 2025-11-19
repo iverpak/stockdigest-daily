@@ -365,26 +365,34 @@
         </div>
 
         <!-- Stats -->
-        <div class="stats-grid">
+        <div class="stats-grid" style="grid-template-columns: repeat(7, 1fr);">
             <div class="stat-card">
-                <div class="stat-value success" id="ready-count">-</div>
-                <div class="stat-label">Ready to Send</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value danger" id="failed-count">-</div>
-                <div class="stat-label">Failed</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value cancelled" id="cancelled-count">-</div>
-                <div class="stat-label">Cancelled</div>
+                <div class="stat-value info" id="expected-count">-</div>
+                <div class="stat-label">Expected</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value warning" id="processing-count">-</div>
                 <div class="stat-label">Processing</div>
             </div>
             <div class="stat-card">
+                <div class="stat-value danger" id="failed-run-count">-</div>
+                <div class="stat-label">Failed Run</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value success" id="ready-count">-</div>
+                <div class="stat-label">Ready</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value cancelled" id="cancelled-count">-</div>
+                <div class="stat-label">Cancelled</div>
+            </div>
+            <div class="stat-card">
                 <div class="stat-value info" id="sent-count">-</div>
                 <div class="stat-label">Sent</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value danger" id="failed-sent-count">-</div>
+                <div class="stat-label">Failed Sent</div>
             </div>
         </div>
 
@@ -558,11 +566,13 @@
                 queueStats = data; // Store for button counts
 
                 // Update stats
-                document.getElementById('ready-count').textContent = data.ready || 0;
-                document.getElementById('failed-count').textContent = data.failed || 0;
-                document.getElementById('cancelled-count').textContent = data.cancelled || 0;
+                document.getElementById('expected-count').textContent = data.expected || 0;
                 document.getElementById('processing-count').textContent = data.processing || 0;
+                document.getElementById('failed-run-count').textContent = data.failed_run || 0;
+                document.getElementById('ready-count').textContent = data.ready || 0;
+                document.getElementById('cancelled-count').textContent = data.cancelled || 0;
                 document.getElementById('sent-count').textContent = data.sent || 0;
+                document.getElementById('failed-sent-count').textContent = data.failed_sent || 0;
 
                 // Update button counts
                 updateButtonCounts(data);
@@ -644,8 +654,8 @@
         }
 
         async function updateButtonCounts(data) {
-            const total = (data.ready || 0) + (data.processing || 0) + (data.failed || 0) + (data.cancelled || 0) + (data.sent || 0);
-            const failedAndCancelled = (data.failed || 0) + (data.cancelled || 0);
+            const total = (data.ready || 0) + (data.processing || 0) + (data.failed_run || 0) + (data.cancelled || 0) + (data.sent || 0) + (data.failed_sent || 0);
+            const failedAndCancelled = (data.failed_run || 0) + (data.cancelled || 0);
 
             // Static counts (calculated from queue status)
             document.getElementById('btn-rerun-all-count').textContent = total;
@@ -741,9 +751,9 @@
         }
 
         async function rerunAllQueue() {
-            const total = queueStats.ready + queueStats.processing + queueStats.failed + queueStats.cancelled + queueStats.sent;
+            const total = (queueStats.ready || 0) + (queueStats.processing || 0) + (queueStats.failed_run || 0) + (queueStats.cancelled || 0) + (queueStats.sent || 0) + (queueStats.failed_sent || 0);
 
-            if (!confirm(`🔄 Reprocess ALL ${total} Tickers from Scratch?\n\nAll statuses:\n• ${queueStats.ready} ready\n• ${queueStats.processing} processing\n• ${queueStats.failed} failed\n• ${queueStats.cancelled} cancelled\n• ${queueStats.sent} sent\n\nImpact:\n• Fresh emails generated with latest news\n• All existing emails replaced\n• Processing time: ~30-60 minutes\n\nContinue?`)) return;
+            if (!confirm(`🔄 Reprocess ALL ${total} Tickers from Scratch?\n\nAll statuses:\n• ${queueStats.ready || 0} ready\n• ${queueStats.processing || 0} processing\n• ${queueStats.failed_run || 0} failed run\n• ${queueStats.cancelled || 0} cancelled\n• ${queueStats.sent || 0} sent\n• ${queueStats.failed_sent || 0} failed sent\n\nImpact:\n• Fresh emails generated with latest news\n• All existing emails replaced\n• Processing time: ~30-60 minutes\n\nContinue?`)) return;
 
             try {
                 const response = await fetch('/api/rerun-all-queue', {
@@ -765,14 +775,14 @@
         }
 
         async function retryFailedAndCancelled() {
-            const failedAndCancelled = queueStats.failed + queueStats.cancelled;
+            const failedAndCancelled = (queueStats.failed_run || 0) + (queueStats.cancelled || 0);
 
             if (failedAndCancelled === 0) {
                 alert('✅ No failed or cancelled tickers to retry!');
                 return;
             }
 
-            if (!confirm(`🔄 Retry ${failedAndCancelled} Failed & Cancelled Tickers?\n\nTickers to reprocess:\n• ${queueStats.failed} failed\n• ${queueStats.cancelled} cancelled\n\nImpact:\n• Only non-ready tickers reprocessed\n• Ready tickers NOT affected\n• Processing time: ~15-30 minutes\n\nContinue?`)) return;
+            if (!confirm(`🔄 Retry ${failedAndCancelled} Failed & Cancelled Tickers?\n\nTickers to reprocess:\n• ${queueStats.failed_run || 0} failed run\n• ${queueStats.cancelled || 0} cancelled\n\nImpact:\n• Only non-ready tickers reprocessed\n• Ready tickers NOT affected\n• Processing time: ~15-30 minutes\n\nContinue?`)) return;
 
             try {
                 const response = await fetch('/api/retry-failed-and-cancelled', {
@@ -881,14 +891,14 @@
         }
 
         async function clearAllReports() {
-            const total = queueStats.ready + queueStats.processing + queueStats.failed + queueStats.cancelled + queueStats.sent;
+            const total = (queueStats.ready || 0) + (queueStats.processing || 0) + (queueStats.failed_run || 0) + (queueStats.cancelled || 0) + (queueStats.sent || 0) + (queueStats.failed_sent || 0);
 
             if (total === 0) {
                 alert('Queue is already empty.');
                 return;
             }
 
-            const deleteWord = prompt(`⚠️ DELETE All ${total} Queue Entries?\n\n⚠️ WARNING: This action CANNOT be undone!\n\nAll queue entries:\n• ${queueStats.ready} ready\n• ${queueStats.processing} processing\n• ${queueStats.failed} failed\n• ${queueStats.cancelled} cancelled\n• ${queueStats.sent} sent (history lost!)\n\nQueue will be completely empty.\nDoes NOT cancel running ticker jobs.\n\nType "DELETE" to confirm:`);
+            const deleteWord = prompt(`⚠️ DELETE All ${total} Queue Entries?\n\n⚠️ WARNING: This action CANNOT be undone!\n\nAll queue entries:\n• ${queueStats.ready || 0} ready\n• ${queueStats.processing || 0} processing\n• ${queueStats.failed_run || 0} failed run\n• ${queueStats.cancelled || 0} cancelled\n• ${queueStats.sent || 0} sent (history lost!)\n• ${queueStats.failed_sent || 0} failed sent\n\nQueue will be completely empty.\nDoes NOT cancel running ticker jobs.\n\nType "DELETE" to confirm:`);
 
             if (deleteWord !== 'DELETE') {
                 alert('Cancelled - you must type DELETE exactly');

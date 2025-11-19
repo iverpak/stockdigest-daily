@@ -138,18 +138,20 @@ python app.py alerts          # Hourly (9 AM - 10 PM EST) - Real-time article al
 ✅ Detailed email report for rapid error correction
 ✅ <10-15 second processing time (fast feedback loop)
 
-**Safety Systems:**
+**Safety Systems (UPDATED - Nov 2025):**
 - Startup recovery (requeues jobs stuck >3min at startup)
-- **Job queue reclaim thread** (NEW - Oct 2025): Continuous monitoring, requeues jobs with stale heartbeat >3min
+- **Two-phase timeout system**: 4-hour queue timeout, 45-min processing timeout (reset on claim)
+- **Automatic retry on timeout**: Jobs retry up to 3 times before permanent failure
+- **Freeze detection & recovery**: 5-min threshold, requeues jobs, exits for clean Render restart
+- **Job queue reclaim thread**: Continuous monitoring, requeues jobs with stale heartbeat >3min
 - Heartbeat monitoring (updates on every progress change via `last_updated` field)
 - Email watchdog thread (marks email queue jobs failed after 3min stale heartbeat)
-- Timeout watchdog thread (marks jobs timeout after 45min)
 - DRY_RUN mode (redirects all emails to admin for testing)
 
-**CRITICAL - Dead Worker Detection (Oct 2025):**
-The job queue reclaim thread prevents jobs from getting stuck forever during Render rolling deployments.
-When OLD worker is killed mid-job (SIGTERM), the reclaim thread detects stale `last_updated` timestamp
-and automatically requeues the job for retry. Runs every 60 seconds, 3-minute threshold.
+**CRITICAL - Timeout & Freeze Recovery (Nov 2025):**
+Jobs that timeout are automatically retried up to 3 times. If worker freezes (no activity for 5 min
+with queued jobs), system requeues all processing jobs and exits via `os._exit(1)` for clean Render
+restart. This prevents memory buildup from zombie threads and ensures all jobs complete.
 
 ## Project Architecture
 
@@ -1115,14 +1117,23 @@ PowerShell → /jobs/batch/{id} (<1s) → Real-time status (poll every 20s)
 - Does NOT trigger on individual ticker failures
 - Manual reset: `POST /jobs/circuit-breaker/reset`
 
-**3. Timeout Watchdog**
-- Separate thread that monitors jobs every 60 seconds
-- Marks jobs exceeding 45 minutes as timeout
-- Updates batch counters automatically
+**3. Two-Phase Timeout System** (UPDATED - Nov 2025)
+- **Queue Timeout (4 hours)**: Jobs can wait in queue up to 4 hours before being claimed
+- **Processing Timeout (45 minutes)**: Reset when job is claimed, gives 45 min to complete
+- Timeout watchdog monitors every 60 seconds
+- **Automatic retry on timeout**: Jobs retry up to 3 times before permanent failure
+- Queue timeout handling: Jobs stuck in queue > 4 hours are marked failed
 
-**4. Retry Logic**
-- Jobs can retry up to 2 times on transient failures
-- Retry count tracked per job
+**4. Freeze Detection & Recovery** (UPDATED - Nov 2025)
+- Heartbeat monitor checks every 60 seconds
+- **5-minute freeze threshold**: If no worker activity for 5 min with queued jobs → frozen
+- On freeze: Requeues all processing jobs, then `os._exit(1)` for clean Render restart
+- Prevents memory buildup from zombie threads
+
+**5. Retry Logic**
+- Jobs retry up to **3 times** on timeout before permanent failure
+- Retry count tracked per job in `retry_count` column
+- Logging: `[RETRY 1/3]`, `[RETRY 2/3]`, `[RETRY 3/3]`, `[FAILED]`
 
 ### Job Processing Flow
 
@@ -1149,9 +1160,10 @@ PowerShell → /jobs/batch/{id} (<1s) → Real-time status (poll every 20s)
 ✅ **Resume Capability** - PowerShell can disconnect/reconnect (state in DB)
 ✅ **Full Audit Trail** - Stacktraces, timestamps, worker_id, memory, duration
 ✅ **Real-Time Progress** - See exactly what phase each ticker is in
-✅ **Automatic Retries** - Up to 2 retries on transient failures
+✅ **Automatic Retries** - Up to 3 retries on timeout before permanent failure
 ✅ **Circuit Breaker** - Detects system failures, prevents cascading errors
-✅ **Timeout Protection** - Jobs auto-killed after 45 minutes
+✅ **Two-Phase Timeout** - 4-hour queue timeout, 45-min processing timeout (reset on claim)
+✅ **Freeze Recovery** - Auto-detects frozen workers, requeues jobs, exits for clean restart
 
 ### Usage Example
 

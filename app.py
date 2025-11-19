@@ -25441,7 +25441,7 @@ async def email_research_api(request: Request):
                 year=year,
                 summary_text=content,
                 stock_price=stock_data.get('stock_price'),
-                price_change_pct=stock_data.get('daily_return_pct'),
+                price_change_pct=stock_data.get('price_change_pct'),
                 price_change_color=stock_data.get('price_change_color', '#666'),
                 ytd_return_pct=stock_data.get('ytd_return_pct'),
                 ytd_return_color=stock_data.get('ytd_return_color', '#666'),

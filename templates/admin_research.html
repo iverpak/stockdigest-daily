@@ -1836,6 +1836,7 @@
                               docInfo.type === 'presentations' ? 'presentation' :
                               docInfo.type === '8k_filings' ? '8k_filing' :
                               docInfo.type === 'parsed_prs' ? 'parsed_pr' : docInfo.type,
+                        id: docInfo.id,                     // Include for parsed_prs (direct ID lookup)
                         presentation_date: docInfo.presentation_date,
                         quarter: docInfo.quarter,
                         year: docInfo.year,

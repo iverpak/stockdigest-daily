@@ -174,6 +174,19 @@
             justify-content: center;
         }
 
+        .section-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            margin-bottom: 24px;
+        }
+
+        @media (max-width: 900px) {
+            .section-row {
+                grid-template-columns: 1fr;
+            }
+        }
+
         .btn {
             padding: 12px 20px;
             border: none;
@@ -362,38 +375,62 @@
     </div>
 
     <div class="container">
-        <!-- Job Queue Section -->
-        <div class="section-card">
-            <div class="section-header">📋 Job Queue</div>
-            <div class="section-content">
-                <div class="section-stats">
-                    <div class="mini-stat">
-                        <div class="mini-stat-value info" id="expected-count">-</div>
-                        <div class="mini-stat-label">Expected</div>
+        <!-- Row 1: Job Queue + System Health side-by-side -->
+        <div class="section-row">
+            <!-- Job Queue Section -->
+            <div class="section-card" style="margin-bottom: 0;">
+                <div class="section-header">📋 Job Queue</div>
+                <div class="section-content">
+                    <div class="section-stats">
+                        <div class="mini-stat">
+                            <div class="mini-stat-value info" id="expected-count">-</div>
+                            <div class="mini-stat-label">Expected</div>
+                        </div>
+                        <div class="mini-stat">
+                            <div class="mini-stat-value warning" id="processing-count">-</div>
+                            <div class="mini-stat-label">Processing</div>
+                        </div>
+                        <div class="mini-stat">
+                            <div class="mini-stat-value danger" id="failed-run-count">-</div>
+                            <div class="mini-stat-label">Failed</div>
+                        </div>
+                        <div class="mini-stat">
+                            <div class="mini-stat-value success" id="completed-count">-</div>
+                            <div class="mini-stat-label">Completed</div>
+                        </div>
                     </div>
-                    <div class="mini-stat">
-                        <div class="mini-stat-value warning" id="processing-count">-</div>
-                        <div class="mini-stat-label">Processing</div>
-                    </div>
-                    <div class="mini-stat">
-                        <div class="mini-stat-value danger" id="failed-run-count">-</div>
-                        <div class="mini-stat-label">Failed</div>
-                    </div>
-                    <div class="mini-stat">
-                        <div class="mini-stat-value success" id="completed-count">-</div>
-                        <div class="mini-stat-label">Completed</div>
+                    <div class="section-buttons">
+                        <button class="btn btn-primary" onclick="generateAllReports()">📊 Generate All</button>
+                        <button class="btn btn-warning" onclick="cancelInProgressRuns()">🚫 Cancel</button>
+                        <button class="btn btn-primary" onclick="retryFailedJobs()">🔄 Retry Failed</button>
+                        <button class="btn btn-secondary" onclick="clearJobQueue()">🗑️ Clear</button>
                     </div>
                 </div>
-                <div class="section-buttons">
-                    <button class="btn btn-primary" onclick="generateAllReports()">📊 Generate All Reports</button>
-                    <button class="btn btn-warning" onclick="cancelInProgressRuns()">🚫 Cancel In Progress</button>
-                    <button class="btn btn-primary" onclick="retryFailedJobs()">🔄 Retry Failed</button>
-                    <button class="btn btn-secondary" onclick="clearJobQueue()">🗑️ Clear Job Queue</button>
+            </div>
+
+            <!-- System Health Section -->
+            <div class="section-card" style="margin-bottom: 0;">
+                <div class="section-header">⚙️ System Health</div>
+                <div class="section-content">
+                    <div class="section-stats">
+                        <div class="mini-stat">
+                            <div class="mini-stat-value" id="metric-worker-status">-</div>
+                            <div class="mini-stat-label">Worker</div>
+                        </div>
+                        <div class="mini-stat">
+                            <div class="mini-stat-value" id="metric-last-activity">-</div>
+                            <div class="mini-stat-label">Activity</div>
+                        </div>
+                    </div>
+                    <div class="section-buttons">
+                        <button class="btn btn-warning" onclick="restartWorker()">🔄 Restart Worker</button>
+                        <button class="btn btn-danger" onclick="restartServer()">🚀 Force Restart</button>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <!-- Email Queue Section -->
+        <!-- Row 2: Email Queue (full width) -->
         <div class="section-card">
             <div class="section-header">📧 Email Queue</div>
             <div class="section-content">
@@ -422,35 +459,6 @@
                     <button class="btn btn-secondary" onclick="clearEmailQueue()">🗑️ Clear Email Queue</button>
                     <button class="btn btn-primary" onclick="regenAllEmails()">♻️ Regen All Emails</button>
                     <button class="btn btn-info" onclick="bulkReviewQuality()">🔍 Review All</button>
-                </div>
-            </div>
-        </div>
-
-        <!-- System Health & Controls Section -->
-        <div class="section-card">
-            <div class="section-header">⚙️ System Health & Controls</div>
-            <div class="section-content">
-                <div class="section-stats">
-                    <div class="mini-stat">
-                        <div class="mini-stat-value" id="metric-worker-status">-</div>
-                        <div class="mini-stat-label">Worker</div>
-                    </div>
-                    <div class="mini-stat">
-                        <div class="mini-stat-value" id="metric-memory">-</div>
-                        <div class="mini-stat-label">Memory</div>
-                    </div>
-                    <div class="mini-stat">
-                        <div class="mini-stat-value" id="metric-last-activity">-</div>
-                        <div class="mini-stat-label">Activity</div>
-                    </div>
-                    <div class="mini-stat">
-                        <div class="mini-stat-value" id="metric-restarts">-</div>
-                        <div class="mini-stat-label">Restarts</div>
-                    </div>
-                </div>
-                <div class="section-buttons">
-                    <button class="btn btn-warning" onclick="restartWorker()">🔄 Restart Worker</button>
-                    <button class="btn btn-danger" onclick="restartServer()">🚀 Force Server Restart</button>
                 </div>
             </div>
         </div>
@@ -547,14 +555,6 @@
                 document.getElementById('metric-worker-status').textContent = workerStatus;
                 document.getElementById('metric-worker-status').style.color = workerColor;
 
-                // Memory usage
-                const memoryMB = data.system.memory_mb ? `${Math.round(data.system.memory_mb)} MB` : 'N/A';
-                document.getElementById('metric-memory').textContent = memoryMB;
-
-                // Active jobs
-                const activeJobs = data.jobs.active || 0;
-                document.getElementById('metric-active-jobs').textContent = activeJobs;
-
                 // Last activity (from heartbeat monitor)
                 let lastActivity = 'None';
                 if (data.heartbeat_monitor && data.heartbeat_monitor.last_activity) {
@@ -563,16 +563,9 @@
                     const minutesAgo = Math.round((now - lastTime) / 60000);
                     lastActivity = minutesAgo < 1 ? 'Just now' : `${minutesAgo}min ago`;
                 } else if (data.jobs.recent_completions_10min > 0) {
-                    lastActivity = `${data.jobs.recent_completions_10min} in last 10min`;
+                    lastActivity = `${data.jobs.recent_completions_10min} in 10min`;
                 }
                 document.getElementById('metric-last-activity').textContent = lastActivity;
-
-                // Worker restarts
-                const restarts = data.heartbeat_monitor ? data.heartbeat_monitor.restart_count : 0;
-                const restartsText = restarts > 0 ? `⚠️ ${restarts}` : restarts;
-                const restartsColor = restarts > 0 ? '#f59e0b' : '#10b981';
-                document.getElementById('metric-restarts').textContent = restartsText;
-                document.getElementById('metric-restarts').style.color = restartsColor;
 
             } catch (error) {
                 console.error('Failed to fetch metrics:', error);

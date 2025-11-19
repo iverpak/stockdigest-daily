@@ -16774,9 +16774,9 @@ async def process_8k_summary_phase(job: dict):
                                 # Send email
                                 email_subject = f"📊 Parsed Earnings: {ticker} - {report_title or f'Ex {exhibit_num}'}"
                                 send_email(
-                                    to_email=ADMIN_EMAIL,
                                     subject=email_subject,
-                                    html_content=email_html
+                                    html_body=email_html,
+                                    to=ADMIN_EMAIL
                                 )
                                 LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Parsed earnings email sent")
 

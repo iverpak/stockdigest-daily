@@ -2397,9 +2397,14 @@ def parse_company_release_sections(json_output: dict) -> Dict[str, List[str]]:
         if section_key in json_sections and json_sections[section_key]:
             section_data = json_sections[section_key]
             if isinstance(section_data, dict) and 'content' in section_data:
-                sections[section_key] = [section_data['content']]
+                content = section_data['content']
+                # Only add if content is not empty/whitespace
+                if content and content.strip():
+                    sections[section_key] = [content]
             elif isinstance(section_data, str):
-                sections[section_key] = [section_data]
+                # Only add if string is not empty/whitespace
+                if section_data and section_data.strip():
+                    sections[section_key] = [section_data]
 
     # Handle bullet sections (all others)
     bullet_sections = [

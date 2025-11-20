@@ -19070,8 +19070,9 @@ async def validate_ticker_for_8k(ticker: str):
                 "error": str(e)
             }
 
-        # Fetch last 10 8-K filings from SEC Edgar
-        filings = parse_sec_8k_filing_list(cik, count=10)
+        # Fetch last 3 8-K filings from SEC Edgar (conservative during early-break testing)
+        # TODO: Increase back to 10 once time-based early break confirmed working in production
+        filings = parse_sec_8k_filing_list(cik, count=3)
 
         if not filings:
             return {

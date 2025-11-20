@@ -625,6 +625,11 @@
                         `;
                     }
 
+                    // Build report_type badge
+                    const reportType = ticker.report_type || 'daily';
+                    const reportBadgeClass = reportType === 'weekly' ? 'status-sent' : 'status-processing';
+                    const reportLabel = reportType === 'weekly' ? 'WEEKLY' : 'DAILY';
+
                     return `
                         <div class="ticker-card">
                             <div class="ticker-header">
@@ -632,7 +637,10 @@
                                     <h3>${ticker.ticker} - ${ticker.company_name || 'Unknown Company'}</h3>
                                     <p>${recipientCount} recipients ${ticker.source === 'job_queue' ? '• <span style="color: #1e40af;">LIVE PROCESSING</span>' : ''}</p>
                                 </div>
-                                <span class="status-badge status-${ticker.status}">${ticker.status}</span>
+                                <div style="display: flex; gap: 8px; align-items: center;">
+                                    <span class="status-badge ${reportBadgeClass}">${reportLabel}</span>
+                                    <span class="status-badge status-${ticker.status}">${ticker.status}</span>
+                                </div>
                             </div>
                             ${progressBarHTML}
                             <div class="ticker-meta">

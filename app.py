@@ -27795,7 +27795,7 @@ def get_queue_status(token: str = Query(...)):
             cur.execute("""
                 SELECT ticker, company_name, recipients, email_subject,
                        article_count, status, error_message, heartbeat,
-                       created_at, updated_at, sent_at
+                       created_at, updated_at, sent_at, report_type
                 FROM email_queue
                 WHERE is_production = TRUE
                 ORDER BY
@@ -27827,6 +27827,7 @@ def get_queue_status(token: str = Query(...)):
                     "created_at": row.get('created_at'),
                     "updated_at": row.get('updated_at'),
                     "sent_at": row.get('sent_at'),
+                    "report_type": row.get('report_type', 'daily'),  # NEW: Add report_type
                     "source": "email_queue",
                     "progress": None,  # Email queue doesn't have progress
                     "phase": None

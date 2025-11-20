@@ -26574,6 +26574,8 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
     - 10-K/10-Q/Transcript: Compare LATEST from FMP vs LATEST from DB
     - Press Releases: Check last 4 from FMP, process if not in DB
     """
+    from datetime import datetime
+
     new_items = {
         "ticker": ticker,
         "10k": 0,
@@ -26926,7 +26928,21 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
 
         # === 8-K SEC FILINGS CHECK ===
         try:
-            sec_8k_response = await validate_ticker_for_research(ticker=ticker, type="8k")
+            # Fetch 8-Ks directly from SEC Edgar (not through validate_ticker_for_research)
+            from modules.company_profiles import get_cik_for_ticker, parse_sec_8k_filing_list
+
+            try:
+                cik = get_cik_for_ticker(ticker)
+                filings = parse_sec_8k_filing_list(cik, count=3)
+                sec_8k_response = {
+                    "valid": True if filings else False,
+                    "cik": cik,
+                    "available_8ks": filings
+                }
+            except ValueError as e:
+                LOG.warning(f"[{ticker}] Could not fetch 8-Ks from SEC Edgar: {e}")
+                sec_8k_response = {"valid": False}
+
             if sec_8k_response.get("valid"):
                 available_8ks = sec_8k_response.get("available_8ks", [])
 
@@ -26948,7 +26964,7 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                         filing_date = latest_8k.get('filing_date')
                         filing_title = latest_8k.get('filing_title')
                         item_codes = latest_8k.get('item_codes')
-                        sec_html_url = latest_8k.get('sec_html_url')
+                        documents_url = latest_8k.get('documents_url')
 
                         if accession_number and filing_date:
                             # Check if already exists (safety check)
@@ -26965,7 +26981,7 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                                     "filing_date": filing_date,
                                     "filing_title": filing_title,
                                     "item_codes": item_codes,
-                                    "sec_html_url": sec_html_url,
+                                    "documents_url": documents_url,
                                     "send_email": False  # Silent initialization
                                 }
 
@@ -27012,7 +27028,7 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                                 filing_date_str = filing.get('filing_date')
                                 filing_title = filing.get('filing_title')
                                 item_codes = filing.get('item_codes')
-                                sec_html_url = filing.get('sec_html_url')
+                                documents_url = filing.get('documents_url')
 
                                 if accession_number and filing_date_str:
                                     # Parse SEC filing date (format: "Jan 30, 2025" or "2025-01-30")
@@ -27052,7 +27068,7 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                                             "filing_date": filing_date_str,
                                             "filing_title": filing_title,
                                             "item_codes": item_codes,
-                                            "sec_html_url": sec_html_url,
+                                            "documents_url": documents_url,
                                             "send_email": True  # Send email for new 8-Ks
                                         }
 

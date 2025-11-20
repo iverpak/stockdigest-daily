@@ -870,18 +870,18 @@ def generate_bullet_centric_review_email_html(
 
         # Build lookups for Phase 4 data by bullet_id
         p4_metadata_issues_by_id = {}
-        for bullet_issue in phase4_result.get("metadata_verification", {}).get("bullets_with_issues", []):
+        for bullet_issue in (phase4_result.get("metadata_verification") or {}).get("bullets_with_issues", []):
             bid = bullet_issue.get("bullet_id")
             if bid:
                 p4_metadata_issues_by_id[bid] = bullet_issue
 
         p4_placement_issues_by_id = {}
-        for placement in phase4_result.get("section_placement", {}).get("misplaced_bullets", []):
+        for placement in (phase4_result.get("section_placement") or {}).get("misplaced_bullets", []):
             bid = placement.get("bullet_id")
             if bid:
                 p4_placement_issues_by_id[bid] = placement
 
-        p4_duplicate_themes = phase4_result.get("section_placement", {}).get("duplicate_themes", [])
+        p4_duplicate_themes = (phase4_result.get("section_placement") or {}).get("duplicate_themes", [])
     else:
         p4_metadata_issues_by_id = {}
         p4_placement_issues_by_id = {}

@@ -26933,7 +26933,8 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                 # Detect first check: Does this ticker have ANY 8-K filings in DB?
                 from modules.company_releases import (
                     db_has_any_8k_for_ticker,
-                    db_check_8k_filing_exists
+                    db_check_8k_filing_exists,
+                    db_get_latest_8k_filing_date
                 )
                 is_first_check = not db_has_any_8k_for_ticker(ticker)
 

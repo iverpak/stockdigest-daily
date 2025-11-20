@@ -1912,6 +1912,7 @@ def ensure_schema():
                     -- AI-generated content
                     summary_json JSONB NOT NULL,  -- Full Gemini JSON output
                     summary_html TEXT,  -- Pre-rendered HTML for display
+                    summary_markdown TEXT,  -- Markdown text for article integration
 
                     -- AI metadata
                     ai_provider VARCHAR(20) NOT NULL DEFAULT 'gemini',
@@ -1958,6 +1959,12 @@ def ensure_schema():
 
                 DO $$ BEGIN
                     ALTER TABLE company_releases ADD COLUMN item_codes VARCHAR(100);
+                EXCEPTION
+                    WHEN duplicate_column THEN NULL;
+                END $$;
+
+                DO $$ BEGIN
+                    ALTER TABLE company_releases ADD COLUMN summary_markdown TEXT;
                 EXCEPTION
                     WHEN duplicate_column THEN NULL;
                 END $$;
@@ -7134,7 +7141,7 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
 
     # 2.5 OFFICIAL BADGE: For company releases (NEW - Nov 2025)
     if article.get("is_company_release"):
-        header_badges.append('<span class="official-badge">🏛️ OFFICIAL</span>')
+        header_badges.append('<span class="official-badge">🏛️ Official</span>')
 
     # 3. STATUS BADGES - Mutually exclusive statuses based on ai_model and processing state
     ai_model = article.get('ai_model') or ''
@@ -12841,7 +12848,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
 
                     # 3. OFFICIAL badge for company releases (NEW - Nov 2025)
                     if article.get("is_company_release"):
-                        header_badges.append('<span class="official-badge">🏛️ OFFICIAL</span>')
+                        header_badges.append('<span class="official-badge">🏛️ Official</span>')
 
                     # 4. Quality badge
                     if enhanced_article["is_quality_domain"]:

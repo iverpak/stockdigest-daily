@@ -410,96 +410,38 @@ Each bullet in sections (financial_results, operational_metrics, major_developme
    ❌ "Could impact margins" (who concluded this?)
 
 ═══════════════════════════════════════════════════════════════════════════════
-ATTRIBUTION REQUIREMENTS - APPLIES TO ALL SECTIONS
+ATTRIBUTION RULES
 ═══════════════════════════════════════════════════════════════════════════════
 
-CORE PRINCIPLE: Every claim must be traceable to management. Every implication must be attributed to who said it.
+**DEFAULT: NO ATTRIBUTION**
 
-ATTRIBUTION HIERARCHY (use strongest available):
-1. Named executive + title: "per CEO John Smith", "per CFO", "CEO stated"
-2. Executive without name: "per CEO", "CFO noted"
-3. Company/management: "Company announced", "Management reported", "per company"
-4. Document-level (SPARINGLY): Only for synthesis or complex facts
-5. NEVER: "reportedly", "sources say", "per reports"
+This processes ONE company document (8-K exhibit, earnings release, or press release).
+Do NOT add attribution to bullets unless there is a direct executive quote.
 
-DOCUMENT-LEVEL ATTRIBUTION:
-- Use "per [document type]" ONLY when synthesizing multiple facts or adding context
-- Financial metrics in Financial Results section: NO attribution needed (implied source)
-- Simple factual statements: NO attribution needed (it's a company document)
+**ONLY attribute when:**
 
-Examples by document type:
-- Earnings release: "per earnings release" (when synthesizing: "Revenue $10B beat internal target $9.8B per earnings release")
-- 8-K filing: "per 8-K filing" OR "per company" (when needed)
-- Press release: "per press release" OR "Company announced" (when needed)
-- General: Often NO attribution needed (implied)
+1. **Direct executive quote** (use actual name/title if available):
+   - "per CEO John Smith" or "CEO stated" or "CFO noted"
+   - Example: ✓ "CEO Mac McFarland noted the company is executing its Flywheel strategy"
 
-FORWARD-LOOKING STATEMENTS & IMPLICATIONS:
-Attribute interpretation/causation to who made it:
-❌ "Acquisition positions company for growth" (who says?)
-✅ "CEO stated acquisition positions company for growth"
-❌ "Could impact margins" (who concluded?)
-✅ "CFO projected margin impact of 200-300 bps"
+2. **Specific table citation** (RARE - use sparingly):
+   - Only when the table name adds meaningful precision
+   - Example: "per the condensed consolidated statements of operations"
+   - Target: Use in <10% of bullets
 
-BANNED CAUSATION WORDS (without attribution):
-✗ "amid", "following", "driven by", "due to", "supporting", "positioning"
+**DO NOT attribute in these sections:**
+- Financial Results: ✗ "per the earnings release"
+- Guidance: ✗ "per the earnings release"
+- Operational Metrics: ✗ "per the operating results table"
+- Major Developments: ✗ "per the earnings release"
+- Upside/Downside: ✗ "per the earnings release"
 
-Examples:
-❌ "Margins compressed amid tariff increases"
-✅ "Margins compressed to 5.8% per Q3 results; CFO cited tariff impact $400M per earnings release"
+**Target: 80-90% of bullets should have ZERO attribution.**
 
-ATTRIBUTION DENSITY:
-- Bottom Line: 100% (every claim attributed - vary attribution types)
-- Bullets: Attribute opinions/interpretations; financial metrics often implied
-- Upside/Downside: 100% (every sentence attributed - these are forward-looking)
-
-INTERPRETATION:
-- "Every claim attributed" means TRACEABLE to source (company document, speaker, or management)
-- Does NOT mean adding "per [document]" to every bullet
-- Financial Results metrics: Source is implied (the document itself)
-- Opinions/forward-looking: Always attribute to specific speaker when available
-
-ATTRIBUTION SPECIFICITY:
-✓ "per CFO", "CEO stated", "Company announced", "Management reported"
-✓ "per earnings release" (when synthesizing facts)
-✗ "per company" alone (too vague - use "Company announced" or omit)
-
-PRE-SUBMISSION CHECK:
-□ Every claim has source
-□ Every implication attributed to who said it
-□ No vague attribution ("reportedly")
-□ Section density requirements met (100% Bottom Line and Upside/Downside)
-□ If you cannot verify source for a claim → Remove the claim
-
-═══════════════════════════════════════════════════════════════════════════════
-WHEN ATTRIBUTION IS NOT NEEDED
-═══════════════════════════════════════════════════════════════════════════════
-
-Many documents contain factual disclosures where attribution is IMPLIED (it's a company document).
-
-DO NOT force attribution in these cases:
-
-1. FINANCIAL RESULTS section - Metrics are self-evident:
-   ✓ "Q3 Revenue: Revenue $376M, +4% YoY, $6M above guidance"
-   ✗ "Q3 Revenue: Revenue $376M, +4% YoY per earnings release" (redundant)
-
-2. Simple factual statements:
-   ✓ "Completed acquisition of Company X for $500M"
-   ✗ "Completed acquisition of Company X for $500M per press release" (obvious)
-
-3. Straightforward announcements:
-   ✓ "Declared quarterly dividend of $0.50 per share"
-   ✗ "Declared dividend per 8-K filing" (unnecessary)
-
-WHEN TO ADD ATTRIBUTION:
-
-✓ Executive quotes: "CEO stated acquisition accelerates cloud strategy"
-✓ Synthesis of multiple facts: "Revenue $10B beat internal target $9.8B per management"
-✓ Forward-looking statements: "Company expects Q4 revenue $2.1B-$2.3B per CFO"
-✓ Management interpretation: "CFO attributed margin decline to tariff impact"
-✓ Complex context: "Management noted competitor pricing $29K/unit vs company $56K/unit per earnings call"
-
-RULE: Attribution is for TRACEABILITY of opinions, interpretations, and forward-looking statements.
-Not for basic facts contained in the document itself.
+**Pre-submission check:**
+□ Did I add "per the earnings release" to every bullet? → REMOVE IT
+□ Are executive quotes properly attributed? → KEEP THOSE
+□ Did I cite tables unnecessarily? → REMOVE IT
 
 ═══════════════════════════════════════════════════════════════════════════════
 THREE-TIER INFERENCE FRAMEWORK

@@ -1409,13 +1409,53 @@ def with_deadlock_retry(max_retries=100):
     return decorator
 
 def ensure_schema():
-    """FRESH DATABASE - Complete schema creation for new architecture"""
+    """
+    FRESH DATABASE - Complete schema creation for new architecture.
+
+    Uses PostgreSQL advisory lock to prevent concurrent initialization.
+    Only ONE process can run schema init at a time.
+
+    Scenarios handled:
+    1. Fresh database: Creates full schema
+    2. Existing database: Runs idempotent DDL (IF NOT EXISTS)
+    3. Concurrent startups (rolling deploy): Second instance skips
+    4. Schema evolution: ALTER TABLE IF NOT EXISTS handles new columns
+    """
+    SCHEMA_LOCK_ID = 123456  # Arbitrary unique ID for advisory lock
+
     LOG.info("🔄 Creating complete database schema for NEW ARCHITECTURE")
 
     with db() as conn:
         with conn.cursor() as cur:
-            cur.execute("""
-                -- Articles table: ticker-agnostic content storage
+            # STEP 1: Try to acquire advisory lock (non-blocking)
+            LOG.info("🔒 Attempting to acquire schema initialization lock...")
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (SCHEMA_LOCK_ID,))
+            lock_acquired = cur.fetchone()[0]
+
+            if not lock_acquired:
+                # Another process is currently running schema init
+                LOG.info("⏳ Schema initialization already in progress by another process")
+                LOG.info("⏩ Skipping schema init - assuming other process will complete it")
+                return  # Fast exit - let the other process finish
+
+            try:
+                LOG.info("✅ Schema lock acquired - proceeding with initialization")
+
+                # STEP 2: Check if core schema already exists (optimization)
+                cur.execute("""
+                    SELECT COUNT(*) FROM information_schema.tables
+                    WHERE table_name IN ('articles', 'ticker_reference', 'feeds')
+                """)
+                existing_core_tables = cur.fetchone()[0]
+
+                if existing_core_tables == 3:
+                    LOG.info("✅ Core schema exists - running idempotent DDL for completeness")
+                else:
+                    LOG.info("🔧 Core tables missing - creating full schema...")
+
+                # STEP 3: Execute DDL (idempotent - safe to run multiple times)
+                cur.execute("""
+                    -- Articles table: ticker-agnostic content storage
                 CREATE TABLE IF NOT EXISTS articles (
                     id SERIAL PRIMARY KEY,
                     url_hash VARCHAR(32) UNIQUE NOT NULL,
@@ -2195,9 +2235,14 @@ def ensure_schema():
                 ON CONFLICT (key) DO NOTHING;
 
                 CREATE INDEX IF NOT EXISTS idx_system_config_key ON system_config(key);
-            """)
+                """)
 
-    LOG.info("✅ Complete database schema created successfully with NEW ARCHITECTURE + JOB QUEUE + BETA USERS")
+                LOG.info("✅ Complete database schema created successfully with NEW ARCHITECTURE + JOB QUEUE + BETA USERS")
+
+            finally:
+                # STEP 4: CRITICAL - Always release the advisory lock
+                cur.execute("SELECT pg_advisory_unlock(%s)", (SCHEMA_LOCK_ID,))
+                LOG.info("🔓 Schema initialization lock released")
 
 def update_schema_for_content():
     """Deprecated - schema already created in ensure_schema()"""
@@ -20022,13 +20067,10 @@ async def admin_init(request: Request, body: InitRequest):
         import gc
         gc.collect()  # Force garbage collection to clear any lingering objects
 
-        # STEP 1: Ensure database schema is up to date (ONCE per session)
-        if not _schema_initialized:
-            LOG.info("=== ENSURING DATABASE SCHEMA (NEW FEED ARCHITECTURE) ===")
-            ensure_schema()
-            _schema_initialized = True
-        else:
-            LOG.info("=== SCHEMA ALREADY INITIALIZED - SKIPPING ===")
+        # STEP 1: Schema initialization (now handled at app startup)
+        # NOTE: ensure_schema() is called in @APP.on_event("startup") with advisory lock
+        # This prevents lock contention from concurrent requests (test runs, ad-hoc user requests)
+        LOG.info("=== SCHEMA INITIALIZATION SKIPPED (handled at startup) ===")
 
         # STEP 2: Import CSV from GitHub (ONCE per session)
         if not _github_synced:

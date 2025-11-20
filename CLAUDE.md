@@ -669,18 +669,6 @@ CREATE TABLE sec_8k_filings (
   - summary_text, ai_provider (claude/gemini), ai_model
   - UNIQUE(ticker, report_type, quarter, year)
 
-- **`press_releases`**: Stores press release summaries **(NEW - Oct 30, 2025, UPDATED - Nov 13, 2025)**
-  - ticker, company_name, report_date (TIMESTAMPTZ), pr_title (VARCHAR 200)
-  - summary_text, ai_provider (claude), ai_model
-  - processing_duration_seconds, job_id, generated_at
-  - **UNIQUE INDEX on (ticker, report_date, pr_title)** - Full datetime precision for deduplication
-  - **Schema Fix (Nov 13, 2025):** Changed report_date from DATE to TIMESTAMPTZ to store full datetime (e.g., "2025-11-13 10:00:00") for accurate comparison logic
-  - **Migrated from transcript_summaries** - Separate table for better schema design
-  - **Research Library UI (Oct 30, 2025):**
-    - Title displayed prominently (80 char truncation)
-    - Model badge: "🟦 Claude" with generation time
-    - View/Email/Delete buttons work correctly with date + title matching
-
 **Migration:**
 - **Migration guide:** See `SEC_FILINGS_MIGRATION.md` for SQL migration script
 - **Status:** ~10 existing 10-K profiles need migration from old company_profiles table
@@ -1751,9 +1739,9 @@ Command: python app.py check_filings
 - Database prevents duplicates automatically
 - Safe to run cron multiple times
 
-**Press Releases:**
-- Primary key: `UNIQUE(ticker, report_date, pr_title)` in `press_releases` table
-- Separate table from transcripts (migrated Oct 30, 2025)
+**FMP Press Releases:**
+- Primary key: `UNIQUE(ticker, filing_date, report_title)` in `company_releases` table
+- Source type: `'fmp_press_release'`
 - Matches by date AND title (supports multiple PRs per day)
 
 **Unified Silent Initialization (ALL 4 Filing Types - NEW Oct 30, 2025):**
@@ -1764,7 +1752,7 @@ Command: python app.py check_filings
   - `db_has_any_10k_for_ticker(ticker)` - Check if ticker has ANY 10-K
   - `db_has_any_10q_for_ticker(ticker)` - Check if ticker has ANY 10-Q
   - `db_has_any_transcript_for_ticker(ticker)` - Check if ticker has ANY transcripts
-  - `db_has_any_press_releases_for_ticker(ticker)` - Check if ticker has ANY PRs
+  - `db_has_any_fmp_releases_for_ticker(ticker)` - Check if ticker has ANY FMP releases
 - **User Flow (NEW ticker AAPL):**
   - 6:30 AM (or any first check): Save latest 1 of each type silently (4 docs, 0 emails) ✅
   - 8:30 AM (subsequent check): Email any NEW filings ✅

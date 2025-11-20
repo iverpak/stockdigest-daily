@@ -14461,12 +14461,12 @@ def generate_email_html_core(
     if report_type == 'weekly':
         header_title = "WEAVARA WEEKLY INTELLIGENCE"
         footer_brand = "Weavara"
-        footer_subtitle = "Weekly Intelligence Delivered Every Monday"
+        footer_subtitle = "Intelligence Delivered Daily"
         subject_prefix = "📊 Weekly Intelligence"
     else:  # daily
         header_title = "WEAVARA DAILY BRIEF"
         footer_brand = "Weavara"
-        footer_subtitle = "Daily Brief Delivered Tuesday-Sunday"
+        footer_subtitle = "Intelligence Delivered Daily"
         subject_prefix = "📊 Daily Brief"
 
     # Unsubscribe URL

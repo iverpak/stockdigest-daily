@@ -167,10 +167,11 @@ def db_get_latest_fmp_release_datetime(ticker: str) -> Optional[str]:
             result = cur.fetchone()
 
             if result:
-                # filing_date is DATE type, but we need to return comparable string
+                # filing_date is DATE type, but we need to return datetime string for comparison
                 filing_date = result['filing_date'] if isinstance(result, dict) else result[0]
-                # Convert date to string
-                return str(filing_date)
+                # Convert date to string and append time component for datetime comparison
+                # Database stores DATE only (YYYY-MM-DD), append " 00:00:00" for consistency
+                return str(filing_date) + " 00:00:00"
             return None
     except Exception as e:
         LOG.error(f"Error getting latest FMP release for {ticker}: {e}")

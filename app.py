@@ -16487,96 +16487,101 @@ async def process_press_release_phase(job: dict):
                     json_output_parsed = parsed_result.get('json_data', {})
                     markdown_summary = parsed_result.get('parsed_summary', '')  # Extract markdown
 
-                    # Progress: 95% - Generate and send company release email
-                    if config.get('send_email', True):
-                        update_job_status(job_id, progress=95)
-                        LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending company release email...")
+                    # Progress: 90% - Generate email and save to database (ALWAYS, regardless of send_email flag)
+                    update_job_status(job_id, progress=90)
+                    LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Generating company release email and saving to database...")
 
+                    try:
+                        # Get stock data for email header
+                        stock_data = get_filing_stock_data(ticker)
+
+                        # Format press release date nicely
                         try:
-                            # Get stock data for email header
-                            stock_data = get_filing_stock_data(ticker)
+                            from datetime import datetime
+                            date_obj = datetime.strptime(pr_date[:10], '%Y-%m-%d')  # Extract date part only
+                            formatted_pr_date = date_obj.strftime('%b %d, %Y')  # "Nov 19, 2024"
+                        except:
+                            formatted_pr_date = pr_date[:10] if len(pr_date) >= 10 else pr_date
 
-                            # Format press release date nicely
-                            try:
-                                from datetime import datetime
-                                date_obj = datetime.strptime(pr_date[:10], '%Y-%m-%d')  # Extract date part only
-                                formatted_pr_date = date_obj.strftime('%b %d, %Y')  # "Nov 19, 2024"
-                            except:
-                                formatted_pr_date = pr_date[:10] if len(pr_date) >= 10 else pr_date
+                        # Generate email using new company release system
+                        email_result = generate_company_release_email(
+                            ticker=ticker,
+                            company_name=ticker_config.get('company_name', ticker),
+                            release_type='fmp_press_release',
+                            filing_date=formatted_pr_date,
+                            json_output=json_output_parsed,
+                            stock_price=stock_data.get('stock_price'),
+                            price_change_pct=stock_data.get('price_change_pct'),
+                            price_change_color=stock_data.get('price_change_color', '#4ade80'),
+                            ytd_return_pct=stock_data.get('ytd_return_pct'),
+                            ytd_return_color=stock_data.get('ytd_return_color', '#4ade80'),
+                            market_status=stock_data.get('market_status', 'LAST CLOSE'),
+                            return_label=stock_data.get('return_label', '1D')
+                        )
+                        email_html = email_result.get('html', '')
+                        email_subject = email_result.get('subject', f"📄 {ticker} Company Release")
 
-                            # Generate email using new company release system
-                            email_result = generate_company_release_email(
-                                ticker=ticker,
-                                company_name=ticker_config.get('company_name', ticker),
-                                release_type='fmp_press_release',
-                                filing_date=formatted_pr_date,
-                                json_output=json_output_parsed,
-                                stock_price=stock_data.get('stock_price'),
-                                price_change_pct=stock_data.get('price_change_pct'),
-                                price_change_color=stock_data.get('price_change_color', '#4ade80'),
-                                ytd_return_pct=stock_data.get('ytd_return_pct'),
-                                ytd_return_color=stock_data.get('ytd_return_color', '#4ade80'),
-                                market_status=stock_data.get('market_status', 'LAST CLOSE'),
-                                return_label=stock_data.get('return_label', '1D')
-                            )
-                            email_html = email_result.get('html', '')
-                            email_subject = email_result.get('subject', f"📄 {ticker} Company Release")
+                        # ALWAYS save to company_releases table (even when send_email=False)
+                        with db() as conn, conn.cursor() as cur:
+                            cur.execute("""
+                                INSERT INTO company_releases (
+                                    ticker, company_name, release_type, filing_date, report_title,
+                                    source_id, source_type, summary_json, summary_html, summary_markdown,
+                                    ai_provider, ai_model, processing_duration_seconds,
+                                    token_count_input, token_count_output, job_id,
+                                    fiscal_year, fiscal_quarter, generated_at
+                                )
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                                ON CONFLICT (ticker, filing_date, report_title)
+                                DO UPDATE SET
+                                    summary_json = EXCLUDED.summary_json,
+                                    summary_html = EXCLUDED.summary_html,
+                                    summary_markdown = EXCLUDED.summary_markdown,
+                                    fiscal_year = EXCLUDED.fiscal_year,
+                                    fiscal_quarter = EXCLUDED.fiscal_quarter,
+                                    generated_at = NOW()
+                            """, (
+                                ticker,
+                                ticker_config.get('company_name', ticker),
+                                'fmp_press_release',
+                                pr_date[:10],  # Date only
+                                report_title,
+                                source_id,
+                                'fmp_press_release',
+                                json.dumps(json_output_parsed),
+                                email_html,
+                                markdown_summary,  # Add markdown
+                                'gemini',
+                                result_metadata.get('model', 'gemini-2.5-flash'),
+                                result_metadata.get('generation_time_seconds', 0),
+                                result_metadata.get('token_count_input', 0),
+                                result_metadata.get('token_count_output', 0),
+                                job_id,
+                                fiscal_year_db,
+                                fiscal_quarter_db
+                            ))
+                            conn.commit()
 
-                            # Save to company_releases table
-                            with db() as conn, conn.cursor() as cur:
-                                cur.execute("""
-                                    INSERT INTO company_releases (
-                                        ticker, company_name, release_type, filing_date, report_title,
-                                        source_id, source_type, summary_json, summary_html, summary_markdown,
-                                        ai_provider, ai_model, processing_duration_seconds,
-                                        token_count_input, token_count_output, job_id,
-                                        fiscal_year, fiscal_quarter, generated_at
-                                    )
-                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                                    ON CONFLICT (ticker, filing_date, report_title)
-                                    DO UPDATE SET
-                                        summary_json = EXCLUDED.summary_json,
-                                        summary_html = EXCLUDED.summary_html,
-                                        summary_markdown = EXCLUDED.summary_markdown,
-                                        fiscal_year = EXCLUDED.fiscal_year,
-                                        fiscal_quarter = EXCLUDED.fiscal_quarter,
-                                        generated_at = NOW()
-                                """, (
-                                    ticker,
-                                    ticker_config.get('company_name', ticker),
-                                    'fmp_press_release',
-                                    pr_date[:10],  # Date only
-                                    report_title,
-                                    source_id,
-                                    'fmp_press_release',
-                                    json.dumps(json_output_parsed),
-                                    email_html,
-                                    markdown_summary,  # Add markdown
-                                    'gemini',
-                                    result_metadata.get('model', 'gemini-2.5-flash'),
-                                    result_metadata.get('generation_time_seconds', 0),
-                                    result_metadata.get('token_count_input', 0),
-                                    result_metadata.get('token_count_output', 0),
-                                    job_id,
-                                    fiscal_year_db,
-                                    fiscal_quarter_db
-                                ))
-                                conn.commit()
+                        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Press release saved to company_releases table")
 
-                            # Send email
+                        # Progress: 95% - Send email (CONDITIONAL based on send_email flag)
+                        if config.get('send_email', True):
+                            update_job_status(job_id, progress=95)
+                            LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending company release email...")
+
                             send_email(
                                 subject=email_subject,
                                 html_body=email_html,
                                 to=ADMIN_EMAIL
                             )
-                            LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Company release email sent and saved")
+                            LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Company release email sent")
+                        else:
+                            LOG.info(f"[{ticker}] ⏭️ [JOB {job_id}] Email sending disabled - press release saved silently")
 
-                        except Exception as email_error:
-                            LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send company release email: {email_error}")
-                            LOG.error(f"Stacktrace: {traceback.format_exc()}")
-                            # Continue - press release was saved successfully
-                    else:
-                        LOG.info(f"[{ticker}] ⏭️ [JOB {job_id}] Email sending disabled for this job")
+                    except Exception as email_error:
+                        LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to generate/save company release: {email_error}")
+                        LOG.error(f"Stacktrace: {traceback.format_exc()}")
+                        raise  # Re-raise to mark job as failed
                 else:
                     LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Summary generation returned empty result")
 
@@ -16827,100 +16832,103 @@ async def process_8k_summary_phase(job: dict):
                         json_output = parsed_result.get('json_data', {})
                         markdown_summary = parsed_result.get('parsed_summary', '')  # Extract markdown
 
-                        # Generate and send email for ALL exhibits (no type filtering)
-                        if config.get('send_email', True):
+                        # Generate email and save to database for ALL exhibits (ALWAYS, regardless of send_email flag)
+                        try:
+                            LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Generating company release email and saving to database for Exhibit {exhibit_num}...")
+
+                            # Get stock data for email header
+                            stock_data = get_filing_stock_data(ticker)
+
+                            # Format filing date nicely
                             try:
+                                from datetime import datetime
+                                date_obj = datetime.strptime(filing_date, '%Y-%m-%d')
+                                formatted_filing_date = date_obj.strftime('%b %d, %Y')  # "Nov 19, 2024"
+                            except:
+                                formatted_filing_date = filing_date
+
+                            # Generate email using new company release system
+                            email_result = generate_company_release_email(
+                                ticker=ticker,
+                                company_name=ticker_config.get('company_name', ticker),
+                                release_type='8k',
+                                filing_date=formatted_filing_date,
+                                json_output=json_output,
+                                stock_price=stock_data.get('stock_price'),
+                                price_change_pct=stock_data.get('price_change_pct'),
+                                price_change_color=stock_data.get('price_change_color', '#4ade80'),
+                                ytd_return_pct=stock_data.get('ytd_return_pct'),
+                                ytd_return_color=stock_data.get('ytd_return_color', '#4ade80'),
+                                market_status=stock_data.get('market_status', 'LAST CLOSE'),
+                                return_label=stock_data.get('return_label', '1D')
+                            )
+                            email_html = email_result.get('html', '')
+                            email_subject = email_result.get('subject', f"📄 {ticker} Company Release")
+
+                            # ALWAYS save to company_releases table (even when send_email=False)
+                            with db() as conn, conn.cursor() as cur:
+                                cur.execute("""
+                                    INSERT INTO company_releases (
+                                        ticker, company_name, release_type, filing_date, report_title,
+                                        source_id, source_type, summary_json, summary_html, summary_markdown,
+                                        ai_provider, ai_model, processing_duration_seconds,
+                                        token_count_input, token_count_output, job_id,
+                                        fiscal_year, fiscal_quarter, exhibit_number, item_codes,
+                                        generated_at
+                                    )
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                                    ON CONFLICT (ticker, filing_date, report_title)
+                                    DO UPDATE SET
+                                        summary_json = EXCLUDED.summary_json,
+                                        summary_html = EXCLUDED.summary_html,
+                                        summary_markdown = EXCLUDED.summary_markdown,
+                                        fiscal_year = EXCLUDED.fiscal_year,
+                                        fiscal_quarter = EXCLUDED.fiscal_quarter,
+                                        exhibit_number = EXCLUDED.exhibit_number,
+                                        item_codes = EXCLUDED.item_codes,
+                                        generated_at = NOW()
+                                """, (
+                                    ticker,
+                                    ticker_config.get('company_name', ticker),
+                                    '8k',
+                                    filing_date,
+                                    report_title,
+                                    source_id,
+                                    '8k_exhibit',
+                                    json.dumps(json_output),
+                                    email_html,
+                                    markdown_summary,  # Add markdown
+                                    'gemini',
+                                    result_metadata.get('model', 'gemini-2.5-flash'),
+                                    result_metadata.get('generation_time_seconds', 0),
+                                    result_metadata.get('token_count_input', 0),
+                                    result_metadata.get('token_count_output', 0),
+                                    job_id,
+                                    fiscal_year_db,
+                                    fiscal_quarter_db,
+                                    exhibit_num,
+                                    item_codes
+                                ))
+                                conn.commit()
+
+                            LOG.info(f"[{ticker}] ✅ [JOB {job_id}] 8-K exhibit saved to company_releases table for Exhibit {exhibit_num}")
+
+                            # Send email (CONDITIONAL based on send_email flag)
+                            if config.get('send_email', True):
                                 LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending company release email for Exhibit {exhibit_num}...")
-
-                                # Get stock data for email header
-                                stock_data = get_filing_stock_data(ticker)
-
-                                # Format filing date nicely
-                                try:
-                                    from datetime import datetime
-                                    date_obj = datetime.strptime(filing_date, '%Y-%m-%d')
-                                    formatted_filing_date = date_obj.strftime('%b %d, %Y')  # "Nov 19, 2024"
-                                except:
-                                    formatted_filing_date = filing_date
-
-                                # Generate email using new company release system
-                                email_result = generate_company_release_email(
-                                    ticker=ticker,
-                                    company_name=ticker_config.get('company_name', ticker),
-                                    release_type='8k',
-                                    filing_date=formatted_filing_date,
-                                    json_output=json_output,
-                                    stock_price=stock_data.get('stock_price'),
-                                    price_change_pct=stock_data.get('price_change_pct'),
-                                    price_change_color=stock_data.get('price_change_color', '#4ade80'),
-                                    ytd_return_pct=stock_data.get('ytd_return_pct'),
-                                    ytd_return_color=stock_data.get('ytd_return_color', '#4ade80'),
-                                    market_status=stock_data.get('market_status', 'LAST CLOSE'),
-                                    return_label=stock_data.get('return_label', '1D')
-                                )
-                                email_html = email_result.get('html', '')
-                                email_subject = email_result.get('subject', f"📄 {ticker} Company Release")
-
-                                # Save to company_releases table
-                                with db() as conn, conn.cursor() as cur:
-                                    cur.execute("""
-                                        INSERT INTO company_releases (
-                                            ticker, company_name, release_type, filing_date, report_title,
-                                            source_id, source_type, summary_json, summary_html, summary_markdown,
-                                            ai_provider, ai_model, processing_duration_seconds,
-                                            token_count_input, token_count_output, job_id,
-                                            fiscal_year, fiscal_quarter, exhibit_number, item_codes,
-                                            generated_at
-                                        )
-                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                                        ON CONFLICT (ticker, filing_date, report_title)
-                                        DO UPDATE SET
-                                            summary_json = EXCLUDED.summary_json,
-                                            summary_html = EXCLUDED.summary_html,
-                                            summary_markdown = EXCLUDED.summary_markdown,
-                                            fiscal_year = EXCLUDED.fiscal_year,
-                                            fiscal_quarter = EXCLUDED.fiscal_quarter,
-                                            exhibit_number = EXCLUDED.exhibit_number,
-                                            item_codes = EXCLUDED.item_codes,
-                                            generated_at = NOW()
-                                    """, (
-                                        ticker,
-                                        ticker_config.get('company_name', ticker),
-                                        '8k',
-                                        filing_date,
-                                        report_title,
-                                        source_id,
-                                        '8k_exhibit',
-                                        json.dumps(json_output),
-                                        email_html,
-                                        markdown_summary,  # Add markdown
-                                        'gemini',
-                                        result_metadata.get('model', 'gemini-2.5-flash'),
-                                        result_metadata.get('generation_time_seconds', 0),
-                                        result_metadata.get('token_count_input', 0),
-                                        result_metadata.get('token_count_output', 0),
-                                        job_id,
-                                        fiscal_year_db,
-                                        fiscal_quarter_db,
-                                        exhibit_num,
-                                        item_codes
-                                    ))
-                                    conn.commit()
-
-                                # Send email
                                 send_email(
                                     subject=email_subject,
                                     html_body=email_html,
                                     to=ADMIN_EMAIL
                                 )
-                                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Company release email sent and saved for Exhibit {exhibit_num}")
+                                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Company release email sent for Exhibit {exhibit_num}")
+                            else:
+                                LOG.info(f"[{ticker}] ⏭️ [JOB {job_id}] Email sending disabled - 8-K exhibit saved silently for Exhibit {exhibit_num}")
 
-                            except Exception as email_error:
-                                LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send company release email: {email_error}")
-                                LOG.error(f"Stacktrace: {traceback.format_exc()}")
-                                # Continue - parsed PR was saved successfully
-                        else:
-                            LOG.info(f"[{ticker}] ⏭️ [JOB {job_id}] Email sending disabled for this job")
+                        except Exception as email_error:
+                            LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to generate/save company release for Exhibit {exhibit_num}: {email_error}")
+                            LOG.error(f"Stacktrace: {traceback.format_exc()}")
+                            raise  # Re-raise to mark job as failed
                     else:
                         LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Summary generation returned empty for Exhibit {exhibit_num}")
 

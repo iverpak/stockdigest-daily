@@ -629,12 +629,19 @@ def get_all_8k_exhibits(documents_url: str) -> List[Dict[str, Any]]:
                     link = cols[2].find('a')
                     if link and 'href' in link.attrs:
                         # Extract exhibit number (e.g., "99.1" from "EX-99.1" or "EXHIBIT 99.1")
-                        exhibit_num = (
-                            doc_type.replace('EXHIBIT', '')
-                                    .replace('EX-', '')
-                                    .replace('ex-', '')
-                                    .strip()
-                        )
+                        # Use regex to extract just the numeric part (handles "99.1 PRESS RELEASE..." format)
+                        import re
+                        match = re.search(r'(\d+\.\d+)', doc_type)
+                        if match:
+                            exhibit_num = match.group(1)
+                        else:
+                            # Fallback to old logic if no decimal number found
+                            exhibit_num = (
+                                doc_type.replace('EXHIBIT', '')
+                                        .replace('EX-', '')
+                                        .replace('ex-', '')
+                                        .strip()
+                            )
 
                         # Build full URL
                         exhibit_url = urljoin(documents_url, link['href'])
@@ -676,7 +683,14 @@ def get_all_8k_exhibits(documents_url: str) -> List[Dict[str, Any]]:
             )
 
         # Sort by exhibit number (1.1, 4.1, 10.1, 99.1, 99.2, etc.)
-        exhibits.sort(key=lambda x: float(x['exhibit_number']))
+        # Use safe float conversion - non-numeric exhibits (like "MAIN") sort to end
+        def safe_float_key(exhibit):
+            try:
+                return (0, float(exhibit['exhibit_number']))  # Numeric exhibits first
+            except ValueError:
+                return (1, exhibit['exhibit_number'])  # Non-numeric exhibits last, sorted alphabetically
+
+        exhibits.sort(key=safe_float_key)
 
         LOG.info(f"✅ Found {len(exhibits)} HTML exhibits total")
         return exhibits
@@ -730,7 +744,8 @@ def get_main_8k_url(documents_url: str) -> Optional[str]:
                 filename = cols[2].text.strip()
 
                 # Match main 8-K form (not exhibits)
-                is_main_8k = doc_type == '8-K'
+                # Use substring match to handle variations: "8-K", "FORM 8-K", "8-K/A" (amended)
+                is_main_8k = '8-K' in doc_type
                 is_html = '.htm' in filename.lower()
 
                 if is_main_8k and is_html:

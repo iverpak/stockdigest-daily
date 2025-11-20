@@ -1414,6 +1414,9 @@ def ensure_schema():
 
     with db() as conn:
         with conn.cursor() as cur:
+            # Temporarily increase lock timeout for schema initialization (5 minutes)
+            cur.execute("SET LOCAL lock_timeout = '300s'")
+
             cur.execute("""
                 -- Articles table: ticker-agnostic content storage
                 CREATE TABLE IF NOT EXISTS articles (

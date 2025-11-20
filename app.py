@@ -1430,7 +1430,9 @@ def ensure_schema():
             # STEP 1: Try to acquire advisory lock (non-blocking)
             LOG.info("🔒 Attempting to acquire schema initialization lock...")
             cur.execute("SELECT pg_try_advisory_lock(%s)", (SCHEMA_LOCK_ID,))
-            lock_acquired = cur.fetchone()[0]
+            result = cur.fetchone()
+            # Handle both tuple and dict-like cursor results
+            lock_acquired = result[0] if isinstance(result, tuple) else result['pg_try_advisory_lock']
 
             if not lock_acquired:
                 # Another process is currently running schema init

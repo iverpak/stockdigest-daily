@@ -171,6 +171,12 @@ restart. This prevents memory buildup from zombie threads and ensures all jobs c
 ### Key Components
 
 #### Data Models and Storage
+- **Schema initialization**: Automated at FastAPI startup with PostgreSQL advisory lock (prevents concurrent DDL execution)
+  - Function: `ensure_schema()` at line 1411
+  - Advisory lock ID: 123456 (prevents race conditions during rolling deployments)
+  - Called once at startup (line 18329), removed from hot path (`admin_init()`) to eliminate lock contention
+  - Idempotent DDL (`IF NOT EXISTS`) - safe to run multiple times
+  - Non-blocking: If lock held by another process, returns early (fast startup)
 - Ticker reference data stored in PostgreSQL with CSV backup (`data/ticker_reference.csv`)
 - Articles table with deduplication via URL hashing
 - Metadata tracking for company information and processing state
@@ -1509,6 +1515,11 @@ Total for 4 tickers: ~30 minutes (4x faster!)
 - Robust error handling with fallback strategies for content extraction
 - Built-in rate limiting and respect for robots.txt files
 - **Job queue worker starts automatically on FastAPI startup** (see `@APP.on_event("startup")`)
+- **Database schema initialization** (NEW - Nov 20, 2025):
+  - Automated at app startup with PostgreSQL advisory lock (prevents concurrent DDL)
+  - Advisory lock ensures only ONE process runs schema init during rolling deployments
+  - Removed from hot path (`admin_init()`) to eliminate lock contention during concurrent test runs
+  - Idempotent DDL design (`IF NOT EXISTS`) - safe for multiple startups
 
 ## Financial Data & Ticker Validation (Oct 2025)
 
@@ -1704,6 +1715,17 @@ Command: python app.py check_filings
 - Deduplication: By exact date match
 - Efficient: Only checks recent PRs (covers 99% of cases)
 
+**8-K SEC Filings (UPDATED - Nov 20, 2025):**
+- Check: Last 3 8-K filings from SEC Edgar
+- **Enrichment**: Cron workflow now matches manual workflow (lines 26985-27009)
+  - Calls `get_8k_html_url()` to extract main 8-K HTML URL from documents page
+  - Calls `quick_parse_8k_header()` to extract filing title + item codes
+  - Rate limiting: 0.15s delay between requests (respects SEC 10 req/sec limit)
+  - Error handling: Falls back to safe defaults ('8-K Filing', 'Unknown') if enrichment fails
+- Queue if: Accession number not found in `company_releases` table (checks via `db_check_8k_filing_exists()`)
+- Deduplication: By accession number (unique SEC identifier)
+- **Fix (Nov 20, 2025)**: Previously missing enrichment step caused `NoneType` errors in logging
+
 ### Database Helper Functions
 
 **New Functions (app.py):**
@@ -1711,8 +1733,18 @@ Command: python app.py check_filings
 - `db_get_latest_10q(ticker)` → Returns latest 10-Q year + quarter from DB
 - `db_get_latest_transcript(ticker)` → Returns latest transcript year + quarter
 - `db_check_press_release_exists(ticker, date)` → Boolean check if PR exists
-- `check_filings_for_ticker(ticker)` → Main checking logic for one ticker
+- `check_filings_for_ticker(ticker)` → Main checking logic for one ticker (lines 26798-27067)
+  - **8-K enrichment logic**: Lines 26985-27009
+  - Imports: `get_8k_html_url`, `quick_parse_8k_header` from `modules/company_profiles.py`
 - `check_all_filings_cron()` → Wrapper that processes all active user tickers
+
+**Company Profiles Module Functions (8-K enrichment):**
+- `get_8k_html_url(documents_url)` → Parses documents page for main 8-K HTML URL (line 453)
+- `quick_parse_8k_header(sec_html_url, rate_limit_delay=0.15)` → Extracts title + item codes from 8-K header (line 784)
+
+**Company Releases Module Functions:**
+- `db_has_any_8k_for_ticker(ticker)` → Check if ticker has ANY 8-K filings (used for silent init)
+- `db_check_8k_filing_exists(ticker, filing_date, accession_number)` → Boolean check if 8-K exists (deduplication)
 
 ### Processing Flow
 
@@ -1724,6 +1756,7 @@ Command: python app.py check_filings
    b. Fetch latest 10-Q from FMP → Compare with DB → Queue if newer
    c. Fetch latest transcript from FMP → Compare with DB → Queue if newer
    d. Fetch last 4 PRs from FMP → Check each against DB → Queue if missing
+   e. Fetch last 3 8-Ks from SEC Edgar → **Enrich** (title + item codes) → Compare with DB → Queue if missing
 4. Queued jobs processed by existing worker:
    - 10-K/10-Q: Gemini 2.5 Flash generation (5-10 min)
    - Transcripts: Claude generation (30-60 sec)

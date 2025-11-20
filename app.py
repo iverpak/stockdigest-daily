@@ -101,6 +101,7 @@ from modules.company_profiles import (
     # Parsed press releases (Nov 2025 - unified Gemini summaries for FMP PRs and 8-K exhibits)
     generate_parsed_press_release_with_gemini,
     generate_earnings_release_with_gemini,  # NEW: Comprehensive earnings release analysis
+    get_all_parsed_press_releases,  # Query company_releases table
     # Company releases (Nov 2025 - JSON-based email system for 8-K and FMP releases)
     parse_company_release_sections,
     build_company_release_html,

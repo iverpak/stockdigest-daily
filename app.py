@@ -2522,6 +2522,72 @@ def get_latest_summary_date(ticker: str) -> date:
             raise ValueError(f"No executive summary found for {ticker}")
         return row['summary_date']
 
+def fetch_company_releases_for_digest(tickers: List[str], hours: int) -> List[Dict]:
+    """
+    Fetch company releases (8-K and FMP press releases) within lookback window.
+
+    Args:
+        tickers: List of tickers to fetch releases for
+        hours: Lookback window in hours (e.g., 1440 for daily, 10080 for weekly)
+
+    Returns:
+        List of company_releases rows as dicts
+    """
+    if not tickers:
+        return []
+
+    cutoff_date = (datetime.now(timezone.utc) - timedelta(hours=hours)).date()
+
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT id, ticker, company_name, filing_date, report_title,
+                   summary_markdown, release_type, source_type
+            FROM company_releases
+            WHERE ticker = ANY(%s)
+              AND filing_date >= %s
+            ORDER BY filing_date DESC
+        """, (tickers, cutoff_date))
+
+        return cur.fetchall()
+
+def map_company_release_to_article_dict(release_row: Dict) -> Dict:
+    """
+    Map company_releases row to article dict format for digest emails and Phase 1.
+
+    This is a simple field mapping - no complex conversion needed.
+
+    Args:
+        release_row: Row from company_releases table
+
+    Returns:
+        Dict with article-like structure for Phase 1 integration
+    """
+    # Convert DATE to DATETIME (Phase 1 expects datetime for sorting)
+    filing_datetime = datetime.combine(release_row["filing_date"], datetime.min.time())
+    filing_datetime = filing_datetime.replace(tzinfo=timezone.utc)
+
+    return {
+        # REQUIRED by Phase 1 executive summary
+        "ai_summary": release_row["summary_markdown"],  # Already formatted markdown
+        "title": release_row["report_title"],  # "Q3 2024 Earnings Release"
+        "domain": "Company Release",  # Generic label for all official filings
+        "published_at": filing_datetime,  # For chronological sorting
+
+        # METADATA (useful for tracking and display)
+        "id": f"release_{release_row['id']}",  # Prefix to avoid ID conflicts with articles
+        "ticker": release_row["ticker"],
+        "company_name": release_row["company_name"],
+        "release_type": release_row["release_type"],  # '8k' or 'fmp_press_release'
+        "source_type": release_row["source_type"],  # '8k_exhibit' or 'fmp_press_release'
+        "is_company_release": True,  # Flag for special badge rendering
+
+        # OPTIONAL (Phase 1 doesn't use, but won't break if present)
+        "category": "company",  # Always company category
+        "resolved_url": None,  # No URL for most releases
+        "scraped_content": None,  # Summary already generated
+        "url": "#",  # Placeholder (no clickable link for FMP releases)
+    }
+
 @with_deadlock_retry()
 def update_executive_summary_with_phase3(
     ticker: str,
@@ -7065,6 +7131,10 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
     
     # 2. SECOND BADGE: Source name
     header_badges.append(f'<span class="source-badge">📰 {display_source}</span>')
+
+    # 2.5 OFFICIAL BADGE: For company releases (NEW - Nov 2025)
+    if article.get("is_company_release"):
+        header_badges.append('<span class="official-badge">🏛️ OFFICIAL</span>')
 
     # 3. STATUS BADGES - Mutually exclusive statuses based on ai_model and processing state
     ai_model = article.get('ai_model') or ''
@@ -12531,6 +12601,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
             ".source-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
             ".quality-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e1f5fe; color: #0277bd; border: 1px solid #81d4fa; }",
             ".flagged-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }",
+            ".official-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e8eaf6; color: #3f51b5; border: 1px solid #7986cb; }",
             ".ai-triage { display: inline-block; padding: 2px 8px; border-radius: 3px; font-weight: bold; font-size: 10px; margin-left: 5px; }",
             "/* Gemini Scoring - Green theme */",
             ".gemini-high { background-color: #d4f4dd; color: #0d5f1f; border: 1px solid #81c995; }",
@@ -12768,7 +12839,11 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
                     # 2. Domain name second
                     header_badges.append(f'<span class="source-badge">📰 {get_or_create_formal_domain_name(domain)}</span>')
 
-                    # 3. Quality badge third
+                    # 3. OFFICIAL badge for company releases (NEW - Nov 2025)
+                    if article.get("is_company_release"):
+                        header_badges.append('<span class="official-badge">🏛️ OFFICIAL</span>')
+
+                    # 4. Quality badge
                     if enhanced_article["is_quality_domain"]:
                         header_badges.append('<span class="quality-badge">⭐ Quality</span>')
 
@@ -12938,6 +13013,7 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
         ".source-badge { display: inline-block; padding: 2px 8px; margin-left: 0px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e9ecef; color: #495057; }",
         ".ai-model-badge { display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #f3e5f5; color: #6a1b9a; border: 1px solid #ce93d8; }",
         ".quality-badge { display: inline-block; padding: 2px 6px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e1f5fe; color: #0277bd; border: 1px solid #81d4fa; }",
+        ".official-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e8eaf6; color: #3f51b5; border: 1px solid #7986cb; }",
         ".analyzed-badge { display: inline-block; padding: 2px 8px; margin-left: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #e3f2fd; color: #1565c0; border: 1px solid #90caf9; }",
         ".competitor-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fdeaea; color: #c53030; border: 1px solid #feb2b2; }",
         ".industry-badge { display: inline-block; padding: 2px 8px; margin-right: 5px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fef5e7; color: #b7791f; border: 1px solid #f6e05e; }",
@@ -13396,6 +13472,31 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
                 LOG.debug(f"DIGEST QUERY: Found AI summary for {target_ticker} - {len(article_dict['ai_summary'])} chars")
             else:
                 LOG.debug(f"DIGEST QUERY: No AI summary for {target_ticker} article: {article_dict.get('title', 'No title')[:50]}")
+
+        # NEW (Nov 2025): Inject company releases (8-K and FMP press releases) into articles
+        if tickers:
+            LOG.info(f"Fetching company releases for {len(tickers)} tickers (lookback: {hours}h)...")
+            company_releases = fetch_company_releases_for_digest(tickers, hours)
+
+            if company_releases:
+                LOG.info(f"Found {len(company_releases)} company releases within lookback window")
+
+                for release_row in company_releases:
+                    release_ticker = release_row["ticker"]
+
+                    # Initialize ticker structure if needed
+                    if release_ticker not in articles_by_ticker:
+                        articles_by_ticker[release_ticker] = {}
+                    if "company" not in articles_by_ticker[release_ticker]:
+                        articles_by_ticker[release_ticker]["company"] = []
+
+                    # Map release to article format and append
+                    article_dict = map_company_release_to_article_dict(release_row)
+                    articles_by_ticker[release_ticker]["company"].append(article_dict)
+
+                    LOG.info(f"[{release_ticker}] Added company release: {release_row['report_title']} ({release_row['filing_date']})")
+            else:
+                LOG.info(f"No company releases found within {hours}h lookback window")
 
         # Mark articles as sent (only new ones)
         total_to_mark = 0

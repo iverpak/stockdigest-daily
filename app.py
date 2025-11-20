@@ -26929,15 +26929,55 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
         # === 8-K SEC FILINGS CHECK ===
         try:
             # Fetch 8-Ks directly from SEC Edgar (not through validate_ticker_for_research)
-            from modules.company_profiles import get_cik_for_ticker, parse_sec_8k_filing_list
+            from modules.company_profiles import (
+                get_cik_for_ticker,
+                parse_sec_8k_filing_list,
+                get_8k_html_url,
+                quick_parse_8k_header
+            )
 
             try:
                 cik = get_cik_for_ticker(ticker)
                 filings = parse_sec_8k_filing_list(cik, count=3)
+
+                # ENRICHMENT STEP: Add filing_title and item_codes (matches manual workflow)
+                # This is what /api/sec-validate-ticker does at lines 19097-19140
+                enriched_filings = []
+                for i, filing in enumerate(filings):
+                    try:
+                        # Get main 8-K HTML URL from documents index page
+                        urls = get_8k_html_url(filing['documents_url'])
+                        sec_html_url = urls['main_8k_url']
+
+                        # Quick parse header (title + item codes) with rate limiting
+                        parsed = quick_parse_8k_header(sec_html_url, rate_limit_delay=0.15)
+
+                        # Build enriched filing dict
+                        enriched_filings.append({
+                            'filing_date': filing['filing_date'],
+                            'accession_number': filing['accession_number'],
+                            'documents_url': filing['documents_url'],
+                            'filing_title': parsed['title'],
+                            'item_codes': parsed['item_codes']
+                        })
+
+                        LOG.info(f"[{ticker}] [{i+1}/{len(filings)}] Enriched 8-K: {parsed['title'][:60]}...")
+
+                    except Exception as e:
+                        LOG.warning(f"[{ticker}] Failed to enrich filing {filing['accession_number']}: {e}")
+                        # Add filing with safe defaults
+                        enriched_filings.append({
+                            'filing_date': filing['filing_date'],
+                            'accession_number': filing['accession_number'],
+                            'documents_url': filing['documents_url'],
+                            'filing_title': '8-K Filing',
+                            'item_codes': 'Unknown'
+                        })
+
                 sec_8k_response = {
-                    "valid": True if filings else False,
+                    "valid": True if enriched_filings else False,
                     "cik": cik,
-                    "available_8ks": filings
+                    "available_8ks": enriched_filings
                 }
             except Exception as e:
                 LOG.warning(f"[{ticker}] Could not fetch 8-Ks from SEC Edgar: {e}")

@@ -2557,7 +2557,7 @@ def fetch_company_releases_for_digest(tickers: List[str], hours: int) -> List[Di
 
         return cur.fetchall()
 
-def map_company_release_to_article_dict(release_row: Dict) -> Dict:
+def map_company_release_to_article_dict(release_row: Dict) -> Dict | None:
     """
     Map company_releases row to article dict format for digest emails and Phase 1.
 
@@ -2567,33 +2567,66 @@ def map_company_release_to_article_dict(release_row: Dict) -> Dict:
         release_row: Row from company_releases table
 
     Returns:
-        Dict with article-like structure for Phase 1 integration
+        Dict with article-like structure for Phase 1 integration, or None if validation fails
     """
-    # Convert DATE to DATETIME (Phase 1 expects datetime for sorting)
-    filing_datetime = datetime.combine(release_row["filing_date"], datetime.min.time())
-    filing_datetime = filing_datetime.replace(tzinfo=timezone.utc)
+    try:
+        # VALIDATION: Check critical fields
+        release_id = release_row.get("id")
+        ticker = release_row.get("ticker", "UNKNOWN")
 
-    return {
-        # REQUIRED by Phase 1 executive summary
-        "ai_summary": release_row["summary_markdown"],  # Already formatted markdown
-        "title": release_row["report_title"],  # "Q3 2024 Earnings Release"
-        "domain": "Company Release",  # Generic label for all official filings
-        "published_at": filing_datetime,  # For chronological sorting
+        # Validate summary_markdown (critical - Phase 1 requires ai_summary)
+        summary_markdown = release_row.get("summary_markdown")
+        if not summary_markdown or not summary_markdown.strip():
+            LOG.error(f"[{ticker}] Company release {release_id} has empty summary_markdown - skipping integration")
+            return None
 
-        # METADATA (useful for tracking and display)
-        "id": f"release_{release_row['id']}",  # Prefix to avoid ID conflicts with articles
-        "ticker": release_row["ticker"],
-        "company_name": release_row["company_name"],
-        "release_type": release_row["release_type"],  # '8k' or 'fmp_press_release'
-        "source_type": release_row["source_type"],  # '8k_exhibit' or 'fmp_press_release'
-        "is_company_release": True,  # Flag for special badge rendering
+        # Fallback for NULL report_title (better UX than showing "None")
+        report_title = release_row.get("report_title")
+        if not report_title or not report_title.strip():
+            report_title = f"{ticker} Company Release"
+            LOG.warning(f"[{ticker}] Company release {release_id} has empty report_title - using fallback: {report_title}")
 
-        # OPTIONAL (Phase 1 doesn't use, but won't break if present)
-        "category": "company",  # Always company category
-        "resolved_url": None,  # No URL for most releases
-        "scraped_content": None,  # Summary already generated
-        "url": "#",  # Placeholder (no clickable link for FMP releases)
-    }
+        # Convert filing_date to DATETIME (Phase 1 expects datetime for sorting)
+        filing_date = release_row.get("filing_date")
+        if not filing_date:
+            LOG.error(f"[{ticker}] Company release {release_id} missing filing_date - skipping integration")
+            return None
+
+        # Handle both datetime and date types
+        if isinstance(filing_date, datetime):
+            filing_datetime = filing_date.replace(tzinfo=timezone.utc)
+        else:  # date type
+            filing_datetime = datetime.combine(filing_date, datetime.min.time())
+            filing_datetime = filing_datetime.replace(tzinfo=timezone.utc)
+
+        return {
+            # REQUIRED by Phase 1 executive summary
+            "ai_summary": summary_markdown.strip(),  # Already formatted markdown
+            "title": report_title.strip(),  # "Q3 2024 Earnings Release"
+            "domain": "Company Release",  # Generic label for all official filings
+            "published_at": filing_datetime,  # For chronological sorting
+
+            # METADATA (useful for tracking and display)
+            "id": f"release_{release_id}",  # Prefix to avoid ID conflicts with articles
+            "ticker": ticker,
+            "company_name": release_row.get("company_name"),
+            "release_type": release_row.get("release_type"),  # '8k' or 'fmp_press_release'
+            "source_type": release_row.get("source_type"),  # '8k_exhibit' or 'fmp_press_release'
+            "is_company_release": True,  # Flag for special badge rendering
+
+            # OPTIONAL (Phase 1 doesn't use, but won't break if present)
+            "category": "company",  # Always company category
+            "resolved_url": None,  # No URL for most releases
+            "scraped_content": None,  # Summary already generated
+            "url": "#",  # Placeholder (no clickable link for FMP releases)
+        }
+
+    except KeyError as e:
+        LOG.error(f"[{ticker}] Company release {release_id} missing required field: {e} - skipping integration")
+        return None
+    except Exception as e:
+        LOG.error(f"[{ticker}] Error mapping company release {release_id}: {e} - skipping integration")
+        return None
 
 @with_deadlock_retry()
 def update_executive_summary_with_phase3(
@@ -13488,8 +13521,19 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
             if company_releases:
                 LOG.info(f"Found {len(company_releases)} company releases within lookback window")
 
+                added_count = 0
+                skipped_count = 0
+
                 for release_row in company_releases:
                     release_ticker = release_row["ticker"]
+
+                    # Map release to article format (validates and returns None if invalid)
+                    article_dict = map_company_release_to_article_dict(release_row)
+
+                    if not article_dict:
+                        # Validation failed - mapping function already logged error
+                        skipped_count += 1
+                        continue
 
                     # Initialize ticker structure if needed
                     if release_ticker not in articles_by_ticker:
@@ -13497,11 +13541,13 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
                     if "company" not in articles_by_ticker[release_ticker]:
                         articles_by_ticker[release_ticker]["company"] = []
 
-                    # Map release to article format and append
-                    article_dict = map_company_release_to_article_dict(release_row)
+                    # Append validated release
                     articles_by_ticker[release_ticker]["company"].append(article_dict)
+                    added_count += 1
 
-                    LOG.info(f"[{release_ticker}] Added company release: {release_row['report_title']} ({release_row['filing_date']})")
+                    LOG.info(f"[{release_ticker}] ✅ Added company release: {article_dict['title']} ({release_row['filing_date']})")
+
+                LOG.info(f"Company releases integration: {added_count} added, {skipped_count} skipped")
             else:
                 LOG.info(f"No company releases found within {hours}h lookback window")
 

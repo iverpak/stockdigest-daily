@@ -2245,12 +2245,12 @@ def ensure_schema():
                 -- ============================================================
 
                 -- Add lookback window settings for daily/weekly reports
-                INSERT INTO system_config (key, value, description, created_at)
-                VALUES ('daily_lookback_minutes', '1440', 'Lookback window for daily reports (Tuesday-Sunday)', NOW())
+                INSERT INTO system_config (key, value, description, updated_by)
+                VALUES ('daily_lookback_minutes', '1440', 'Lookback window for daily reports (Tuesday-Sunday)', 'system')
                 ON CONFLICT (key) DO NOTHING;
 
-                INSERT INTO system_config (key, value, description, created_at)
-                VALUES ('weekly_lookback_minutes', '10080', 'Lookback window for weekly reports (Monday)', NOW())
+                INSERT INTO system_config (key, value, description, updated_by)
+                VALUES ('weekly_lookback_minutes', '10080', 'Lookback window for weekly reports (Monday)', 'system')
                 ON CONFLICT (key) DO NOTHING;
 
                 -- Add report_type and summary_date columns to email_queue

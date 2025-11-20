@@ -29445,6 +29445,135 @@ async def set_lookback_window_api(
         LOG.error(f"Failed to update lookback window: {e}")
         return {"status": "error", "message": str(e)}
 
+# NEW (Nov 2025): Daily/Weekly lookback endpoints
+@APP.get("/api/get-daily-lookback-window")
+async def get_daily_lookback_window_api(token: str = Query(...)):
+    """Get daily lookback window (for Tuesday-Sunday reports)"""
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        minutes = get_daily_lookback_minutes()
+        hours = minutes / 60
+        days = int(hours / 24) if hours >= 24 else 0
+        label = f"{days} days" if days > 0 else f"{int(hours)} hours"
+
+        return {
+            "status": "success",
+            "minutes": minutes,
+            "label": label
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to get daily lookback: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/set-daily-lookback-window")
+async def set_daily_lookback_window_api(
+    token: str = Query(...),
+    minutes: int = Query(...)
+):
+    """Update daily lookback window (for Tuesday-Sunday reports)"""
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    # Validation: 1 hour to 7 days
+    if minutes < 60 or minutes > 10080:
+        return {
+            "status": "error",
+            "message": "Lookback must be 60-10080 minutes (1 hour to 7 days)"
+        }
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE system_config
+                SET value = %s, updated_at = NOW()
+                WHERE key = 'daily_lookback_minutes'
+            """, (str(minutes),))
+            conn.commit()
+
+        hours = minutes / 60
+        days = int(hours / 24) if hours >= 24 else 0
+        label = f"{days} days" if days > 0 else f"{int(hours)} hours"
+
+        LOG.info(f"✅ Daily lookback window updated to {minutes} minutes ({label})")
+
+        return {
+            "status": "success",
+            "message": f"Daily lookback updated to {label}",
+            "minutes": minutes,
+            "label": label
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to update daily lookback: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.get("/api/get-weekly-lookback-window")
+async def get_weekly_lookback_window_api(token: str = Query(...)):
+    """Get weekly lookback window (for Monday reports)"""
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        minutes = get_weekly_lookback_minutes()
+        hours = minutes / 60
+        days = int(hours / 24) if hours >= 24 else 0
+        label = f"{days} days" if days > 0 else f"{int(hours)} hours"
+
+        return {
+            "status": "success",
+            "minutes": minutes,
+            "label": label
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to get weekly lookback: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/set-weekly-lookback-window")
+async def set_weekly_lookback_window_api(
+    token: str = Query(...),
+    minutes: int = Query(...)
+):
+    """Update weekly lookback window (for Monday reports)"""
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    # Validation: 1 hour to 7 days
+    if minutes < 60 or minutes > 10080:
+        return {
+            "status": "error",
+            "message": "Lookback must be 60-10080 minutes (1 hour to 7 days)"
+        }
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE system_config
+                SET value = %s, updated_at = NOW()
+                WHERE key = 'weekly_lookback_minutes'
+            """, (str(minutes),))
+            conn.commit()
+
+        hours = minutes / 60
+        days = int(hours / 24) if hours >= 24 else 0
+        label = f"{days} days" if days > 0 else f"{int(hours)} hours"
+
+        LOG.info(f"✅ Weekly lookback window updated to {minutes} minutes ({label})")
+
+        return {
+            "status": "success",
+            "message": f"Weekly lookback updated to {label}",
+            "minutes": minutes,
+            "label": label
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to update weekly lookback: {e}")
+        return {"status": "error", "message": str(e)}
+
 @APP.get("/api/get-phase3-model")
 async def get_phase3_model_api(token: str = Query(...)):
     """Get current Phase 3 primary model setting"""

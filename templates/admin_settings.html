@@ -258,6 +258,69 @@
             </div>
         </div>
 
+        <!-- NEW (Nov 2025): Daily/Weekly Lookback Windows -->
+        <div class="settings-card">
+            <h2>📅 Daily vs Weekly Report Settings</h2>
+
+            <div class="setting-group">
+                <label class="setting-label">📰 Daily Brief Lookback (Tuesday-Sunday)</label>
+                <div class="setting-description">
+                    How far back to search for articles in daily reports (Tuesday through Sunday).
+                </div>
+
+                <div class="current-value" id="current-daily-lookback-display">
+                    <strong>Current:</strong> Loading...
+                </div>
+
+                <div class="input-group" style="margin-top: 15px;">
+                    <input type="number"
+                           id="daily-lookback-minutes"
+                           placeholder="1440"
+                           min="60"
+                           max="10080"
+                           step="60">
+                    <span style="color: #64748b;">minutes</span>
+                    <button class="btn btn-primary" onclick="updateDailyLookback()">
+                        💾 Save Daily Lookback
+                    </button>
+                </div>
+
+                <div id="daily-status" class="status-message"></div>
+            </div>
+
+            <div class="setting-group" style="margin-top: 30px;">
+                <label class="setting-label">📊 Weekly Intelligence Lookback (Monday)</label>
+                <div class="setting-description">
+                    How far back to search for articles in weekly reports (Monday only).
+                </div>
+
+                <div class="current-value" id="current-weekly-lookback-display">
+                    <strong>Current:</strong> Loading...
+                </div>
+
+                <div class="input-group" style="margin-top: 15px;">
+                    <input type="number"
+                           id="weekly-lookback-minutes"
+                           placeholder="10080"
+                           min="60"
+                           max="10080"
+                           step="60">
+                    <span style="color: #64748b;">minutes</span>
+                    <button class="btn btn-primary" onclick="updateWeeklyLookback()">
+                        💾 Save Weekly Lookback
+                    </button>
+                </div>
+
+                <div id="weekly-status" class="status-message"></div>
+            </div>
+
+            <div class="warning-box">
+                <strong>⚠️ Limits:</strong> Minimum 60 minutes (1 hour), Maximum 10,080 minutes (7 days)
+                <br><strong>Common values:</strong> 1440 = 1 day, 2880 = 2 days, 10080 = 7 days
+                <br><strong>Recommendation:</strong> Daily = 1440 min (1 day), Weekly = 10080 min (7 days)
+            </div>
+        </div>
+
         <!-- GitHub Commit -->
         <div class="settings-card">
             <h2>🔄 GitHub Data Backup</h2>
@@ -386,6 +449,109 @@
             }
         }
 
+        // NEW (Nov 2025): Load daily/weekly lookback windows
+        async function loadDailyWeeklyLookback() {
+            try {
+                // Load daily
+                const dailyResp = await fetch(`/api/get-daily-lookback-window?token=${getToken()}`);
+                const dailyData = await dailyResp.json();
+
+                if (dailyData.status === 'success') {
+                    document.getElementById('current-daily-lookback-display').innerHTML =
+                        `<strong>Current:</strong> ${dailyData.minutes} minutes (${dailyData.label})`;
+                    document.getElementById('daily-lookback-minutes').value = dailyData.minutes;
+                } else {
+                    document.getElementById('current-daily-lookback-display').innerHTML =
+                        `<strong>Current:</strong> Error loading`;
+                }
+
+                // Load weekly
+                const weeklyResp = await fetch(`/api/get-weekly-lookback-window?token=${getToken()}`);
+                const weeklyData = await weeklyResp.json();
+
+                if (weeklyData.status === 'success') {
+                    document.getElementById('current-weekly-lookback-display').innerHTML =
+                        `<strong>Current:</strong> ${weeklyData.minutes} minutes (${weeklyData.label})`;
+                    document.getElementById('weekly-lookback-minutes').value = weeklyData.minutes;
+                } else {
+                    document.getElementById('current-weekly-lookback-display').innerHTML =
+                        `<strong>Current:</strong> Error loading`;
+                }
+            } catch (error) {
+                console.error('Failed to load daily/weekly lookback:', error);
+            }
+        }
+
+        // Update daily lookback window
+        async function updateDailyLookback() {
+            const minutes = parseInt(document.getElementById('daily-lookback-minutes').value);
+            const statusDiv = document.getElementById('daily-status');
+
+            // Validation
+            if (!minutes || minutes < 60) {
+                showStatus(statusDiv, 'error', '❌ Lookback must be at least 60 minutes (1 hour)');
+                return;
+            }
+
+            if (minutes > 10080) {
+                showStatus(statusDiv, 'error', '❌ Lookback cannot exceed 10,080 minutes (7 days)');
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/set-daily-lookback-window?token=${getToken()}&minutes=${minutes}`, {
+                    method: 'POST'
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    showStatus(statusDiv, 'success', `✅ ${data.message}`);
+                    document.getElementById('current-daily-lookback-display').innerHTML =
+                        `<strong>Current:</strong> ${data.minutes} minutes (${data.label})`;
+                } else {
+                    showStatus(statusDiv, 'error', `❌ Error: ${data.message || 'Unknown error'}`);
+                }
+            } catch (error) {
+                showStatus(statusDiv, 'error', `❌ Failed to update: ${error.message}`);
+            }
+        }
+
+        // Update weekly lookback window
+        async function updateWeeklyLookback() {
+            const minutes = parseInt(document.getElementById('weekly-lookback-minutes').value);
+            const statusDiv = document.getElementById('weekly-status');
+
+            // Validation
+            if (!minutes || minutes < 60) {
+                showStatus(statusDiv, 'error', '❌ Lookback must be at least 60 minutes (1 hour)');
+                return;
+            }
+
+            if (minutes > 10080) {
+                showStatus(statusDiv, 'error', '❌ Lookback cannot exceed 10,080 minutes (7 days)');
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/set-weekly-lookback-window?token=${getToken()}&minutes=${minutes}`, {
+                    method: 'POST'
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    showStatus(statusDiv, 'success', `✅ ${data.message}`);
+                    document.getElementById('current-weekly-lookback-display').innerHTML =
+                        `<strong>Current:</strong> ${data.minutes} minutes (${data.label})`;
+                } else {
+                    showStatus(statusDiv, 'error', `❌ Error: ${data.message || 'Unknown error'}`);
+                }
+            } catch (error) {
+                showStatus(statusDiv, 'error', `❌ Failed to update: ${error.message}`);
+            }
+        }
+
         // Commit CSV to GitHub
         async function commitCSV() {
             if (!confirm('⚠️ Commit ticker_reference.csv to GitHub?\n\nThis will trigger a Render deployment (~2-3 min downtime).')) {
@@ -490,6 +656,7 @@
         // Load on page load
         document.addEventListener('DOMContentLoaded', function() {
             loadCurrentLookback();
+            loadDailyWeeklyLookback();  // NEW (Nov 2025): Load daily/weekly settings
             loadPhase3Model();
         });
     </script>

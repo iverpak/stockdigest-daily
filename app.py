@@ -26979,50 +26979,92 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                             else:
                                 LOG.info(f"[{ticker}] ✅ Latest 8-K already in DB, skipping initialization")
                 else:
-                    # Subsequent checks: Process NEW 8-Ks not in DB
-                    for filing in available_8ks:
-                        accession_number = filing.get('accession_number')
-                        filing_date = filing.get('filing_date')
-                        filing_title = filing.get('filing_title')
-                        item_codes = filing.get('item_codes')
-                        sec_html_url = filing.get('sec_html_url')
+                    # Subsequent checks: Process NEW 8-Ks not in DB (time-based with early break)
+                    latest_db_date_str = db_get_latest_8k_filing_date(ticker)
 
-                        if accession_number and filing_date:
-                            # Check if this 8-K has been processed
-                            exists = db_check_8k_filing_exists(ticker, filing_date, accession_number)
-                            if not exists:
-                                LOG.info(f"[{ticker}] 🆕 NEW 8-K: {filing_title[:60]}... ({filing_date})")
+                    if latest_db_date_str:
+                        LOG.info(f"[{ticker}] 🔍 Checking for 8-Ks newer than {latest_db_date_str}")
 
-                                # Queue job for generation (with email)
-                                batch_id = str(uuid.uuid4())
-                                job_config = {
-                                    "ticker": ticker,
-                                    "cik": sec_8k_response.get("cik"),
-                                    "accession_number": accession_number,
-                                    "filing_date": filing_date,
-                                    "filing_title": filing_title,
-                                    "item_codes": item_codes,
-                                    "sec_html_url": sec_html_url,
-                                    "send_email": True  # Send email for new 8-Ks
-                                }
+                        # Parse DB date string to date object for accurate comparison
+                        try:
+                            from datetime import datetime
+                            latest_db_date = datetime.strptime(latest_db_date_str, '%Y-%m-%d').date()
+                        except ValueError:
+                            LOG.error(f"[{ticker}] Invalid date format from DB: {latest_db_date_str}")
+                            latest_db_date = None
 
-                                with db() as conn, conn.cursor() as cur:
-                                    cur.execute("""
-                                        INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
-                                        VALUES (%s, %s, 1, %s)
-                                    """, (batch_id, 'processing', json.dumps(job_config)))
+                        if not latest_db_date:
+                            LOG.warning(f"[{ticker}] Could not parse latest DB date, skipping check")
+                        else:
+                            # Check 8-Ks from SEC (newest first, break on older)
+                            for filing in available_8ks:
+                                accession_number = filing.get('accession_number')
+                                filing_date_str = filing.get('filing_date')
+                                filing_title = filing.get('filing_title')
+                                item_codes = filing.get('item_codes')
+                                sec_html_url = filing.get('sec_html_url')
 
-                                    cur.execute("""
-                                        INSERT INTO ticker_processing_jobs (
-                                            batch_id, ticker, status, phase, progress, config
-                                        )
-                                        VALUES (%s, %s, %s, %s, 0, %s)
-                                        RETURNING job_id
-                                    """, (batch_id, ticker, 'queued', '8k_summary_generation', json.dumps(job_config)))
+                                if accession_number and filing_date_str:
+                                    # Parse SEC filing date (format: "Jan 30, 2025" or "2025-01-30")
+                                    try:
+                                        # Try parsing common SEC formats
+                                        for fmt in ['%b %d, %Y', '%Y-%m-%d']:
+                                            try:
+                                                filing_date = datetime.strptime(filing_date_str, fmt).date()
+                                                break
+                                            except ValueError:
+                                                continue
+                                        else:
+                                            LOG.warning(f"[{ticker}] Invalid filing date format: {filing_date_str}, skipping")
+                                            continue
+                                    except Exception as e:
+                                        LOG.warning(f"[{ticker}] Could not parse filing date: {filing_date_str}, skipping")
+                                        continue
 
-                                    conn.commit()
+                                    # Only process 8-Ks NEWER than OR EQUAL TO latest in DB (date comparison)
+                                    # Use < (strictly less than) to allow same-day processing
+                                    if filing_date < latest_db_date:
+                                        # SEC returns newest first, so rest are all older - stop processing
+                                        LOG.info(f"[{ticker}] ⏭️ Reached 8-Ks older than DB ({filing_date} < {latest_db_date}), stopping")
+                                        break
 
-                                new_items["8k"] = 1
+                                    # Check if this specific 8-K already processed (handles same-day via accession)
+                                    exists = db_check_8k_filing_exists(ticker, filing_date_str, accession_number)
+                                    if not exists:
+                                        LOG.info(f"[{ticker}] 🆕 NEW 8-K: {filing_title[:60]}... ({filing_date_str})")
+
+                                        # Queue job for generation (with email)
+                                        batch_id = str(uuid.uuid4())
+                                        job_config = {
+                                            "ticker": ticker,
+                                            "cik": sec_8k_response.get("cik"),
+                                            "accession_number": accession_number,
+                                            "filing_date": filing_date_str,
+                                            "filing_title": filing_title,
+                                            "item_codes": item_codes,
+                                            "sec_html_url": sec_html_url,
+                                            "send_email": True  # Send email for new 8-Ks
+                                        }
+
+                                        with db() as conn, conn.cursor() as cur:
+                                            cur.execute("""
+                                                INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
+                                                VALUES (%s, %s, 1, %s)
+                                            """, (batch_id, 'processing', json.dumps(job_config)))
+
+                                            cur.execute("""
+                                                INSERT INTO ticker_processing_jobs (
+                                                    batch_id, ticker, status, phase, progress, config
+                                                )
+                                                VALUES (%s, %s, %s, %s, 0, %s)
+                                                RETURNING job_id
+                                            """, (batch_id, ticker, 'queued', '8k_summary_generation', json.dumps(job_config)))
+
+                                            conn.commit()
+
+                                        new_items["8k"] += 1
+                    else:
+                        LOG.warning(f"[{ticker}] ⚠️ DB has 8-Ks but couldn't get latest date, skipping check")
         except Exception as e:
             LOG.error(f"[{ticker}] 8-K check failed: {e}")
 

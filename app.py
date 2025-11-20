@@ -26939,7 +26939,7 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                     "cik": cik,
                     "available_8ks": filings
                 }
-            except ValueError as e:
+            except Exception as e:
                 LOG.warning(f"[{ticker}] Could not fetch 8-Ks from SEC Edgar: {e}")
                 sec_8k_response = {"valid": False}
 
@@ -26966,7 +26966,7 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                         item_codes = latest_8k.get('item_codes')
                         documents_url = latest_8k.get('documents_url')
 
-                        if accession_number and filing_date:
+                        if accession_number and filing_date and documents_url:
                             # Check if already exists (safety check)
                             exists = db_check_8k_filing_exists(ticker, filing_date, accession_number)
                             if not exists:
@@ -27030,7 +27030,7 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                                 item_codes = filing.get('item_codes')
                                 documents_url = filing.get('documents_url')
 
-                                if accession_number and filing_date_str:
+                                if accession_number and filing_date_str and documents_url:
                                     # Parse SEC filing date (format: "Jan 30, 2025" or "2025-01-30")
                                     try:
                                         # Try parsing common SEC formats

@@ -793,6 +793,23 @@ Key tables managed through schema initialization:
   - UNIQUE(ticker, summary_date) - overwrites on same-day re-runs
   - Generated during Email #2, reused in Email #3
 
+**Company Releases (NEW - November 2025):**
+- `company_releases`: **Unified storage for FMP press releases AND 8-K SEC filings**
+  - **Replaces deprecated:** `press_releases` and `parsed_press_releases` tables (dropped Nov 2025)
+  - Columns: ticker, company_name, release_type, filing_date, report_title, source_id, source_type, summary_json, summary_html, summary_markdown, ai_provider, ai_model, fiscal_year, fiscal_quarter, exhibit_number, item_codes, generated_at
+  - **Source types:**
+    - `'fmp_press_release'` - FMP API press releases (source_id = NULL)
+    - `'8k_exhibit'` - SEC 8-K exhibits (source_id = sec_8k_filings.id)
+  - **UNIQUE(ticker, filing_date, report_title)** - Handles multiple exhibits per 8-K
+  - **Single AI prompt:** Uses `8k_filing_prompt` for BOTH sources (no wasteful dual processing)
+  - **Helper module:** `modules/company_releases.py` provides cron job helpers:
+    - `db_has_any_fmp_releases_for_ticker()` - Silent init detection
+    - `db_has_any_8k_for_ticker()` - Silent init detection
+    - `db_check_fmp_release_exists()` - Deduplication
+    - `db_check_8k_filing_exists()` - Deduplication (by accession_number)
+    - `db_get_latest_fmp_release_datetime()` - Latest FMP release
+    - `db_get_latest_8k_filing_date()` - Latest 8-K filing
+
 **Other:**
 - `domain_names`: Formal domain name mappings (AI-generated)
 - `competitor_metadata`: Ticker competitor relationships
@@ -2365,3 +2382,62 @@ if not domain:
 - Batch ScrapFly: -$40-70/month
 - URL Caching: -$15-20/month
 - **Total Potential: ~$100/month savings** (18% reduction)
+---
+
+## Migration History
+
+### November 2025: Company Releases Migration
+
+**Objective:** Unify FMP press releases and 8-K SEC filings into single `company_releases` table, eliminating wasteful dual-prompt processing.
+
+**Changes:**
+
+**Deleted (342 lines):**
+- `modules/press_releases.py` (115 lines) - All functions queried dropped `press_releases` table
+- `modules/company_profiles.py` (227 lines) - 3 deprecated functions:
+  - `save_parsed_press_release_to_database()` - Queried dropped `parsed_press_releases` table
+  - `get_parsed_press_releases_for_ticker()` - Queried dropped `parsed_press_releases` table
+  - `delete_parsed_press_release()` - Queried dropped `parsed_press_releases` table
+
+**Added:**
+- `modules/company_releases.py` (211 lines) - Unified helper module with 6 functions for both FMP and 8-K
+- Database table: `company_releases` - Single table for both sources
+
+**Modified:**
+- `app.py` (16 fixes):
+  - FMP worker: Skip old `press_releases` table, save directly to `company_releases`
+  - 8-K worker: Already saving to `company_releases` (no changes needed)
+  - Manual generation endpoint: Updated to save to `company_releases`
+  - Cascade delete endpoints: Updated to query `company_releases`
+  - Email endpoints: Updated to query `company_releases`
+  - Load Research Options: Updated to query `company_releases`
+  - Removed deprecated function imports
+- `templates/admin_research.html`: Removed "Press Releases" dropdown, unified view in "Company Releases"
+
+**Architecture Before:**
+```
+FMP API → press_releases table (transcript prompt)
+        → parsed_press_releases table (8k_filing_prompt)
+
+8-K Edgar → sec_8k_filings table
+          → parsed_press_releases table (8k_filing_prompt)
+```
+
+**Architecture After (November 2025):**
+```
+FMP API → company_releases table (8k_filing_prompt, source_type='fmp_press_release')
+
+8-K Edgar → sec_8k_filings table
+          → company_releases table (8k_filing_prompt, source_type='8k_exhibit')
+```
+
+**Benefits:**
+- ✅ Single AI prompt for both sources (eliminated wasteful dual processing)
+- ✅ Unified viewing in Research Library
+- ✅ Cleaner codebase (-200 net lines)
+- ✅ Better organization (separate FMP vs 8-K helpers)
+- ✅ No duplicate 8-K processing
+
+**Commit:** `70abd65` (November 20, 2025)
+**Deployed:** Production
+

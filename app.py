@@ -12493,8 +12493,8 @@ def export_beta_users_to_csv() -> int:
         raise
 
 
-def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], triage_results: Dict[str, Dict[str, List[Dict]]], time_window_minutes: int = 1440, mode: str = 'daily') -> bool:
-    """Email #1: Article Selection QA - Shows which articles were flagged by AI triage"""
+def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], triage_results: Dict[str, Dict[str, List[Dict]]], time_window_minutes: int = 1440, mode: str = 'daily', report_type: str = 'daily') -> bool:
+    """Email #1: Article Selection QA - Shows which articles were flagged by AI triage (NEW Nov 2025: report_type for subject labels)"""
     try:
         current_time_est = format_timestamp_est(datetime.now(timezone.utc))
 
@@ -12843,7 +12843,9 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
         html.append("</body></html>")
 
         html_content = "".join(html)
-        subject = f"🔍 Article Selection QA: {ticker_list} - {total_flagged} flagged from {total_articles} articles"
+        # NEW (Nov 2025): Add report_type label to subject
+        report_label = "(WEEKLY)" if report_type == 'weekly' else "(DAILY)"
+        subject = f"🔍 Article Selection QA {report_label}: {ticker_list} - {total_flagged} flagged from {total_articles} articles"
 
         # Save Email #1 snapshot to database (for admin dashboard preview)
         # Skip saving for test runs - only save production runs
@@ -13290,8 +13292,9 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
                                                show_ai_analysis: bool = True,
                                                show_descriptions: bool = True,
                                                flagged_article_ids: List[int] = None,
-                                               mode: str = 'daily') -> Dict[str, Dict[str, List[Dict]]]:
-    """Email #2: Content QA - Fetch categorized articles for digest with ticker-specific AI analysis
+                                               mode: str = 'daily',
+                                               report_type: str = 'daily') -> Dict[str, Dict[str, List[Dict]]]:
+    """Email #2: Content QA - Fetch categorized articles for digest with ticker-specific AI analysis (NEW Nov 2025: report_type for subject labels)
 
     Args:
         hours: Time window for articles
@@ -13299,6 +13302,8 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
         show_ai_analysis: If True, include AI analysis boxes in HTML (default True)
         show_descriptions: If True, include article descriptions in HTML (default True)
         flagged_article_ids: If provided, only fetch articles with these IDs (from triage)
+        mode: 'daily' or 'test' mode
+        report_type: 'daily' or 'weekly' for subject line labeling (NEW Nov 2025)
     """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
 
@@ -13459,7 +13464,9 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
         company_name = config.get("company_name", ticker) if config else ticker
         ticker_display_list.append(f"{company_name} ({ticker})")
     ticker_list = ', '.join(ticker_display_list)
-    subject = f"📝 Content QA: {ticker_list} - {total_articles} articles analyzed"
+    # NEW (Nov 2025): Add report_type label to subject
+    report_label = "(WEEKLY)" if report_type == 'weekly' else "(DAILY)"
+    subject = f"📝 Content QA {report_label}: {ticker_list} - {total_articles} articles analyzed"
 
     # Save Email #2 snapshot to database (for admin dashboard preview)
     # Skip saving for test runs - only save production runs
@@ -15200,7 +15207,8 @@ async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_a
             show_ai_analysis=True,
             show_descriptions=True,
             flagged_article_ids=flagged_article_ids,
-            mode=mode
+            mode=mode,
+            report_type=report_type  # NEW: Pass report_type for Email #2 subject label
         )
 
         LOG.info(f"[JOB {job_id}] fetch_digest completed for {ticker} - Email sent: {result.get('status') == 'sent'}")
@@ -20678,8 +20686,12 @@ async def cron_ingest(
         LOG.info("=== PHASE 3: SENDING ENHANCED QUICK TRIAGE EMAIL ===")
         memory_monitor.take_snapshot("PHASE3_START")
 
+        # NEW (Nov 2025): Determine report_type from minutes
+        # Weekly reports use 7-day lookback (10080 min), daily use 1-day (1440 min)
+        report_type = 'weekly' if minutes > 1440 else 'daily'
+
         with resource_cleanup_context("email_sending"):
-            quick_email_sent = send_enhanced_quick_intelligence_email(articles_by_ticker, triage_results, minutes, mode=mode)
+            quick_email_sent = send_enhanced_quick_intelligence_email(articles_by_ticker, triage_results, minutes, mode=mode, report_type=report_type)
         
         LOG.info(f"Enhanced quick triage email sent: {quick_email_sent}")
         memory_monitor.take_snapshot("PHASE3_COMPLETE")

@@ -14279,7 +14279,8 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
 def generate_email_html_core(
     ticker: str,
     hours: int = 24,
-    recipient_email: str = None
+    recipient_email: str = None,
+    report_type: str = 'daily'
 ) -> Dict[str, any]:
     """
     Email #3 generation - Stock Intelligence Report with Phase 3 context integration.
@@ -14292,6 +14293,7 @@ def generate_email_html_core(
         recipient_email:
             - If provided: Generate real unsubscribe token (for test/immediate send)
             - If None: Use placeholder {{UNSUBSCRIBE_TOKEN}} (for production multi-recipient)
+        report_type: 'daily' or 'weekly' - determines section filtering and branding (NEW Nov 2025)
 
     Returns:
         {
@@ -14367,6 +14369,17 @@ def generate_email_html_core(
         LOG.error(f"[{ticker}] Failed to parse Phase 3 JSON in Email #3: {e}")
         sections = {}  # Empty sections
 
+    # NEW (Nov 2025): Filter sections based on report_type
+    if report_type == 'daily':
+        # Daily reports hide 4 sections (AI still generates them, just don't display)
+        sections.pop('upside_scenario', None)
+        sections.pop('downside_scenario', None)
+        sections.pop('key_variables', None)
+        sections.pop('upcoming_catalysts', None)
+        LOG.info(f"[{ticker}] Daily report: Filtered to {len(sections)} sections (hid upside/downside/variables/catalysts)")
+    else:
+        LOG.info(f"[{ticker}] Weekly report: Showing all {len(sections)} sections")
+
     # Fetch flagged articles (already sorted by SQL) - SAME AS EMAIL #3
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     articles_by_category = {"company": [], "industry": [], "competitor": [], "value_chain": []}
@@ -14437,6 +14450,18 @@ def generate_email_html_core(
     if paywall_count > 0:
         analysis_message += f" {paywall_count} {'article' if paywall_count == 1 else 'articles'} behind paywalls (titles shown)."
 
+    # NEW (Nov 2025): Dynamic branding based on report_type
+    if report_type == 'weekly':
+        header_title = "WEAVARA WEEKLY INTELLIGENCE"
+        footer_brand = "Weavara"
+        footer_subtitle = "Weekly Intelligence Delivered Every Monday"
+        subject_prefix = "📊 Weekly Intelligence"
+    else:  # daily
+        header_title = "WEAVARA DAILY BRIEF"
+        footer_brand = "Weavara"
+        footer_subtitle = "Daily Brief Delivered Tuesday-Sunday"
+        subject_prefix = "📊 Daily Brief"
+
     # Unsubscribe URL
     if recipient_email:
         unsubscribe_token = get_or_create_unsubscribe_token(recipient_email)
@@ -14478,7 +14503,7 @@ def generate_email_html_core(
                             <table role="presentation" style="width: 100%; border-collapse: collapse;">
                                 <tr>
                                     <td style="width: 58%;">
-                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">STOCK INTELLIGENCE</div>
+                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">{header_title}</div>
                                     </td>
                                     <td align="right" style="width: 42%;">
                                         <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">{current_date} • {market_status}</div>
@@ -14533,8 +14558,8 @@ def generate_email_html_core(
                             <table role="presentation" style="width: 100%; border-collapse: collapse;">
                                 <tr>
                                     <td>
-                                        <div style="font-size: 14px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">StockDigest</div>
-                                        <div style="font-size: 12px; opacity: 0.8; margin-bottom: 8px; color: #ffffff;">Stock Intelligence Delivered Daily</div>
+                                        <div style="font-size: 14px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">{footer_brand}</div>
+                                        <div style="font-size: 12px; opacity: 0.8; margin-bottom: 8px; color: #ffffff;">{footer_subtitle}</div>
 
                                         <!-- Legal Disclaimer -->
                                         <div style="font-size: 10px; opacity: 0.7; line-height: 1.4; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2); color: #ffffff;">
@@ -14554,7 +14579,7 @@ def generate_email_html_core(
 
                                         <!-- Copyright -->
                                         <div style="font-size: 10px; opacity: 0.6; margin-top: 12px; color: #ffffff;">
-                                            © 2025 StockDigest. All rights reserved.
+                                            © 2025 {footer_brand}. All rights reserved.
                                         </div>
                                     </td>
                                 </tr>
@@ -14572,7 +14597,7 @@ def generate_email_html_core(
 </html>'''
 
     # ========== Official user-facing email subject ==========
-    subject = f"📊 Stock Intelligence: {company_name} ({ticker}) - {analyzed_count} articles analyzed"
+    subject = f"{subject_prefix}: {company_name} ({ticker}) - {analyzed_count} articles analyzed"
 
     return {
         "html": html,
@@ -15063,7 +15088,7 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
 
     return flagged_article_ids
 
-async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_article_ids: List[int] = None, mode: str = 'daily'):
+async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_article_ids: List[int] = None, mode: str = 'daily', report_type: str = 'daily'):
     """Wrapper for digest logic with error handling - sends Stock Intelligence Email with executive summary
 
     NEW (Oct 2025): Scraping happens HERE in digest phase, AFTER Phase 1.5 URL resolution
@@ -17439,7 +17464,8 @@ async def process_ticker_job(job: dict):
             ticker=ticker,
             minutes=minutes,
             flagged_article_ids=flagged_article_ids,
-            mode=config.get('mode', 'daily')
+            mode=config.get('mode', 'daily'),
+            report_type=config.get('report_type', 'daily')  # NEW: Pass report_type from config
         )
 
         update_job_status(job_id, progress=95)
@@ -17573,7 +17599,8 @@ async def process_ticker_job(job: dict):
                                     email3_data = generate_email_html_core(
                                         ticker=ticker,
                                         hours=int(minutes/60),
-                                        recipient_email=None  # Use {{UNSUBSCRIBE_TOKEN}} placeholder
+                                        recipient_email=None,  # Use {{UNSUBSCRIBE_TOKEN}} placeholder
+                                        report_type=report_type  # NEW: Pass report_type for section filtering
                                     )
 
                                     if email3_data:
@@ -17586,9 +17613,10 @@ async def process_ticker_job(job: dict):
                                             cur.execute("""
                                                 INSERT INTO email_queue (
                                                     ticker, company_name, recipients, email_html, email_subject,
-                                                    article_count, status, is_production, heartbeat, created_at
+                                                    article_count, status, is_production, report_type, summary_date,
+                                                    heartbeat, created_at
                                                 )
-                                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_DATE, NOW(), NOW())
                                                 ON CONFLICT (ticker) DO UPDATE
                                                 SET company_name = EXCLUDED.company_name,
                                                     recipients = EXCLUDED.recipients,
@@ -17598,12 +17626,14 @@ async def process_ticker_job(job: dict):
                                                     status = 'ready',
                                                     error_message = NULL,
                                                     is_production = EXCLUDED.is_production,
+                                                    report_type = EXCLUDED.report_type,
+                                                    summary_date = EXCLUDED.summary_date,
                                                     heartbeat = NOW(),
                                                     updated_at = NOW()
                                             """, (
                                                 ticker, company_name, recipients,
                                                 email3_data['html'], email3_data['subject'],
-                                                email3_data['article_count'], 'ready', is_production
+                                                email3_data['article_count'], 'ready', is_production, report_type
                                             ))
                                             conn.commit()
 
@@ -28028,6 +28058,22 @@ async def regenerate_email_api(request: Request):
 
             summary_row = cur.fetchone()
 
+        # Step 2.5: Fetch report_type from email_queue (NEW Nov 2025)
+        report_type = 'daily'  # Default
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT report_type
+                FROM email_queue
+                WHERE ticker = %s
+                ORDER BY created_at DESC LIMIT 1
+            """, (ticker,))
+            queue_row = cur.fetchone()
+            if queue_row and queue_row['report_type']:
+                report_type = queue_row['report_type']
+                LOG.info(f"[{ticker}] Using report_type='{report_type}' from email_queue")
+            else:
+                LOG.info(f"[{ticker}] No report_type in queue, defaulting to 'daily'")
+
         if not summary_row or not summary_row['article_ids']:
             return {
                 "status": "error",
@@ -28369,7 +28415,8 @@ async def regenerate_email_api(request: Request):
                         email3_data = generate_email_html_core(
                             ticker=ticker,
                             hours=hours,
-                            recipient_email=None  # Use {{UNSUBSCRIBE_TOKEN}} placeholder
+                            recipient_email=None,  # Use {{UNSUBSCRIBE_TOKEN}} placeholder
+                            report_type=report_type  # NEW: Use stored report_type for section filtering
                         )
 
                         if email3_data:

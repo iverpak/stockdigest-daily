@@ -1101,6 +1101,11 @@ def parse_transcript_summary_sections(summary_text: str, ticker: str = None) -> 
     # Normalize section marker prefixes for flexible matching
     section_marker_prefixes = tuple(normalize_header(marker) for marker, _ in section_markers)
 
+    # Q&A state tracking (for grouping Q/A pairs)
+    qa_state = None  # None, 'Q', or 'A'
+    qa_current_q = []  # Lines accumulating for current question
+    qa_current_a = []  # Lines accumulating for current answer
+
     for line in summary_text.split('\n'):
         line_stripped = line.strip()
 
@@ -1117,6 +1122,17 @@ def parse_transcript_summary_sections(summary_text: str, ticker: str = None) -> 
             marker_normalized = normalize_header(marker)
 
             if line_normalized.startswith(marker_normalized):
+                # Flush any pending Q&A content before switching sections
+                if qa_state == 'Q' and qa_current_q:
+                    sections['qa_highlights'].append('\n'.join(qa_current_q))
+                    qa_current_q = []
+                elif qa_state == 'A' and qa_current_a:
+                    sections['qa_highlights'].append('\n'.join(qa_current_a))
+                    qa_current_a = []
+                # Reset Q&A state when leaving qa_highlights section
+                if current_section == 'qa_highlights' and section_key != 'qa_highlights':
+                    qa_state = None
+
                 current_section = section_key
                 is_header = True
 
@@ -1131,7 +1147,18 @@ def parse_transcript_summary_sections(summary_text: str, ticker: str = None) -> 
 
                 if content_after_header:
                     # Handle different section types
-                    if current_section in ['bottom_line', 'qa_highlights', 'upside_scenario', 'downside_scenario']:
+                    if current_section == 'qa_highlights':
+                        # Q&A section - content on same line as header is rare, but handle it
+                        # Check if it's a Q: or A: line
+                        if content_after_header.startswith('Q:'):
+                            qa_state = 'Q'
+                            qa_current_q = [content_after_header]
+                        elif content_after_header.startswith('A:'):
+                            qa_state = 'A'
+                            qa_current_a = [content_after_header]
+                        # Skip content like "HIGHLIGHTS" from "## Q&A HIGHLIGHTS" header
+                        # (Only process actual Q:/A: content)
+                    elif current_section in ['bottom_line', 'upside_scenario', 'downside_scenario']:
                         # Paragraph sections - capture all text
                         sections[current_section].append(content_after_header)
                     else:
@@ -1157,8 +1184,39 @@ def parse_transcript_summary_sections(summary_text: str, ticker: str = None) -> 
         if not is_header and current_section:
             # Line is content, not a header
 
-            # Special handling for sections that capture ALL text (paragraphs)
-            if current_section in ['bottom_line', 'qa_highlights', 'upside_scenario', 'downside_scenario']:
+            # Special Q&A handling (accumulate into Q/A pairs)
+            if current_section == 'qa_highlights':
+                # Skip lines that start with section markers (normalized check)
+                if not line_normalized.startswith(section_marker_prefixes):
+                    # Detect Q: or A: line starts
+                    if line_stripped.startswith('Q:'):
+                        # Save previous A if we were accumulating one
+                        if qa_state == 'A' and qa_current_a:
+                            # Join answer lines with newlines
+                            sections['qa_highlights'].append('\n'.join(qa_current_a))
+                            qa_current_a = []
+                        # Start new question
+                        qa_state = 'Q'
+                        qa_current_q = [line_stripped]  # Start with "Q: Name, Firm"
+                    elif line_stripped.startswith('A:'):
+                        # Save question and start answer
+                        if qa_state == 'Q' and qa_current_q:
+                            # Join question lines with newlines
+                            sections['qa_highlights'].append('\n'.join(qa_current_q))
+                            qa_current_q = []
+                        # Start new answer
+                        qa_state = 'A'
+                        qa_current_a = [line_stripped]  # Start with "A:"
+                    else:
+                        # Regular content line - append to current Q or A
+                        if qa_state == 'Q' and line_stripped:
+                            qa_current_q.append(line_stripped)
+                        elif qa_state == 'A' and line_stripped:
+                            qa_current_a.append(line_stripped)
+                        # Skip blank lines (spacing handled by HTML builder)
+
+            # Other paragraph sections (bottom_line, upside_scenario, downside_scenario)
+            elif current_section in ['bottom_line', 'upside_scenario', 'downside_scenario']:
                 # Skip lines that start with section markers (normalized check)
                 if not line_normalized.startswith(section_marker_prefixes):
                     # Skip empty lines at start, but keep them once content exists
@@ -1190,6 +1248,14 @@ def parse_transcript_summary_sections(summary_text: str, ticker: str = None) -> 
                     if continuation:
                         # Append to the last bullet with a line break
                         sections[current_section][-1] += '\n' + continuation
+
+    # Flush any remaining Q&A content at end of parsing
+    if qa_state == 'Q' and qa_current_q:
+        # Question without answer (edge case)
+        sections['qa_highlights'].append('\n'.join(qa_current_q))
+    elif qa_state == 'A' and qa_current_a:
+        # Final answer
+        sections['qa_highlights'].append('\n'.join(qa_current_a))
 
     # Debug logging: Check if parser captured content
     total_items = sum(len(v) for v in sections.values())

@@ -639,7 +639,7 @@ Select the {target_cap} most important articles about {company_name} from the {l
 
             generation_config = {
                 "temperature": 0.0,
-                "max_output_tokens": 8192,
+                "max_output_tokens": 16384,
                 "response_mime_type": "application/json"
             }
 
@@ -728,7 +728,7 @@ Select up to {target_cap} articles most likely to contain quantifiable fundament
 
             generation_config = {
                 "temperature": 0.0,
-                "max_output_tokens": 8192,
+                "max_output_tokens": 16384,
                 "response_mime_type": "application/json"
             }
 
@@ -807,7 +807,7 @@ Select the {target_cap} most important articles about {competitor_name} from the
 
             generation_config = {
                 "temperature": 0.0,
-                "max_output_tokens": 8192,
+                "max_output_tokens": 16384,
                 "response_mime_type": "application/json"
             }
 
@@ -887,7 +887,7 @@ Select the {target_cap} highest-quality articles about {upstream_company_name} f
 
             generation_config = {
                 "temperature": 0.0,
-                "max_output_tokens": 8192,
+                "max_output_tokens": 16384,
                 "response_mime_type": "application/json"
             }
 
@@ -967,7 +967,7 @@ Select the {target_cap} highest-quality articles about {downstream_company_name}
 
             generation_config = {
                 "temperature": 0.0,
-                "max_output_tokens": 8192,
+                "max_output_tokens": 16384,
                 "response_mime_type": "application/json"
             }
 

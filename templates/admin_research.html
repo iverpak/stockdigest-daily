@@ -1298,7 +1298,7 @@
 
         function getTableHeaders(type) {
             const common = `
-                <th onclick="sortTable('ticker')" style="padding: 8px; text-align: left; cursor: pointer; font-size: 13px;">
+                <th onclick="sortTable('ticker')" style="padding: 10px; text-align: left; cursor: pointer; font-size: 13px;">
                     Ticker <span id="sort-ticker" style="font-size: 10px;">▼</span>
                 </th>
             `;
@@ -1306,64 +1306,64 @@
             switch (type) {
                 case '10k':
                     return common + `
-                        <th style="padding: 8px; text-align: left; font-size: 13px;">Company</th>
-                        <th onclick="sortTable('fiscal_year')" style="padding: 8px; text-align: left; cursor: pointer; font-size: 13px;">FY</th>
-                        <th onclick="sortTable('generated_at')" style="padding: 8px; text-align: left; cursor: pointer; font-size: 13px;">Generated</th>
-                        <th style="padding: 8px; text-align: center; font-size: 13px;">Tokens</th>
-                        <th style="padding: 8px; text-align: center; font-size: 13px;">Actions</th>
+                        <th style="padding: 10px; text-align: left; font-size: 13px;">Company</th>
+                        <th onclick="sortTable('fiscal_year')" style="padding: 10px; text-align: left; cursor: pointer; font-size: 13px;">FY</th>
+                        <th onclick="sortTable('generated_at')" style="padding: 10px; text-align: left; cursor: pointer; font-size: 13px;">Generated</th>
+                        <th style="padding: 10px; text-align: center; font-size: 13px;">Tokens</th>
+                        <th style="padding: 10px; text-align: center; font-size: 13px;">Actions</th>
                     `;
                 case '10q':
                     return common + `
-                        <th style="padding: 8px; text-align: left; font-size: 13px;">Company</th>
-                        <th onclick="sortTable('fiscal_year')" style="padding: 8px; text-align: left; cursor: pointer; font-size: 13px;">Period</th>
-                        <th onclick="sortTable('generated_at')" style="padding: 8px; text-align: left; cursor: pointer; font-size: 13px;">Generated</th>
-                        <th style="padding: 8px; text-align: center; font-size: 13px;">Tokens</th>
-                        <th style="padding: 8px; text-align: center; font-size: 13px;">Actions</th>
+                        <th style="padding: 10px; text-align: left; font-size: 13px;">Company</th>
+                        <th onclick="sortTable('fiscal_year')" style="padding: 10px; text-align: left; cursor: pointer; font-size: 13px;">Period</th>
+                        <th onclick="sortTable('generated_at')" style="padding: 10px; text-align: left; cursor: pointer; font-size: 13px;">Generated</th>
+                        <th style="padding: 10px; text-align: center; font-size: 13px;">Tokens</th>
+                        <th style="padding: 10px; text-align: center; font-size: 13px;">Actions</th>
                     `;
                 case 'presentations':
                     return common + `
-                        <th style="padding: 12px; text-align: left;">Company</th>
-                        <th style="padding: 12px; text-align: left;">Title</th>
-                        <th onclick="sortTable('presentation_date')" style="padding: 12px; text-align: left; cursor: pointer;">Date</th>
-                        <th style="padding: 12px; text-align: center;">Type</th>
-                        <th style="padding: 12px; text-align: center;">Pages</th>
-                        <th onclick="sortTable('generated_at')" style="padding: 12px; text-align: left; cursor: pointer;">Analyzed</th>
-                        <th style="padding: 12px; text-align: center;">Actions</th>
+                        <th style="padding: 10px; text-align: left; font-size: 13px;">Company</th>
+                        <th style="padding: 10px; text-align: left; font-size: 13px;">Title</th>
+                        <th onclick="sortTable('presentation_date')" style="padding: 10px; text-align: left; cursor: pointer; font-size: 13px;">Date</th>
+                        <th style="padding: 10px; text-align: center; font-size: 13px;">Type</th>
+                        <th style="padding: 10px; text-align: center; font-size: 13px;">Pages</th>
+                        <th onclick="sortTable('generated_at')" style="padding: 10px; text-align: left; cursor: pointer; font-size: 13px;">Analyzed</th>
+                        <th style="padding: 10px; text-align: center; font-size: 13px;">Actions</th>
                     `;
                 case 'transcripts':
                     return common + `
-                        <th style="padding: 12px; text-align: left;">Quarter</th>
-                        <th onclick="sortTable('report_date')" style="padding: 12px; text-align: left; cursor: pointer;">Report Date</th>
-                        <th style="padding: 12px; text-align: center;">Words</th>
-                        <th onclick="sortTable('generated_at')" style="padding: 12px; text-align: left; cursor: pointer;">Generated</th>
-                        <th style="padding: 12px; text-align: center;">Actions</th>
+                        <th style="padding: 10px; text-align: left; font-size: 13px;">Quarter</th>
+                        <th onclick="sortTable('report_date')" style="padding: 10px; text-align: left; cursor: pointer; font-size: 13px;">Report Date</th>
+                        <th style="padding: 10px; text-align: center; font-size: 13px;">Words</th>
+                        <th onclick="sortTable('generated_at')" style="padding: 10px; text-align: left; cursor: pointer; font-size: 13px;">Generated</th>
+                        <th style="padding: 10px; text-align: center; font-size: 13px;">Actions</th>
                     `;
                 case 'press_releases':
                     return common + `
-                        <th style="padding: 12px; text-align: left;">Title</th>
-                        <th onclick="sortTable('report_date')" style="padding: 12px; text-align: left; cursor: pointer;">Date</th>
-                        <th style="padding: 12px; text-align: center;">Words</th>
-                        <th onclick="sortTable('generated_at')" style="padding: 12px; text-align: left; cursor: pointer;">Generated</th>
-                        <th style="padding: 12px; text-align: center;">Actions</th>
+                        <th style="padding: 10px; text-align: left; font-size: 13px;">Title</th>
+                        <th onclick="sortTable('report_date')" style="padding: 10px; text-align: left; cursor: pointer; font-size: 13px;">Date</th>
+                        <th style="padding: 10px; text-align: center; font-size: 13px;">Words</th>
+                        <th onclick="sortTable('generated_at')" style="padding: 10px; text-align: left; cursor: pointer; font-size: 13px;">Generated</th>
+                        <th style="padding: 10px; text-align: center; font-size: 13px;">Actions</th>
                     `;
                 case '8k_filings':
                     return common + `
-                        <th style="padding: 12px; text-align: left;">Date</th>
-                        <th style="padding: 12px; text-align: center;">Exhibit</th>
-                        <th style="padding: 12px; text-align: left;">Description</th>
-                        <th style="padding: 12px; text-align: center;">Items</th>
-                        <th style="padding: 12px; text-align: center;">Actions</th>
+                        <th style="padding: 10px; text-align: left; font-size: 13px;">Date</th>
+                        <th style="padding: 10px; text-align: center; font-size: 13px;">Exhibit</th>
+                        <th style="padding: 10px; text-align: left; font-size: 13px;">Description</th>
+                        <th style="padding: 10px; text-align: center; font-size: 13px;">Items</th>
+                        <th style="padding: 10px; text-align: center; font-size: 13px;">Actions</th>
                     `;
                 case 'parsed_prs':
                     return common + `
-                        <th style="padding: 12px; text-align: center;">Source</th>
-                        <th style="padding: 12px; text-align: center;">Exhibit</th>
-                        <th style="padding: 12px; text-align: left;">Title</th>
-                        <th onclick="sortTable('document_date')" style="padding: 12px; text-align: left; cursor: pointer;">Date</th>
-                        <th style="padding: 12px; text-align: center;">Quarter</th>
-                        <th style="padding: 12px; text-align: center;">FY</th>
-                        <th style="padding: 12px; text-align: center;">Chars</th>
-                        <th style="padding: 12px; text-align: center;">Actions</th>
+                        <th style="padding: 10px; text-align: center; font-size: 13px;">Source</th>
+                        <th style="padding: 10px; text-align: center; font-size: 13px;">Exhibit</th>
+                        <th style="padding: 10px; text-align: left; font-size: 13px;">Title</th>
+                        <th onclick="sortTable('document_date')" style="padding: 10px; text-align: left; cursor: pointer; font-size: 13px;">Date</th>
+                        <th style="padding: 10px; text-align: center; font-size: 13px;">Quarter</th>
+                        <th style="padding: 10px; text-align: center; font-size: 13px;">FY</th>
+                        <th style="padding: 10px; text-align: center; font-size: 13px;">Chars</th>
+                        <th style="padding: 10px; text-align: center; font-size: 13px;">Actions</th>
                     `;
             }
         }
@@ -1389,14 +1389,14 @@
                     const tokensOut10k = (doc.token_count_output || 0).toLocaleString();
 
                     return `
-                        <td style="padding: 8px; font-weight: 600; color: #1e40af; font-size: 13px;">${doc.ticker}</td>
-                        <td style="padding: 8px; font-size: 12px;">${doc.company_name}</td>
-                        <td style="padding: 8px; font-size: 12px;">${doc.fiscal_year}</td>
-                        <td style="padding: 8px; color: #6b7280; font-size: 12px;">${generatedDate}</td>
-                        <td style="padding: 8px; text-align: center; color: #6b7280; font-size: 11px;">
+                        <td style="padding: 10px; font-weight: 600; color: #1e40af; font-size: 13px;">${doc.ticker}</td>
+                        <td style="padding: 10px; font-size: 12px;">${doc.company_name}</td>
+                        <td style="padding: 10px; font-size: 12px;">${doc.fiscal_year}</td>
+                        <td style="padding: 10px; color: #6b7280; font-size: 12px;">${generatedDate}</td>
+                        <td style="padding: 10px; text-align: center; color: #6b7280; font-size: 11px;">
                             ${tokensIn10k} / ${tokensOut10k}
                         </td>
-                        <td style="padding: 8px; text-align: center;">
+                        <td style="padding: 10px; text-align: center;">
                             ${getActionButtons(doc, type)}
                         </td>
                     `;
@@ -1420,54 +1420,54 @@
                     }
 
                     return `
-                        <td style="padding: 8px; font-weight: 600; color: #1e40af; font-size: 13px;">${doc.ticker}</td>
-                        <td style="padding: 8px; font-size: 12px;">${doc.company_name}</td>
-                        <td style="padding: 8px; font-size: 12px;">${period}</td>
-                        <td style="padding: 8px; color: #6b7280; font-size: 12px;">${generatedDate}</td>
-                        <td style="padding: 8px; text-align: center; color: #6b7280; font-size: 11px;">
+                        <td style="padding: 10px; font-weight: 600; color: #1e40af; font-size: 13px;">${doc.ticker}</td>
+                        <td style="padding: 10px; font-size: 12px;">${doc.company_name}</td>
+                        <td style="padding: 10px; font-size: 12px;">${period}</td>
+                        <td style="padding: 10px; color: #6b7280; font-size: 12px;">${generatedDate}</td>
+                        <td style="padding: 10px; text-align: center; color: #6b7280; font-size: 11px;">
                             ${tokensIn10q} / ${tokensOut10q}
                         </td>
-                        <td style="padding: 8px; text-align: center;">
+                        <td style="padding: 10px; text-align: center;">
                             ${getActionButtons(doc, type)}
                         </td>
                     `;
                 case 'presentations':
                     return `
-                        <td style="padding: 12px; font-weight: 600; color: #1e40af;">${escapeHtml(doc.ticker)}</td>
-                        <td style="padding: 12px;">${escapeHtml(doc.company_name) || 'N/A'}</td>
-                        <td style="padding: 12px; font-size: 13px;">${escapeHtml(doc.presentation_title) || 'N/A'}</td>
-                        <td style="padding: 12px; font-size: 13px;">${doc.presentation_date || 'N/A'}</td>
-                        <td style="padding: 12px; text-align: center; font-size: 13px;">${escapeHtml(doc.presentation_type) || 'N/A'}</td>
-                        <td style="padding: 12px; text-align: center;">${doc.page_count || 'N/A'}</td>
-                        <td style="padding: 12px; color: #6b7280; font-size: 13px;">${generatedDate}</td>
-                        <td style="padding: 12px; text-align: center;">
+                        <td style="padding: 10px; font-weight: 600; color: #1e40af; font-size: 13px;">${escapeHtml(doc.ticker)}</td>
+                        <td style="padding: 10px; font-size: 12px;">${escapeHtml(doc.company_name) || 'N/A'}</td>
+                        <td style="padding: 10px; font-size: 12px;">${escapeHtml(doc.presentation_title) || 'N/A'}</td>
+                        <td style="padding: 10px; font-size: 12px;">${doc.presentation_date || 'N/A'}</td>
+                        <td style="padding: 10px; text-align: center; font-size: 12px;">${escapeHtml(doc.presentation_type) || 'N/A'}</td>
+                        <td style="padding: 10px; text-align: center; font-size: 12px;">${doc.page_count || 'N/A'}</td>
+                        <td style="padding: 10px; color: #6b7280; font-size: 12px;">${generatedDate}</td>
+                        <td style="padding: 10px; text-align: center;">
                             ${getActionButtons(doc, type)}
                         </td>
                     `;
                 case 'transcripts':
                     return `
-                        <td style="padding: 12px; font-weight: 600; color: #1e40af;">${doc.ticker}</td>
-                        <td style="padding: 12px;">${doc.quarter_label}</td>
-                        <td style="padding: 12px; color: #6b7280; font-size: 13px;">${doc.report_date || 'N/A'}</td>
-                        <td style="padding: 12px; text-align: center;">${(doc.word_count || 0).toLocaleString()}</td>
-                        <td style="padding: 12px; color: #6b7280; font-size: 13px;">${generatedDate}</td>
-                        <td style="padding: 12px; text-align: center;">
+                        <td style="padding: 10px; font-weight: 600; color: #1e40af; font-size: 13px;">${doc.ticker}</td>
+                        <td style="padding: 10px; font-size: 12px;">${doc.quarter_label}</td>
+                        <td style="padding: 10px; color: #6b7280; font-size: 12px;">${doc.report_date || 'N/A'}</td>
+                        <td style="padding: 10px; text-align: center; font-size: 12px;">${(doc.word_count || 0).toLocaleString()}</td>
+                        <td style="padding: 10px; color: #6b7280; font-size: 12px;">${generatedDate}</td>
+                        <td style="padding: 10px; text-align: center;">
                             ${getActionButtons(doc, type)}
                         </td>
                     `;
                 case 'press_releases':
-                    // Title truncation and escaping
+                    // Title truncation and escaping - increased to 100 chars for better readability
                     const prRawTitle = doc.title || '';
-                    const prTruncated = prRawTitle.length > 80 ? prRawTitle.substring(0, 80) + '...' : prRawTitle;
+                    const prTruncated = prRawTitle.length > 100 ? prRawTitle.substring(0, 100) + '...' : prRawTitle;
                     const prTitle = escapeHtml(prTruncated) || 'Press Release';
 
                     return `
-                        <td style="padding: 12px; font-weight: 600; color: #1e40af;">${escapeHtml(doc.ticker)}</td>
-                        <td style="padding: 12px; font-size: 13px; max-width: 400px;">${prTitle}</td>
-                        <td style="padding: 12px; color: #6b7280; font-size: 13px;">${doc.report_date || 'N/A'}</td>
-                        <td style="padding: 12px; text-align: center;">${(doc.word_count || 0).toLocaleString()}</td>
-                        <td style="padding: 12px; color: #6b7280; font-size: 13px;">${generatedDate}</td>
-                        <td style="padding: 12px; text-align: center;">
+                        <td style="padding: 10px; font-weight: 600; color: #1e40af; font-size: 13px;">${escapeHtml(doc.ticker)}</td>
+                        <td style="padding: 10px; font-size: 12px; max-width: 450px;">${prTitle}</td>
+                        <td style="padding: 10px; color: #6b7280; font-size: 12px;">${doc.report_date || 'N/A'}</td>
+                        <td style="padding: 10px; text-align: center; font-size: 12px;">${(doc.word_count || 0).toLocaleString()}</td>
+                        <td style="padding: 10px; color: #6b7280; font-size: 12px;">${generatedDate}</td>
+                        <td style="padding: 10px; text-align: center;">
                             ${getActionButtons(doc, type)}
                         </td>
                     `;
@@ -1475,19 +1475,19 @@
                     const exhibitDesc = escapeHtml(doc.exhibit_description) || 'N/A';
 
                     return `
-                        <td style="padding: 12px; font-weight: 600; color: #1e40af;">${escapeHtml(doc.ticker)}</td>
-                        <td style="padding: 12px; color: #6b7280; font-size: 13px;">${formatShortDate(doc.filing_date) || 'N/A'}</td>
-                        <td style="padding: 12px; text-align: center; font-weight: 600; color: #1e40af; font-size: 14px;">${doc.exhibit_number || 'N/A'}</td>
-                        <td style="padding: 12px; font-size: 13px; max-width: 300px;">${exhibitDesc}</td>
-                        <td style="padding: 12px; text-align: center; color: #6b7280; font-size: 13px;">${doc.item_codes || 'Unknown'}</td>
-                        <td style="padding: 12px; text-align: center;">
+                        <td style="padding: 10px; font-weight: 600; color: #1e40af; font-size: 13px;">${escapeHtml(doc.ticker)}</td>
+                        <td style="padding: 10px; color: #6b7280; font-size: 12px;">${formatShortDate(doc.filing_date) || 'N/A'}</td>
+                        <td style="padding: 10px; text-align: center; font-weight: 600; color: #1e40af; font-size: 13px;">${doc.exhibit_number || 'N/A'}</td>
+                        <td style="padding: 10px; font-size: 12px; max-width: 500px;">${exhibitDesc}</td>
+                        <td style="padding: 10px; text-align: center; color: #6b7280; font-size: 11px;">${doc.item_codes || 'Unknown'}</td>
+                        <td style="padding: 10px; text-align: center;">
                             ${getActionButtons(doc, type)}
                         </td>
                     `;
                 case 'parsed_prs':
-                    // Truncate and escape title to prevent HTML injection
+                    // Truncate and escape title to prevent HTML injection - increased to 100 chars
                     const rawTitle = doc.document_title || '';
-                    const truncatedTitle = rawTitle.length > 50 ? rawTitle.substring(0, 50) + '...' : rawTitle;
+                    const truncatedTitle = rawTitle.length > 100 ? rawTitle.substring(0, 100) + '...' : rawTitle;
                     const parsedTitle = escapeHtml(truncatedTitle) || 'N/A';
                     // Format source type badge
                     const sourceTypeBadge = doc.source_type === '8k_exhibit'
@@ -1504,15 +1504,15 @@
                     const fiscalYear = doc.fiscal_year || '—';
 
                     return `
-                        <td style="padding: 12px; font-weight: 600; color: #1e40af;">${escapeHtml(doc.ticker)}</td>
-                        <td style="padding: 12px; text-align: center;">${sourceTypeBadge}</td>
-                        <td style="padding: 12px; text-align: center; font-family: monospace; font-size: 11px; color: #6b7280;">${exhibitLabel}</td>
-                        <td style="padding: 12px; font-size: 13px; max-width: 250px;" title="${escapeHtml(rawTitle)}">${parsedTitle}</td>
-                        <td style="padding: 12px; color: #6b7280; font-size: 13px;">${docDate}</td>
-                        <td style="padding: 12px; text-align: center; font-family: monospace; font-size: 12px; color: #6b7280;">${fiscalQuarter}</td>
-                        <td style="padding: 12px; text-align: center; font-family: monospace; font-size: 12px; color: #6b7280;">${fiscalYear}</td>
-                        <td style="padding: 12px; text-align: center;">${(doc.char_count || 0).toLocaleString()}</td>
-                        <td style="padding: 12px; text-align: center;">
+                        <td style="padding: 10px; font-weight: 600; color: #1e40af; font-size: 13px;">${escapeHtml(doc.ticker)}</td>
+                        <td style="padding: 10px; text-align: center;">${sourceTypeBadge}</td>
+                        <td style="padding: 10px; text-align: center; font-family: monospace; font-size: 11px; color: #6b7280;">${exhibitLabel}</td>
+                        <td style="padding: 10px; font-size: 12px; max-width: 450px;" title="${escapeHtml(rawTitle)}">${parsedTitle}</td>
+                        <td style="padding: 10px; color: #6b7280; font-size: 12px;">${docDate}</td>
+                        <td style="padding: 10px; text-align: center; font-family: monospace; font-size: 11px; color: #6b7280;">${fiscalQuarter}</td>
+                        <td style="padding: 10px; text-align: center; font-family: monospace; font-size: 11px; color: #6b7280;">${fiscalYear}</td>
+                        <td style="padding: 10px; text-align: center; font-size: 11px;">${(doc.char_count || 0).toLocaleString()}</td>
+                        <td style="padding: 10px; text-align: center;">
                             ${getActionButtons(doc, type)}
                         </td>
                     `;

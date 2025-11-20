@@ -695,7 +695,18 @@ def get_all_8k_exhibits(documents_url: str) -> List[Dict[str, Any]]:
         LOG.info(f"✅ Found {len(exhibits)} HTML exhibits total")
         return exhibits
 
+    except ValueError as e:
+        # Distinguish between expected fallback signal vs real parsing errors
+        if "No HTML exhibits found" in str(e):
+            # Expected condition - some 8-Ks genuinely have no exhibits
+            # Don't log as error - caller will handle fallback and log at INFO level
+            raise
+        else:
+            # Real ValueError (e.g., "Documents table not found on index page")
+            LOG.error(f"Failed to parse exhibits from documents page: {e}")
+            raise
     except Exception as e:
+        # Network errors, HTTP errors, BeautifulSoup parsing errors, etc.
         LOG.error(f"Failed to parse exhibits from documents page: {e}")
         raise
 

@@ -28727,6 +28727,10 @@ async def rerun_all_queue_api(request: Request):
         # Submit to existing job queue system
         tickers_list = sorted(list(ticker_recipients.keys()))
 
+        # NEW: Determine report type based on day of week (same logic as other bulk endpoints)
+        report_type, lookback_minutes = get_report_type_and_lookback()
+        LOG.info(f"📅 Report Type: {report_type.upper()}, Lookback: {lookback_minutes}min")
+
         with db() as conn, conn.cursor() as cur:
             # Create batch record
             cur.execute("""
@@ -28734,7 +28738,8 @@ async def rerun_all_queue_api(request: Request):
                 VALUES (%s, %s, %s)
                 RETURNING batch_id
             """, (len(tickers_list), 'admin_ui_rerun_all', json.dumps({
-                "minutes": get_lookback_minutes(),
+                "minutes": lookback_minutes,
+                "report_type": report_type,  # NEW: 'daily' or 'weekly'
                 "batch_size": 3,
                 "triage_batch_size": 3,
                 "mode": "daily"
@@ -28752,7 +28757,8 @@ async def rerun_all_queue_api(request: Request):
                     )
                     VALUES (%s, %s, %s, %s)
                 """, (batch_id, ticker, json.dumps({
-                    "minutes": get_lookback_minutes(),
+                    "minutes": lookback_minutes,
+                    "report_type": report_type,  # NEW: 'daily' or 'weekly'
                     "batch_size": 3,
                     "triage_batch_size": 3,
                     "mode": "daily",

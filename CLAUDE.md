@@ -61,6 +61,48 @@ python app.py alerts          # Hourly (9 AM - 10 PM EST) - Real-time article al
 - Unique unsubscribe tokens per recipient
 - DRY_RUN mode for safe testing
 
+**Daily vs Weekly Reports (NEW - November 2025):**
+
+The system automatically generates different report types based on day of week:
+
+**Schedule Logic:**
+- **Monday:** Weekly reports (7-day lookback, full 6-section summary)
+- **Tuesday-Sunday:** Daily reports (1-day lookback, abbreviated 2-section summary)
+
+**Report Type Differences:**
+
+| Feature | Daily (Tue-Sun) | Weekly (Mon) |
+|---------|-----------------|--------------|
+| **Lookback Window** | 1440 minutes (1 day) | 10080 minutes (7 days) |
+| **Sections Shown** | 2 sections | 6 sections |
+| **Bottom Line** | ✅ Shown | ✅ Shown |
+| **Financial/Operational** | ✅ Shown | ✅ Shown |
+| **Risk Factors** | ❌ Hidden | ✅ Shown |
+| **Wall Street Sentiment** | ❌ Hidden | ✅ Shown |
+| **Upside Scenario** | ❌ Hidden | ✅ Shown |
+| **Downside Scenario** | ❌ Hidden | ✅ Shown |
+| **Competitive/Industry** | ❌ Hidden | ✅ Shown |
+| **Key Variables** | ❌ Hidden | ✅ Shown |
+| **Upcoming Catalysts** | ❌ Hidden | ✅ Shown |
+
+**Configuration:**
+- Lookback windows stored in `system_config` table:
+  - `daily_lookback_minutes`: 1440 (configurable via `/admin/settings`)
+  - `weekly_lookback_minutes`: 10080 (configurable via `/admin/settings`)
+- Report type auto-detected using Toronto timezone (America/Toronto)
+- PowerShell scripts support explicit `report_type` override for testing
+
+**Key Functions:**
+- `get_report_type_and_lookback()` - Day-of-week detection (returns 'daily' or 'weekly' + minutes)
+- `generate_email_html_core()` - Email generation with section filtering based on report_type
+- All bulk processing endpoints propagate `report_type` through job configs
+
+**Benefits:**
+- ✅ **Daily:** Fast-moving news recap (reduces email fatigue)
+- ✅ **Weekly:** Comprehensive analysis with strategic context
+- ✅ **Automated:** Zero manual switching required
+- ✅ **Database-backed:** Admins can adjust lookback windows without code changes
+
 **Admin Dashboard:**
 - `/admin` - Stats overview and navigation (4 cards: Users, Queue, Settings, Test)
 - `/admin/users` - Beta user approval interface with bulk selection (Oct 2025)
@@ -780,6 +822,15 @@ Key tables managed through schema initialization:
 - `ticker_processing_jobs`: Individual ticker jobs with full audit trail
   - Includes: retry logic, timeout protection, resource tracking, error stacktraces
   - Atomic job claiming via `FOR UPDATE SKIP LOCKED` (prevents race conditions)
+
+**System Configuration (NEW - November 2025):**
+- `system_config`: Key-value store for runtime configuration
+  - Fields: key (UNIQUE), value, description, updated_by, updated_at
+  - **Daily/Weekly Report Settings:**
+    - `daily_lookback_minutes`: 1440 (default) - Lookback window for daily reports (Tue-Sun)
+    - `weekly_lookback_minutes`: 10080 (default) - Lookback window for weekly reports (Mon)
+  - Configurable via `/admin/settings` interface
+  - Used by `get_report_type_and_lookback()` for day-of-week detection
 
 **AI-Generated Content:**
 - `executive_summaries`: Daily AI-generated summaries (Line 939)
@@ -1870,6 +1921,25 @@ python app.py check_filings
   - 6 error types with severity levels (critical, serious, minor)
   - Sentence-by-sentence analysis with status badges
   - Database-driven date selection (queries for latest summary)
+
+**Daily vs Weekly Reports (NEW - Nov 2025):**
+- `get_report_type_and_lookback()` - Line 2142 (Day-of-week detection and lookback window retrieval)
+  - Returns: `('daily', 1440)` or `('weekly', 10080)` based on day of week
+  - Uses Toronto timezone (America/Toronto) for day detection
+  - Queries `system_config` table for lookback windows
+- `generate_email_html_core()` - Line 18601 (Email #3 generation with section filtering)
+  - Parameter: `report_type` ('daily' or 'weekly')
+  - Daily reports: Hide 4 sections (upside_scenario, downside_scenario, key_variables, upcoming_catalysts)
+  - Weekly reports: Show all 6 sections
+- **Database Schema:**
+  - `system_config.daily_lookback_minutes` - Configurable via `/admin/settings` (default: 1440)
+  - `system_config.weekly_lookback_minutes` - Configurable via `/admin/settings` (default: 10080)
+- **Updated Endpoints:**
+  - All bulk processing endpoints propagate `report_type` through job configs
+  - `/jobs/submit` supports optional `report_type` field (falls back to day-of-week detection)
+  - `POST /api/generate-all-reports` - Uses day-of-week detection
+  - `POST /api/retry-failed-and-cancelled` - Uses day-of-week detection
+  - `POST /api/rerun-all-queue` - Uses day-of-week detection
 
 **Job Queue System:**
 - `process_digest_phase()` - Line 11626 (Main digest phase orchestrator)

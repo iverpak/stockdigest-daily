@@ -2239,9 +2239,32 @@ def ensure_schema():
                 ON CONFLICT (key) DO NOTHING;
 
                 CREATE INDEX IF NOT EXISTS idx_system_config_key ON system_config(key);
+
+                -- ============================================================
+                -- DAILY VS WEEKLY REPORTS (Nov 20, 2025)
+                -- ============================================================
+
+                -- Add lookback window settings for daily/weekly reports
+                INSERT INTO system_config (key, value, description, created_at)
+                VALUES ('daily_lookback_minutes', '1440', 'Lookback window for daily reports (Tuesday-Sunday)', NOW())
+                ON CONFLICT (key) DO NOTHING;
+
+                INSERT INTO system_config (key, value, description, created_at)
+                VALUES ('weekly_lookback_minutes', '10080', 'Lookback window for weekly reports (Monday)', NOW())
+                ON CONFLICT (key) DO NOTHING;
+
+                -- Add report_type and summary_date columns to email_queue
+                ALTER TABLE email_queue
+                ADD COLUMN IF NOT EXISTS report_type VARCHAR(10) DEFAULT 'daily';
+
+                ALTER TABLE email_queue
+                ADD COLUMN IF NOT EXISTS summary_date DATE;
+
+                -- Create index on report_type for faster filtering
+                CREATE INDEX IF NOT EXISTS idx_email_queue_report_type ON email_queue(report_type);
                 """)
 
-                LOG.info("✅ Complete database schema created successfully with NEW ARCHITECTURE + JOB QUEUE + BETA USERS")
+                LOG.info("✅ Complete database schema created successfully with NEW ARCHITECTURE + JOB QUEUE + BETA USERS + DAILY/WEEKLY REPORTS")
 
             finally:
                 # STEP 4: CRITICAL - Always release the advisory lock
@@ -23352,6 +23375,8 @@ def check_admin_token(token: str) -> bool:
 
 def get_lookback_minutes() -> int:
     """
+    DEPRECATED: Use get_daily_lookback_minutes() or get_report_type_and_lookback() instead.
+
     Get configured lookback window from system_config table.
     Used by production workflows (cron jobs and admin bulk actions).
     Test portal (/admin/test) has separate hardcoded settings.
@@ -23376,6 +23401,95 @@ def get_lookback_minutes() -> int:
     except Exception as e:
         LOG.error(f"Failed to fetch lookback_minutes: {e}, using default 1440")
         return 1440  # 1 day default
+
+
+def get_daily_lookback_minutes() -> int:
+    """
+    Get daily lookback window from system_config (for Tuesday-Sunday reports).
+
+    Returns:
+        int: Lookback window in minutes (default: 1440 = 1 day)
+    """
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("SELECT value FROM system_config WHERE key = 'daily_lookback_minutes'")
+            row = cur.fetchone()
+            if row:
+                minutes = int(row['value'])
+                if minutes < 60:
+                    LOG.warning(f"⚠️ Invalid daily_lookback_minutes: {minutes} < 60, using default 1440")
+                    return 1440
+                return minutes
+            else:
+                LOG.warning("⚠️ No daily_lookback_minutes in system_config, using default 1440")
+                return 1440
+    except Exception as e:
+        LOG.error(f"Failed to fetch daily_lookback_minutes: {e}, using default 1440")
+        return 1440
+
+
+def get_weekly_lookback_minutes() -> int:
+    """
+    Get weekly lookback window from system_config (for Monday reports).
+
+    Returns:
+        int: Lookback window in minutes (default: 10080 = 7 days)
+    """
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("SELECT value FROM system_config WHERE key = 'weekly_lookback_minutes'")
+            row = cur.fetchone()
+            if row:
+                minutes = int(row['value'])
+                if minutes < 60:
+                    LOG.warning(f"⚠️ Invalid weekly_lookback_minutes: {minutes} < 60, using default 10080")
+                    return 10080
+                return minutes
+            else:
+                LOG.warning("⚠️ No weekly_lookback_minutes in system_config, using default 10080")
+                return 10080
+    except Exception as e:
+        LOG.error(f"Failed to fetch weekly_lookback_minutes: {e}, using default 10080")
+        return 10080
+
+
+def get_report_type_and_lookback(force_type: str = None) -> tuple:
+    """
+    Determine report type based on day of week (or force_type for testing).
+
+    Monday = weekly report (7 days lookback)
+    Tuesday-Sunday = daily report (1 day lookback)
+
+    Args:
+        force_type: Optional override for testing ('daily' or 'weekly')
+
+    Returns:
+        tuple: (report_type, lookback_minutes)
+            - report_type: 'daily' or 'weekly'
+            - lookback_minutes: int (1440 for daily, 10080 for weekly by default)
+    """
+    try:
+        # Allow test override
+        if force_type:
+            if force_type == 'weekly':
+                return ('weekly', get_weekly_lookback_minutes())
+            else:
+                return ('daily', get_daily_lookback_minutes())
+
+        # Determine based on day of week
+        import pytz
+        eastern = pytz.timezone('America/Toronto')
+        now = datetime.now(eastern)
+        day_of_week = now.weekday()  # 0=Monday, 6=Sunday
+
+        if day_of_week == 0:  # Monday
+            return ('weekly', get_weekly_lookback_minutes())
+        else:  # Tuesday-Sunday
+            return ('daily', get_daily_lookback_minutes())
+
+    except Exception as e:
+        LOG.error(f"Failed to determine report type: {e}, defaulting to daily/1440")
+        return ('daily', 1440)
 
 def get_phase3_primary_model() -> str:
     """
@@ -28720,6 +28834,10 @@ async def generate_user_reports_api(request: Request):
         # Submit to existing job queue system
         tickers_list = sorted(list(ticker_recipients.keys()))
 
+        # NEW: Determine report type based on day of week (same logic as cron)
+        report_type, lookback_minutes = get_report_type_and_lookback()
+        LOG.info(f"📅 Report Type: {report_type.upper()}, Lookback: {lookback_minutes}min")
+
         with db() as conn, conn.cursor() as cur:
             # Create batch record
             cur.execute("""
@@ -28727,7 +28845,8 @@ async def generate_user_reports_api(request: Request):
                 VALUES (%s, %s, %s)
                 RETURNING batch_id
             """, (len(tickers_list), 'admin_ui', json.dumps({
-                "minutes": get_lookback_minutes(),
+                "minutes": lookback_minutes,
+                "report_type": report_type,  # NEW: 'daily' or 'weekly'
                 "batch_size": 3,
                 "triage_batch_size": 3,
                 "mode": "daily"  # CRITICAL: Daily workflow mode
@@ -28745,7 +28864,8 @@ async def generate_user_reports_api(request: Request):
                     )
                     VALUES (%s, %s, %s, %s)
                 """, (batch_id, ticker, json.dumps({
-                    "minutes": get_lookback_minutes(),
+                    "minutes": lookback_minutes,
+                    "report_type": report_type,  # NEW: 'daily' or 'weekly'
                     "batch_size": 3,
                     "triage_batch_size": 3,
                     "mode": "daily",  # CRITICAL: Daily workflow mode
@@ -28754,7 +28874,8 @@ async def generate_user_reports_api(request: Request):
 
             conn.commit()
 
-        LOG.info(f"📊 Batch {batch_id} created for {len(users)} selected accounts: {len(tickers_list)} unique tickers (mode=daily)")
+        LOG.info(f"📊 Batch {batch_id} created for {len(users)} selected accounts: {len(tickers_list)} unique tickers")
+        LOG.info(f"   Report Type: {report_type.upper()}, Lookback: {lookback_minutes}min")
 
         return {
             "status": "success",
@@ -28797,6 +28918,10 @@ async def generate_all_reports_api(request: Request):
         # Submit to existing job queue system
         tickers_list = sorted(list(ticker_recipients.keys()))
 
+        # NEW: Determine report type based on day of week (same logic as cron)
+        report_type, lookback_minutes = get_report_type_and_lookback()
+        LOG.info(f"📅 Report Type: {report_type.upper()}, Lookback: {lookback_minutes}min")
+
         with db() as conn, conn.cursor() as cur:
             # Create batch record
             cur.execute("""
@@ -28804,7 +28929,8 @@ async def generate_all_reports_api(request: Request):
                 VALUES (%s, %s, %s)
                 RETURNING batch_id
             """, (len(tickers_list), 'admin_ui', json.dumps({
-                "minutes": get_lookback_minutes(),
+                "minutes": lookback_minutes,
+                "report_type": report_type,  # NEW: 'daily' or 'weekly'
                 "batch_size": 3,
                 "triage_batch_size": 3,
                 "mode": "daily"  # CRITICAL: Daily workflow mode
@@ -28822,7 +28948,8 @@ async def generate_all_reports_api(request: Request):
                     )
                     VALUES (%s, %s, %s, %s)
                 """, (batch_id, ticker, json.dumps({
-                    "minutes": get_lookback_minutes(),
+                    "minutes": lookback_minutes,
+                    "report_type": report_type,  # NEW: 'daily' or 'weekly'
                     "batch_size": 3,
                     "triage_batch_size": 3,
                     "mode": "daily",  # CRITICAL: Daily workflow mode
@@ -28831,7 +28958,8 @@ async def generate_all_reports_api(request: Request):
 
             conn.commit()
 
-        LOG.info(f"📊 Batch {batch_id} created for all active users: {len(tickers_list)} unique tickers (mode=daily)")
+        LOG.info(f"📊 Batch {batch_id} created for all active users: {len(tickers_list)} unique tickers")
+        LOG.info(f"   Report Type: {report_type.upper()}, Lookback: {lookback_minutes}min")
 
         return {
             "status": "success",
@@ -29936,6 +30064,10 @@ def process_daily_workflow():
     """
     7:00 AM: Process all active beta users via job queue system.
     Generates emails and queues for 8:30 AM send.
+
+    NEW (Nov 20, 2025): Determines report type based on day of week.
+    - Monday: Weekly report (7 days lookback)
+    - Tuesday-Sunday: Daily report (1 day lookback)
     """
     LOG.info("="*80)
     LOG.info("=== DAILY WORKFLOW START ===")
@@ -29955,6 +30087,11 @@ def process_daily_workflow():
             LOG.warning("No active beta users found")
             return
 
+        # NEW: Determine report type based on day of week
+        report_type, lookback_minutes = get_report_type_and_lookback()
+        LOG.info(f"📅 Report Type: {report_type.upper()}")
+        LOG.info(f"⏱️  Lookback: {lookback_minutes} minutes ({lookback_minutes/1440:.1f} days)")
+
         # Submit to existing job queue system (same as admin UI buttons)
         tickers_list = sorted(list(ticker_recipients.keys()))
 
@@ -29965,10 +30102,11 @@ def process_daily_workflow():
                 VALUES (%s, %s, %s)
                 RETURNING batch_id
             """, (len(tickers_list), 'cron_job', json.dumps({
-                "minutes": get_lookback_minutes(),
+                "minutes": lookback_minutes,
+                "report_type": report_type,  # NEW: 'daily' or 'weekly'
                 "batch_size": 3,
                 "triage_batch_size": 3,
-                "mode": "daily"  # CRITICAL: Daily workflow mode
+                "mode": "daily"  # CRITICAL: Daily workflow mode (for email queue)
             })))
 
             batch_id = cur.fetchone()['batch_id']
@@ -29983,7 +30121,8 @@ def process_daily_workflow():
                     )
                     VALUES (%s, %s, %s, %s)
                 """, (batch_id, ticker, json.dumps({
-                    "minutes": get_lookback_minutes(),
+                    "minutes": lookback_minutes,
+                    "report_type": report_type,  # NEW: 'daily' or 'weekly'
                     "batch_size": 3,
                     "triage_batch_size": 3,
                     "mode": "daily",  # CRITICAL: Daily workflow mode
@@ -29992,7 +30131,8 @@ def process_daily_workflow():
 
             conn.commit()
 
-        LOG.info(f"✅ Batch {batch_id} created for {len(tickers_list)} unique tickers (mode=daily)")
+        LOG.info(f"✅ Batch {batch_id} created for {len(tickers_list)} unique tickers")
+        LOG.info(f"   Report Type: {report_type.upper()}, Lookback: {lookback_minutes}min")
         LOG.info(f"   Jobs will be processed by background worker")
         LOG.info("✅ Daily workflow complete (jobs submitted to queue)")
 

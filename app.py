@@ -1448,7 +1448,9 @@ def ensure_schema():
                     SELECT COUNT(*) FROM information_schema.tables
                     WHERE table_name IN ('articles', 'ticker_reference', 'feeds')
                 """)
-                existing_core_tables = cur.fetchone()[0]
+                result = cur.fetchone()
+                # Handle both tuple and dict-like cursor results
+                existing_core_tables = result[0] if isinstance(result, tuple) else result['count']
 
                 if existing_core_tables == 3:
                     LOG.info("✅ Core schema exists - running idempotent DDL for completeness")

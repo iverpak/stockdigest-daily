@@ -101,10 +101,6 @@ from modules.company_profiles import (
     # Parsed press releases (Nov 2025 - unified Gemini summaries for FMP PRs and 8-K exhibits)
     generate_parsed_press_release_with_gemini,
     generate_earnings_release_with_gemini,  # NEW: Comprehensive earnings release analysis
-    save_parsed_press_release_to_database,
-    get_parsed_press_releases_for_ticker,
-    get_all_parsed_press_releases,
-    delete_parsed_press_release,
     # Company releases (Nov 2025 - JSON-based email system for 8-K and FMP releases)
     parse_company_release_sections,
     build_company_release_html,
@@ -16452,42 +16448,15 @@ async def process_press_release_phase(job: dict):
         # Generate markdown for database storage
         summary_text_markdown = convert_json_to_markdown(json_output, 'press_release')
 
-        # Progress: 80% - Saving to database
+        # Progress: 80% - Skipping old press_releases table (deprecated)
         update_job_status(job_id, progress=80)
-        LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving summary to database...")
+        LOG.info(f"[{ticker}] ⏭️ [JOB {job_id}] Skipping old press_releases table (deprecated)...")
 
-        from modules.press_releases import save_press_release_to_database
-
-        with db() as conn:
-            save_press_release_to_database(
-                ticker=ticker,
-                company_name=ticker_config.get('company_name', ticker),
-                report_date=pr_date,
-                pr_title=pr_title,
-                summary_text=summary_text_markdown,  # Clean markdown for research page
-                ai_provider=ai_provider,  # Dynamic: 'gemini' or 'claude'
-                ai_model=model_used,      # Full model name from v2
-                processing_duration_seconds=int(generation_time_ms / 1000),
-                job_id=job_id,
-                db_connection=conn
-            )
-
-            # Get the source_id for parsed PR generation
-            cur = conn.cursor()
-            cur.execute("""
-                SELECT id FROM press_releases
-                WHERE ticker = %s AND report_date = %s AND pr_title = %s
-            """, (ticker, pr_date, pr_title))
-            source_id_row = cur.fetchone()
-            # Handle both tuple and dict cursor types
-            if source_id_row:
-                source_id = source_id_row['id'] if isinstance(source_id_row, dict) else source_id_row[0]
-            else:
-                source_id = None
-            cur.close()
+        # FMP doesn't have separate source table (unlike 8-K which has sec_8k_filings)
+        source_id = None
 
         # Progress: 85% - Generating company release summary with new 8-K filing prompt
-        if source_id:
+        if True:  # Always generate for FMP
             update_job_status(job_id, progress=85)
             LOG.info(f"[{ticker}] 🔄 [JOB {job_id}] Generating company release summary using 8-K filing prompt...")
 
@@ -16515,29 +16484,7 @@ async def process_press_release_phase(job: dict):
                     fiscal_year_db = None
 
                     json_output_parsed = parsed_result.get('json_data', {})
-
-                    # Save to legacy parsed_press_release table for backward compatibility
-                    with db() as conn:
-                        save_parsed_press_release_to_database(
-                            ticker=ticker,
-                            company_name=ticker_config.get('company_name', ticker),
-                            source_type='fmp',
-                            source_id=source_id,
-                            document_date=pr_date,
-                            document_title=pr_title,
-                            source_url=None,  # FMP doesn't provide direct URL
-                            parsed_summary=parsed_result['parsed_summary'],
-                            metadata={
-                                'model': result_metadata.get('model', 'gemini-2.5-flash'),
-                                'token_count_input': result_metadata.get('token_count_input', 0),
-                                'token_count_output': result_metadata.get('token_count_output', 0),
-                                'generation_time_seconds': result_metadata.get('generation_time_seconds', 0)
-                            },
-                            exhibit_number=None,
-                            item_codes=None,
-                            db_connection=conn
-                        )
-                    LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Saved to parsed PR table")
+                    markdown_summary = parsed_result.get('parsed_summary', '')  # Extract markdown
 
                     # Progress: 95% - Generate and send company release email
                     if config.get('send_email', True):
@@ -16579,16 +16526,17 @@ async def process_press_release_phase(job: dict):
                                 cur.execute("""
                                     INSERT INTO company_releases (
                                         ticker, company_name, release_type, filing_date, report_title,
-                                        source_id, source_type, summary_json, summary_html,
+                                        source_id, source_type, summary_json, summary_html, summary_markdown,
                                         ai_provider, ai_model, processing_duration_seconds,
                                         token_count_input, token_count_output, job_id,
                                         fiscal_year, fiscal_quarter, generated_at
                                     )
-                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                                     ON CONFLICT (ticker, filing_date, report_title)
                                     DO UPDATE SET
                                         summary_json = EXCLUDED.summary_json,
                                         summary_html = EXCLUDED.summary_html,
+                                        summary_markdown = EXCLUDED.summary_markdown,
                                         fiscal_year = EXCLUDED.fiscal_year,
                                         fiscal_quarter = EXCLUDED.fiscal_quarter,
                                         generated_at = NOW()
@@ -16602,6 +16550,7 @@ async def process_press_release_phase(job: dict):
                                     'fmp_press_release',
                                     json.dumps(json_output_parsed),
                                     email_html,
+                                    markdown_summary,  # Add markdown
                                     'gemini',
                                     result_metadata.get('model', 'gemini-2.5-flash'),
                                     result_metadata.get('generation_time_seconds', 0),
@@ -16875,30 +16824,7 @@ async def process_8k_summary_phase(job: dict):
                         fiscal_year_db = fiscal_year
 
                         json_output = parsed_result.get('json_data', {})
-
-                        # Save to legacy parsed_press_release table for backward compatibility
-                        with db() as conn:
-                            clean_document_title = f"{ticker} - {report_title}"
-                            save_parsed_press_release_to_database(
-                                ticker=ticker,
-                                company_name=ticker_config.get('company_name', ticker),
-                                source_type='8k',
-                                source_id=source_id,
-                                document_date=filing_date,
-                                document_title=clean_document_title,
-                                source_url=exhibit_url,
-                                parsed_summary=parsed_result['parsed_summary'],
-                                metadata={
-                                    'model': result_metadata.get('model', 'gemini-2.5-flash'),
-                                    'token_count_input': result_metadata.get('token_count_input', 0),
-                                    'token_count_output': result_metadata.get('token_count_output', 0),
-                                    'generation_time_seconds': result_metadata.get('generation_time_seconds', 0)
-                                },
-                                exhibit_number=exhibit_num,
-                                item_codes=item_codes,
-                                db_connection=conn
-                            )
-                        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Saved to parsed PR table for Exhibit {exhibit_num}")
+                        markdown_summary = parsed_result.get('parsed_summary', '')  # Extract markdown
 
                         # Generate and send email for ALL exhibits (no type filtering)
                         if config.get('send_email', True):
@@ -16939,17 +16865,18 @@ async def process_8k_summary_phase(job: dict):
                                     cur.execute("""
                                         INSERT INTO company_releases (
                                             ticker, company_name, release_type, filing_date, report_title,
-                                            source_id, source_type, summary_json, summary_html,
+                                            source_id, source_type, summary_json, summary_html, summary_markdown,
                                             ai_provider, ai_model, processing_duration_seconds,
                                             token_count_input, token_count_output, job_id,
                                             fiscal_year, fiscal_quarter, exhibit_number, item_codes,
                                             generated_at
                                         )
-                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                                         ON CONFLICT (ticker, filing_date, report_title)
                                         DO UPDATE SET
                                             summary_json = EXCLUDED.summary_json,
                                             summary_html = EXCLUDED.summary_html,
+                                            summary_markdown = EXCLUDED.summary_markdown,
                                             fiscal_year = EXCLUDED.fiscal_year,
                                             fiscal_quarter = EXCLUDED.fiscal_quarter,
                                             exhibit_number = EXCLUDED.exhibit_number,
@@ -16965,6 +16892,7 @@ async def process_8k_summary_phase(job: dict):
                                         '8k_exhibit',
                                         json.dumps(json_output),
                                         email_html,
+                                        markdown_summary,  # Add markdown
                                         'gemini',
                                         result_metadata.get('model', 'gemini-2.5-flash'),
                                         result_metadata.get('generation_time_seconds', 0),
@@ -24142,15 +24070,15 @@ async def delete_8k_filing_api(request: Request):
 
                 deleted_items = [f"Exhibit {exhibit_number}"]
 
-                # Cascade delete parsed PR if requested
+                # Cascade delete company release if requested
                 if cascade:
                     cur.execute("""
-                        DELETE FROM parsed_press_releases
-                        WHERE source_type = '8k' AND source_id = %s
+                        DELETE FROM company_releases
+                        WHERE source_type = '8k_exhibit' AND source_id = %s
                         RETURNING id
                     """, (filing_id,))
                     if cur.fetchone():
-                        deleted_items.append("parsed PR")
+                        deleted_items.append("company release")
 
                 # Delete the exhibit
                 cur.execute("DELETE FROM sec_8k_filings WHERE id = %s", (filing_id,))
@@ -24183,16 +24111,16 @@ async def delete_8k_filing_api(request: Request):
 
                 deleted_items = [f"{len(filing_ids)} exhibit(s)"]
 
-                # Cascade delete ALL parsed PRs for these exhibits
+                # Cascade delete ALL company releases for these exhibits
                 if cascade and filing_ids:
                     cur.execute("""
-                        DELETE FROM parsed_press_releases
-                        WHERE source_type = '8k' AND source_id = ANY(%s)
+                        DELETE FROM company_releases
+                        WHERE source_type = '8k_exhibit' AND source_id = ANY(%s)
                         RETURNING id
                     """, (filing_ids,))
-                    parsed_count = len(cur.fetchall())
-                    if parsed_count:
-                        deleted_items.append(f"{parsed_count} parsed PR(s)")
+                    release_count = len(cur.fetchall())
+                    if release_count:
+                        deleted_items.append(f"{release_count} company release(s)")
 
                 # Delete all exhibits
                 cur.execute("""
@@ -24270,7 +24198,9 @@ def get_all_parsed_press_releases_api(token: str = Query(...)):
 @APP.get("/api/admin/parsed-press-release/{pr_id}")
 def get_parsed_press_release_detail(pr_id: int, token: str = Query(...)):
     """
-    Get full details of a specific parsed press release including the summary text.
+    Get full details of a specific company release including the summary text.
+
+    Now queries company_releases table (migrated from parsed_press_releases).
 
     Returns: {
         "status": "success",
@@ -24290,22 +24220,26 @@ def get_parsed_press_release_detail(pr_id: int, token: str = Query(...)):
             cur.execute("""
                 SELECT
                     id, ticker, company_name, source_type, source_id,
-                    document_date, document_title, source_url,
+                    filing_date as document_date,
+                    report_title as document_title,
+                    NULL as source_url,
                     exhibit_number, item_codes,
-                    parsed_summary,
+                    summary_markdown as parsed_summary,
                     ai_provider, ai_model,
                     token_count_input, token_count_output,
                     processing_duration_seconds,
-                    fed_to_phase1, fed_to_phase1_at,
-                    generated_at
-                FROM parsed_press_releases
+                    FALSE as fed_to_phase1,
+                    NULL as fed_to_phase1_at,
+                    generated_at,
+                    fiscal_year, fiscal_quarter
+                FROM company_releases
                 WHERE id = %s
             """, (pr_id,))
 
             row = cur.fetchone()
 
             if not row:
-                return {"status": "error", "message": f"Parsed PR {pr_id} not found"}
+                return {"status": "error", "message": f"Company release {pr_id} not found"}
 
             # Convert to dict - handle both dict and tuple cursor types
             if isinstance(row, dict):
@@ -24372,26 +24306,27 @@ async def generate_parsed_pr_api(request: Request):
         with db() as conn, conn.cursor() as cur:
             # Fetch source document details
             if source_type == 'fmp':
-                # Get from press_releases table
+                # NEW: FMP doesn't have source table, fetch directly from company_releases
+                # source_id is the company_releases.id for re-generation
                 cur.execute("""
-                    SELECT id, ticker, company_name, report_date, pr_title
-                    FROM press_releases
-                    WHERE id = %s
+                    SELECT ticker, company_name, filing_date, report_title
+                    FROM company_releases
+                    WHERE id = %s AND source_type = 'fmp_press_release'
                 """, (source_id,))
                 source_row = cur.fetchone()
 
                 if not source_row:
-                    return {"status": "error", "message": f"Press release {source_id} not found"}
+                    return {"status": "error", "message": f"FMP company release {source_id} not found"}
 
-                ticker = source_row[1]
-                company_name = source_row[2]
-                document_date = source_row[3]
-                document_title = source_row[4]
+                ticker = source_row[0] if not isinstance(source_row, dict) else source_row['ticker']
+                company_name = source_row[1] if not isinstance(source_row, dict) else source_row['company_name']
+                document_date = source_row[2] if not isinstance(source_row, dict) else source_row['filing_date']
+                document_title = source_row[3] if not isinstance(source_row, dict) else source_row['report_title']
                 exhibit_number = None
                 item_codes = None
                 source_url = None
 
-                # Fetch RAW content from FMP API (not Claude summary)
+                # Fetch RAW content from FMP API
                 fmp_api_key = os.getenv("FMP_API_KEY")
                 if not fmp_api_key:
                     return {"status": "error", "message": "FMP_API_KEY not configured"}
@@ -24439,47 +24374,113 @@ async def generate_parsed_pr_api(request: Request):
                 config = get_ticker_config(ticker)
                 company_name = config.get('company_name', ticker) if config else ticker
 
-            LOG.info(f"📝 Generating parsed PR for {ticker} ({source_type}, source_id={source_id})")
+            LOG.info(f"📝 Generating company release for {ticker} ({source_type}, source_id={source_id})")
 
-            # Generate summary
-            result = generate_parsed_press_release_with_gemini(
+            # Generate summary using 8k_filing_prompt (unified for FMP and 8-K)
+            result = generate_earnings_release_with_gemini(
                 ticker=ticker,
                 company_name=company_name,
                 content=content,
                 document_title=document_title,
-                source_type=source_type,
                 item_codes=item_codes,
                 gemini_api_key=gemini_api_key
             )
 
-            if not result:
-                return {"status": "error", "message": "Failed to generate parsed summary"}
+            if not result or not result.get('parsed_summary'):
+                return {"status": "error", "message": "Failed to generate company release summary"}
 
-            # Save to database
-            parsed_pr_id = save_parsed_press_release_to_database(
+            # Extract result data
+            metadata = result.get('metadata', {})
+            json_output = result.get('json_data', {})
+            markdown_summary = result.get('parsed_summary', '')
+
+            # Extract fiscal period if available (8-K only, FMP doesn't have reliable data)
+            fiscal_year = json_output.get('fiscal_year') if source_type == '8k' else None
+            fiscal_quarter = json_output.get('fiscal_quarter') if source_type == '8k' else None
+
+            # Generate email HTML
+            from modules.company_profiles import generate_company_release_email, get_filing_stock_data
+            stock_data = get_filing_stock_data(ticker)
+
+            # Format filing date
+            try:
+                from datetime import datetime
+                date_obj = datetime.strptime(str(document_date)[:10], '%Y-%m-%d')
+                formatted_date = date_obj.strftime('%b %d, %Y')
+            except:
+                formatted_date = str(document_date)[:10]
+
+            email_result = generate_company_release_email(
                 ticker=ticker,
                 company_name=company_name,
-                source_type=source_type,
-                source_id=source_id,
-                document_date=document_date,
-                document_title=document_title,
-                source_url=source_url,
-                parsed_summary=result['parsed_summary'],
-                metadata=result['metadata'],
-                exhibit_number=exhibit_number,
-                item_codes=item_codes,
-                db_connection=conn
+                release_type='fmp_press_release' if source_type == 'fmp' else '8k_exhibit',
+                filing_date=formatted_date,
+                json_output=json_output,
+                stock_price=stock_data.get('stock_price'),
+                price_change_pct=stock_data.get('price_change_pct'),
+                price_change_color=stock_data.get('price_change_color', '#4ade80'),
+                ytd_return_pct=stock_data.get('ytd_return_pct'),
+                ytd_return_color=stock_data.get('ytd_return_color', '#4ade80'),
+                market_status=stock_data.get('market_status', 'LAST CLOSE'),
+                return_label=stock_data.get('return_label', '1D')
             )
+            email_html = email_result.get('html', '')
 
-            if not parsed_pr_id:
-                return {"status": "error", "message": "Failed to save parsed summary"}
+            # Save to company_releases table
+            cur.execute("""
+                INSERT INTO company_releases (
+                    ticker, company_name, release_type, filing_date, report_title,
+                    source_id, source_type, summary_json, summary_html, summary_markdown,
+                    ai_provider, ai_model, processing_duration_seconds,
+                    token_count_input, token_count_output,
+                    fiscal_year, fiscal_quarter, exhibit_number, item_codes,
+                    generated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                ON CONFLICT (ticker, filing_date, report_title)
+                DO UPDATE SET
+                    summary_json = EXCLUDED.summary_json,
+                    summary_html = EXCLUDED.summary_html,
+                    summary_markdown = EXCLUDED.summary_markdown,
+                    fiscal_year = EXCLUDED.fiscal_year,
+                    fiscal_quarter = EXCLUDED.fiscal_quarter,
+                    generated_at = NOW()
+                RETURNING id
+            """, (
+                ticker,
+                company_name,
+                'fmp_press_release' if source_type == 'fmp' else '8k_exhibit',
+                str(document_date)[:10],
+                document_title,
+                source_id if source_type == '8k' else None,  # Only 8-K has source_id (sec_8k_filings)
+                'fmp_press_release' if source_type == 'fmp' else '8k_exhibit',
+                json.dumps(json_output),
+                email_html,
+                markdown_summary,
+                'gemini',
+                metadata.get('model', 'gemini-2.5-flash'),
+                metadata.get('generation_time_seconds', 0),
+                metadata.get('token_count_input', 0),
+                metadata.get('token_count_output', 0),
+                fiscal_year,
+                fiscal_quarter,
+                exhibit_number,
+                item_codes
+            ))
+
+            result_row = cur.fetchone()
+            company_release_id = result_row[0] if result_row else None
+            conn.commit()
+
+            if not company_release_id:
+                return {"status": "error", "message": "Failed to save company release"}
 
             return {
                 "status": "success",
-                "parsed_pr_id": parsed_pr_id,
-                "message": f"Generated parsed summary for {ticker}",
-                "word_count": len(result['parsed_summary'].split()),
-                "generation_time": result['metadata'].get('generation_time_seconds')
+                "parsed_pr_id": company_release_id,
+                "message": f"Generated company release for {ticker}",
+                "word_count": len(markdown_summary.split()),
+                "generation_time": metadata.get('generation_time_seconds')
             }
 
     except Exception as e:
@@ -24490,9 +24491,9 @@ async def generate_parsed_pr_api(request: Request):
 @APP.post("/api/admin/delete-parsed-pr")
 async def delete_parsed_pr_api(request: Request):
     """
-    Delete a parsed press release by ID (NO cascade - only deletes the parsed PR).
+    Delete a company release by ID.
 
-    From View Research tab, this only deletes the Gemini summary, NOT the source.
+    Now deletes from company_releases table (migrated from parsed_press_releases).
 
     Body: {
         "token": "...",
@@ -24513,24 +24514,24 @@ async def delete_parsed_pr_api(request: Request):
         with db() as conn, conn.cursor() as cur:
             # Get ticker for logging
             cur.execute("""
-                SELECT ticker, document_title
-                FROM parsed_press_releases
+                SELECT ticker, report_title
+                FROM company_releases
                 WHERE id = %s
             """, (parsed_pr_id,))
             row = cur.fetchone()
 
             if not row:
-                return {"status": "error", "message": f"Parsed PR {parsed_pr_id} not found"}
+                return {"status": "error", "message": f"Company release {parsed_pr_id} not found"}
 
             # Handle both dict and tuple cursor types
             if isinstance(row, dict):
                 ticker = row['ticker']
-                title = row['document_title']
+                title = row['report_title']
             else:
                 ticker, title = row
 
-            # Delete ONLY the parsed PR (no cascade)
-            cur.execute("DELETE FROM parsed_press_releases WHERE id = %s", (parsed_pr_id,))
+            # Delete company release
+            cur.execute("DELETE FROM company_releases WHERE id = %s", (parsed_pr_id,))
 
             conn.commit()
 
@@ -25323,52 +25324,8 @@ async def get_transcripts_api(token: str = None):
         LOG.error(f"Failed to fetch transcripts: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
-@APP.get("/api/admin/press-releases")
-async def get_press_releases_api(token: str = None):
-    """Get all press release summaries from database"""
-    if not check_admin_token(token):
-        return {"status": "error", "message": "Unauthorized"}
-
-    try:
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                SELECT
-                    ticker,
-                    report_date,
-                    pr_title,
-                    summary_text,
-                    ai_provider,
-                    processing_duration_seconds,
-                    generated_at
-                FROM press_releases
-                ORDER BY report_date DESC, generated_at DESC
-            """)
-
-            press_releases = cur.fetchall()
-
-            result = []
-            for pr in press_releases:
-                result.append({
-                    "ticker": pr['ticker'],
-                    "report_date": str(pr['report_date']) if pr['report_date'] else None,
-                    "title": pr['pr_title'],
-                    "summary_text": pr['summary_text'],
-                    "ai_provider": pr['ai_provider'],
-                    "processing_duration_seconds": pr['processing_duration_seconds'],
-                    "generated_at": str(pr['generated_at']),
-                    "char_count": len(pr['summary_text']) if pr['summary_text'] else 0,
-                    "word_count": len(pr['summary_text'].split()) if pr['summary_text'] else 0
-                })
-
-            return {
-                "status": "success",
-                "press_releases": result,
-                "count": len(result)
-            }
-
-    except Exception as e:
-        LOG.error(f"Failed to fetch press releases: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}
+# DEPRECATED: Old /api/admin/press-releases endpoint removed
+# Use /api/admin/parsed-press-releases instead (queries company_releases table)
 
 @APP.post("/api/admin/delete-investor-presentation")
 async def delete_investor_presentation_api(request: Request):
@@ -25450,21 +25407,8 @@ async def delete_transcript_api(request: Request):
                     """, (ticker, quarter, year))
 
                 identifier = f"Q{quarter} {year} ({ai_provider or 'all versions'})"
-            else:  # press_release
-                report_date = body.get('report_date')
-                pr_title = body.get('pr_title')
-
-                if not report_date or not pr_title:
-                    return {"status": "error", "message": "Report date and title required for press releases"}
-
-                cur.execute("""
-                    DELETE FROM press_releases
-                    WHERE ticker = %s
-                      AND report_date = %s
-                      AND pr_title = %s
-                """, (ticker, report_date, pr_title))
-
-                identifier = f"{report_date}: {pr_title[:50]}..."
+            else:  # press_release (DEPRECATED - this branch should never be reached)
+                return {"status": "error", "message": "Press release deletion not supported. Use Company Releases instead."}
 
             conn.commit()
 
@@ -25561,39 +25505,7 @@ async def email_research_api(request: Request):
                 subject = f"Earnings Transcript: {ticker} {doc['quarter']} FY{year}{model_label}"
 
             elif research_type == 'press_release':
-                report_date = body.get('report_date')
-                pr_title = body.get('pr_title')
-
-                if not report_date:
-                    return {"status": "error", "message": "Report date required"}
-
-                # Query press_releases table and match by date + title (for multiple PRs per day)
-                if pr_title:
-                    cur.execute("""
-                        SELECT ticker, report_date, pr_title, summary_text, ai_provider, ai_model
-                        FROM press_releases
-                        WHERE ticker = %s
-                          AND report_date = %s
-                          AND pr_title = %s
-                        LIMIT 1
-                    """, (ticker, report_date, pr_title))
-                else:
-                    # Fallback: Match by date only (for backward compatibility)
-                    cur.execute("""
-                        SELECT ticker, report_date, pr_title, summary_text, ai_provider, ai_model
-                        FROM press_releases
-                        WHERE ticker = %s
-                          AND report_date = %s
-                        LIMIT 1
-                    """, (ticker, report_date))
-
-                doc = cur.fetchone()
-                if not doc:
-                    return {"status": "error", "message": f"No press release found for {ticker}"}
-
-                content = doc['summary_text']
-                pr_title_display = doc['pr_title'][:60] + '...' if len(doc['pr_title']) > 60 else doc['pr_title']
-                subject = f"📰 Press Release: {ticker} - {pr_title_display}"
+                return {"status": "error", "message": "Press release emailing not supported. Use Company Releases instead."}
 
             elif research_type == '8k_filing':
                 accession_number = body.get('accession_number')
@@ -25621,28 +25533,28 @@ async def email_research_api(request: Request):
                 subject = f"📄 8-K Filing: {ticker} - Exhibit {doc['exhibit_number']}: {doc['exhibit_description']} ({doc['filing_date']})"
 
             elif research_type == 'parsed_pr':
-                # Fetch from parsed_press_releases table by ID
+                # Fetch from company_releases table by ID (NEW: migrated from parsed_press_releases)
                 doc_id = body.get('id')
                 if not doc_id:
-                    return {"status": "error", "message": "Document ID required for parsed PR"}
+                    return {"status": "error", "message": "Document ID required for company release"}
 
                 cur.execute("""
-                    SELECT id, ticker, company_name, source_type, document_date,
-                           document_title, parsed_summary, exhibit_number,
-                           ai_model, processing_duration_seconds
-                    FROM parsed_press_releases
+                    SELECT id, ticker, company_name, source_type, filing_date as document_date,
+                           report_title as document_title, summary_markdown as parsed_summary,
+                           exhibit_number, ai_model, processing_duration_seconds
+                    FROM company_releases
                     WHERE id = %s AND ticker = %s
                     LIMIT 1
                 """, (doc_id, ticker))
 
                 doc = cur.fetchone()
                 if not doc:
-                    return {"status": "error", "message": f"No parsed PR found for {ticker} with ID {doc_id}"}
+                    return {"status": "error", "message": f"No company release found for {ticker} with ID {doc_id}"}
 
-                content = doc['parsed_summary']
+                content = doc['parsed_summary'] if isinstance(doc, dict) else doc[6]
                 # Extract quarter/year from title if possible (e.g., "TLN - Q2 2025 Earnings Release")
-                title = doc['document_title'] or ''
-                subject = f"📊 Parsed Earnings: {ticker} - {title}"
+                title = (doc['document_title'] if isinstance(doc, dict) else doc[5]) or ''
+                subject = f"📊 Company Release: {ticker} - {title}"
 
         if not content:
             return {"status": "error", "message": "No content found"}
@@ -26042,14 +25954,14 @@ async def get_ticker_research_status(ticker: str = Query(...), token: str = Quer
             """, (ticker,))
             generated_transcripts = {f"{row['year']}-Q{row['quarter']}": str(row['generated_at']) for row in cur.fetchall()}
 
-            # Check generated press releases
+            # Check generated press releases (NEW: company_releases table)
             cur.execute("""
-                SELECT report_date, pr_title, generated_at
-                FROM press_releases
-                WHERE ticker = %s
+                SELECT filing_date, report_title, generated_at
+                FROM company_releases
+                WHERE ticker = %s AND source_type = 'fmp_press_release'
             """, (ticker,))
             generated_press_releases = {
-                f"{row['report_date']}|{row['pr_title']}": str(row['generated_at'])
+                f"{row['filing_date']}|{row['report_title']}": str(row['generated_at'])
                 for row in cur.fetchall()
             }
 
@@ -26617,7 +26529,9 @@ def db_has_any_transcript_for_ticker(ticker: str) -> bool:
 
 def db_has_any_press_releases_for_ticker(ticker: str) -> bool:
     """
-    Check if ticker has ANY press releases in database.
+    DEPRECATED: Use modules.company_releases.db_has_any_fmp_releases_for_ticker() instead.
+
+    Check if ticker has ANY FMP press releases in company_releases table.
 
     Used for silent initialization logic:
     - If ticker has no press releases → First check (backfill silently)
@@ -26630,8 +26544,8 @@ def db_has_any_press_releases_for_ticker(ticker: str) -> bool:
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
                 SELECT EXISTS(
-                    SELECT 1 FROM transcript_summaries
-                    WHERE ticker = %s AND report_type = 'press_release'
+                    SELECT 1 FROM company_releases
+                    WHERE ticker = %s AND source_type = 'fmp_press_release'
                 )
             """, (ticker,))
             result = cur.fetchone()
@@ -26655,7 +26569,8 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
         "10k": 0,
         "10q": 0,
         "transcript": 0,
-        "press_release": 0
+        "press_release": 0,
+        "8k": 0
     }
 
     try:
@@ -26874,13 +26789,13 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
             if pr_response.get("valid"):
                 releases = pr_response.get("available_releases", [])
 
-                # Detect first check: Does this ticker have ANY press releases in DB?
-                from modules.press_releases import (
-                    db_has_any_press_releases_for_ticker,
-                    db_check_press_release_exists,
-                    db_get_latest_press_release_datetime
+                # Detect first check: Does this ticker have ANY FMP press releases in DB?
+                from modules.company_releases import (
+                    db_has_any_fmp_releases_for_ticker,
+                    db_check_fmp_release_exists,
+                    db_get_latest_fmp_release_datetime
                 )
-                is_first_check = not db_has_any_press_releases_for_ticker(ticker)
+                is_first_check = not db_has_any_fmp_releases_for_ticker(ticker)
 
                 if is_first_check:
                     # First check: Initialize DB with ONLY the latest (first) PR silently
@@ -26893,7 +26808,7 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
 
                         if pr_datetime and pr_title:
                             # Check if already exists (safety check)
-                            exists = db_check_press_release_exists(ticker, pr_datetime, pr_title)
+                            exists = db_check_fmp_release_exists(ticker, pr_datetime, pr_title)
                             if not exists:
                                 LOG.info(f"[{ticker}] 💾 Initializing DB with latest PR from {pr_datetime} (no email): {pr_title[:60]}...")
 
@@ -26928,7 +26843,7 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                                 LOG.info(f"[{ticker}] ✅ Latest PR already in DB, skipping initialization")
                 else:
                     # Subsequent checks: Process ALL PRs newer than latest in DB
-                    latest_db_datetime_str = db_get_latest_press_release_datetime(ticker)
+                    latest_db_datetime_str = db_get_latest_fmp_release_datetime(ticker)
 
                     if latest_db_datetime_str:
                         LOG.info(f"[{ticker}] 🔍 Checking for PRs newer than {latest_db_datetime_str}")
@@ -26959,7 +26874,7 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                                     # Only process PRs NEWER than latest in DB (datetime object comparison)
                                     if pr_datetime > latest_db_datetime:
                                         # Check if already exists (dedup protection)
-                                        exists = db_check_press_release_exists(ticker, pr_datetime_str, pr_title)
+                                        exists = db_check_fmp_release_exists(ticker, pr_datetime_str, pr_title)
                                         if not exists:
                                             LOG.info(f"[{ticker}] 🆕 NEW Press Release: {pr_title[:60]}... ({pr_datetime_str})")
 
@@ -26998,6 +26913,117 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                         LOG.warning(f"[{ticker}] ⚠️ DB has PRs but couldn't get latest datetime, skipping check")
         except Exception as e:
             LOG.error(f"[{ticker}] Press release check failed: {e}")
+
+        # === 8-K SEC FILINGS CHECK ===
+        try:
+            sec_8k_response = await validate_ticker_for_research(ticker=ticker, type="8k")
+            if sec_8k_response.get("valid"):
+                available_8ks = sec_8k_response.get("available_8ks", [])
+
+                # Detect first check: Does this ticker have ANY 8-K filings in DB?
+                from modules.company_releases import (
+                    db_has_any_8k_for_ticker,
+                    db_check_8k_filing_exists
+                )
+                is_first_check = not db_has_any_8k_for_ticker(ticker)
+
+                if is_first_check:
+                    # First check: Initialize DB with ONLY the latest (first) 8-K silently
+                    LOG.info(f"[{ticker}] 🆕 First 8-K check - will initialize DB with latest 8-K only (no email)")
+
+                    if available_8ks:
+                        latest_8k = available_8ks[0]
+                        accession_number = latest_8k.get('accession_number')
+                        filing_date = latest_8k.get('filing_date')
+                        filing_title = latest_8k.get('filing_title')
+                        item_codes = latest_8k.get('item_codes')
+                        sec_html_url = latest_8k.get('sec_html_url')
+
+                        if accession_number and filing_date:
+                            # Check if already exists (safety check)
+                            exists = db_check_8k_filing_exists(ticker, filing_date, accession_number)
+                            if not exists:
+                                LOG.info(f"[{ticker}] 💾 Initializing DB with latest 8-K from {filing_date} (no email): {filing_title[:60]}...")
+
+                                # Queue job for generation (silent)
+                                batch_id = str(uuid.uuid4())
+                                job_config = {
+                                    "ticker": ticker,
+                                    "cik": sec_8k_response.get("cik"),
+                                    "accession_number": accession_number,
+                                    "filing_date": filing_date,
+                                    "filing_title": filing_title,
+                                    "item_codes": item_codes,
+                                    "sec_html_url": sec_html_url,
+                                    "send_email": False  # Silent initialization
+                                }
+
+                                with db() as conn, conn.cursor() as cur:
+                                    cur.execute("""
+                                        INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
+                                        VALUES (%s, %s, 1, %s)
+                                    """, (batch_id, 'processing', json.dumps(job_config)))
+
+                                    cur.execute("""
+                                        INSERT INTO ticker_processing_jobs (
+                                            batch_id, ticker, status, phase, progress, config
+                                        )
+                                        VALUES (%s, %s, %s, %s, 0, %s)
+                                        RETURNING job_id
+                                    """, (batch_id, ticker, 'queued', '8k_summary_generation', json.dumps(job_config)))
+
+                                    conn.commit()
+
+                                new_items["8k"] = 1
+                            else:
+                                LOG.info(f"[{ticker}] ✅ Latest 8-K already in DB, skipping initialization")
+                else:
+                    # Subsequent checks: Process NEW 8-Ks not in DB
+                    for filing in available_8ks:
+                        accession_number = filing.get('accession_number')
+                        filing_date = filing.get('filing_date')
+                        filing_title = filing.get('filing_title')
+                        item_codes = filing.get('item_codes')
+                        sec_html_url = filing.get('sec_html_url')
+
+                        if accession_number and filing_date:
+                            # Check if this 8-K has been processed
+                            exists = db_check_8k_filing_exists(ticker, filing_date, accession_number)
+                            if not exists:
+                                LOG.info(f"[{ticker}] 🆕 NEW 8-K: {filing_title[:60]}... ({filing_date})")
+
+                                # Queue job for generation (with email)
+                                batch_id = str(uuid.uuid4())
+                                job_config = {
+                                    "ticker": ticker,
+                                    "cik": sec_8k_response.get("cik"),
+                                    "accession_number": accession_number,
+                                    "filing_date": filing_date,
+                                    "filing_title": filing_title,
+                                    "item_codes": item_codes,
+                                    "sec_html_url": sec_html_url,
+                                    "send_email": True  # Send email for new 8-Ks
+                                }
+
+                                with db() as conn, conn.cursor() as cur:
+                                    cur.execute("""
+                                        INSERT INTO ticker_processing_batches (batch_id, status, total_jobs, config)
+                                        VALUES (%s, %s, 1, %s)
+                                    """, (batch_id, 'processing', json.dumps(job_config)))
+
+                                    cur.execute("""
+                                        INSERT INTO ticker_processing_jobs (
+                                            batch_id, ticker, status, phase, progress, config
+                                        )
+                                        VALUES (%s, %s, %s, %s, 0, %s)
+                                        RETURNING job_id
+                                    """, (batch_id, ticker, 'queued', '8k_summary_generation', json.dumps(job_config)))
+
+                                    conn.commit()
+
+                                new_items["8k"] = 1
+        except Exception as e:
+            LOG.error(f"[{ticker}] 8-K check failed: {e}")
 
         return new_items
 

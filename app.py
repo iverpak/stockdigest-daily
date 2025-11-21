@@ -2587,17 +2587,19 @@ def map_company_release_to_article_dict(release_row: Dict) -> Dict | None:
             LOG.warning(f"[{ticker}] Company release {release_id} has empty report_title - using fallback: {report_title}")
 
         # Convert filing_date to DATETIME (Phase 1 expects datetime for sorting)
+        # Keep NAIVE (no timezone) to match articles.published_at format
         filing_date = release_row.get("filing_date")
         if not filing_date:
             LOG.error(f"[{ticker}] Company release {release_id} missing filing_date - skipping integration")
             return None
 
-        # Handle both datetime and date types
+        # Handle both datetime and date types - keep naive like articles
         if isinstance(filing_date, datetime):
-            filing_datetime = filing_date.replace(tzinfo=timezone.utc)
+            # If already datetime, remove timezone to match articles (naive)
+            filing_datetime = filing_date.replace(tzinfo=None) if filing_date.tzinfo else filing_date
         else:  # date type
+            # Convert date to datetime at midnight (naive, UTC by convention)
             filing_datetime = datetime.combine(filing_date, datetime.min.time())
-            filing_datetime = filing_datetime.replace(tzinfo=timezone.utc)
 
         return {
             # REQUIRED by Phase 1 executive summary

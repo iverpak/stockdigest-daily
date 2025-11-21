@@ -173,17 +173,12 @@ You MUST output valid JSON with this EXACT structure:
     ],
     "operational_metrics": [...same structure as financial_results...],
     "major_developments": [...same structure...],
+    "transaction_details": [...same structure...],
     "guidance": [...same structure...],
     "strategic_initiatives": [...same structure...],
     "risk_factors": [...same structure...],
     "industry_competitive": [...same structure...],
     "capital_allocation": [...same structure...],
-    "upside_scenario": {
-      "content": "string (80-100 words, single paragraph)"
-    },
-    "downside_scenario": {
-      "content": "string (80-100 words, single paragraph)"
-    },
     "key_variables": [
       {
         "bullet_id": "string",
@@ -196,13 +191,9 @@ You MUST output valid JSON with this EXACT structure:
 
 SECTION STRUCTURE NOTES:
 
-Bullet sections (financial_results, operational_metrics, major_developments, guidance, strategic_initiatives, risk_factors, industry_competitive, capital_allocation):
+Bullet sections (financial_results, operational_metrics, major_developments, transaction_details, guidance, strategic_initiatives, risk_factors, industry_competitive, capital_allocation):
 - Array of bullet objects
 - Each bullet has: bullet_id, topic_label, content
-
-Scenario sections (upside_scenario, downside_scenario):
-- Single object with content field only
-- 80-100 words per scenario
 
 Key Variables section:
 - Array of bullet objects
@@ -214,7 +205,7 @@ Bottom Line section:
 
 CRITICAL JSON REQUIREMENTS:
 1. "metadata" object must be present with report_title, fiscal_quarter, fiscal_year
-2. ALL 12 sections must be present inside "sections" object (even if empty)
+2. ALL 11 sections must be present inside "sections" object (even if empty)
 3. Empty bullet sections = [] (empty array), NOT null, NOT omitted
 4. All strings must be properly escaped (quotes, newlines, etc.)
 5. No trailing commas
@@ -230,14 +221,13 @@ SECTION ORDER (must appear in this exact order):
 2. financial_results
 3. operational_metrics
 4. major_developments
-5. guidance
-6. strategic_initiatives
-7. risk_factors
-8. industry_competitive
-9. capital_allocation
-10. upside_scenario
-11. downside_scenario
-12. key_variables
+5. transaction_details
+6. guidance
+7. strategic_initiatives
+8. risk_factors
+9. industry_competitive
+10. capital_allocation
+11. key_variables
 
 ═══════════════════════════════════════════════════════════════════════════════
 SECTION LENGTH LIMITS
@@ -248,15 +238,12 @@ Bottom Line: 150 words (HARD CAP - strict enforcement with word count)
 Financial Results: 4-8 bullets (comprehensive)
 Operational Metrics: 3-6 bullets
 Major Developments: 2-5 bullets
+Transaction Details: 2-8 bullets
 Guidance: Include all metrics provided
 Strategic Initiatives: 2-4 bullets
 Risk Factors: 2-5 bullets
 Industry & Competitive: 2-4 bullets
 Capital Allocation: 2-4 bullets
-
-Upside Scenario: Single paragraph, 3-4 sentences (~80-100 words)
-Downside Scenario: Single paragraph, 3-4 sentences (~80-100 words)
-
 Key Variables: 3-5 bullets max
 
 Individual bullets: No hard limit, but be information-dense - every word should add value.
@@ -389,18 +376,17 @@ Each bullet in sections (financial_results, operational_metrics, major_developme
    • "Company reported quarterly revenue results exceeding expectations" (too long)
    • "Good news" (editorial, not descriptive)
 
-3. CONTENT (full bullet text with attribution)
+3. CONTENT (full bullet text)
 
    Requirements:
    - Full sentence(s) with complete information
-   - MUST include attribution: "per earnings release", "CEO stated", etc.
    - Information-dense: include key numbers, context, comparisons
    - For any implications or connections: MUST attribute to management
 
-   Single-source attribution:
-   "Per earnings release, Q3 revenue $177M, +58% YoY, exceeding consensus by $12M"
+   Clean factual reporting:
+   "Q3 revenue $177M, +58% YoY, exceeding consensus by $12M"
 
-   Multi-source attribution:
+   Executive quote attribution:
    "CEO stated $2B acquisition; CFO clarified financing via debt issuance"
 
    ATTRIBUTION CRITICAL RULE:
@@ -410,38 +396,16 @@ Each bullet in sections (financial_results, operational_metrics, major_developme
    ❌ "Could impact margins" (who concluded this?)
 
 ═══════════════════════════════════════════════════════════════════════════════
-ATTRIBUTION RULES
+ATTRIBUTION
 ═══════════════════════════════════════════════════════════════════════════════
 
-**DEFAULT: NO ATTRIBUTION**
+Only attribute direct executive quotes when speaker identity adds context:
+✅ "CEO stated: 'This acquisition accelerates our cloud strategy and adds $500M in recurring revenue'"
+✅ "CFO noted concerns about aluminum supply chain; expects resolution by Q1 2026"
+✅ "Management guided Q4 revenue of $2.1B-$2.3B"
 
-This processes ONE company document (8-K exhibit, earnings release, or press release).
-Do NOT add attribution to bullets unless there is a direct executive quote.
-
-**ONLY attribute when:**
-
-1. **Direct executive quote** (use actual name/title if available):
-   - "per CEO John Smith" or "CEO stated" or "CFO noted"
-   - Example: ✓ "CEO Mac McFarland noted the company is executing its Flywheel strategy"
-
-2. **Specific table citation** (RARE - use sparingly):
-   - Only when the table name adds meaningful precision
-   - Example: "per the condensed consolidated statements of operations"
-   - Target: Use in <10% of bullets
-
-**DO NOT attribute in these sections:**
-- Financial Results: ✗ "per the earnings release"
-- Guidance: ✗ "per the earnings release"
-- Operational Metrics: ✗ "per the operating results table"
-- Major Developments: ✗ "per the earnings release"
-- Upside/Downside: ✗ "per the earnings release"
-
-**Target: 80-90% of bullets should have ZERO attribution.**
-
-**Pre-submission check:**
-□ Did I add "per the earnings release" to every bullet? → REMOVE IT
-□ Are executive quotes properly attributed? → KEEP THOSE
-□ Did I cite tables unnecessarily? → REMOVE IT
+Rare exception for table/chart citations when precision is meaningful:
+✅ "Revenue breakdown per earnings chart: Automotive 85% ($21.3B), Energy 8%..."
 
 ═══════════════════════════════════════════════════════════════════════════════
 THREE-TIER INFERENCE FRAMEWORK
@@ -522,11 +486,11 @@ When same topic appears in multiple places in the release, use this decision tre
 
    → Single bullet: "Q3 revenue $177M, +58% YoY per company; beat internal target by $12M"
 
-3. **If same topic, same information** → Single bullet citing source
+3. **If same topic, same information** → Single bullet
 
    Example: "Operating margin 42.3%" mentioned twice
 
-   → Single bullet: "Operating margin 42.3% per earnings release"
+   → Single bullet: "Operating margin 42.3%"
 
 4. **If different topics** → Never synthesize (even if they share keywords)
 
@@ -748,19 +712,19 @@ Examples:
 {
   "bullet_id": "q3_revenue",
   "topic_label": "Q3 Revenue",
-  "content": "Q3 Revenue: $12.8B, +15% YoY, +8% QoQ; beat consensus of $12.5B per earnings release"
+  "content": "Q3 revenue $12.8B, +15% YoY, +8% QoQ; beat consensus of $12.5B"
 }
 
 {
   "bullet_id": "segment_performance",
   "topic_label": "Segment Performance",
-  "content": "Segment Performance: Cloud revenue $5.2B (+25% YoY), Enterprise $3.1B (+8% YoY), Consumer $2.5B (-3% YoY) per earnings release"
+  "content": "Cloud revenue $5.2B (+25% YoY), Enterprise $3.1B (+8% YoY), Consumer $2.5B (-3% YoY)"
 }
 
 {
   "bullet_id": "free_cash_flow",
   "topic_label": "Free Cash Flow",
-  "content": "Free Cash Flow: $2.1B in Q3, +18% YoY; YTD FCF $5.8B per earnings release"
+  "content": "Free cash flow $2.1B in Q3, +18% YoY; YTD FCF $5.8B"
 }
 
 SEGMENT PERFORMANCE FROM VISUALS (when charts present):
@@ -812,7 +776,7 @@ If minimal operational discussion, synthesize from management statements:
 {
   "bullet_id": "fleet_performance",
   "topic_label": "Fleet Performance",
-  "content": "Fleet performance: Company noted 17 TWh generation with 1.8% forced outage factor per earnings release"
+  "content": "Company noted 17 TWh generation with 1.8% forced outage factor"
 }
 
 CHART-DERIVED METRICS (when visuals present):
@@ -858,8 +822,54 @@ Example:
 {
   "bullet_id": "aws_contract_expansion",
   "topic_label": "AWS Contract Expansion",
-  "content": "AWS Contract Expansion: Company announced 1.9 GW arrangement doubling original contract through 2042 per earnings release; valued at $XXM annually per CFO"
+  "content": "Company announced 1.9 GW arrangement doubling original contract through 2042; valued at $XXM annually per CFO"
 }
+
+═══════════════════════════════════════════════════════════════════════════════
+TRANSACTION DETAILS (Include if material transaction disclosed - 2-8 bullets)
+═══════════════════════════════════════════════════════════════════════════════
+
+SCOPE: Economic terms, conditions, and mechanics of material transactions
+
+This section captures the "HOW" of transactions announced in Major Developments.
+Extract specific terms disclosed in the filing.
+
+Include all material terms provided - different transaction types will have
+different relevant details:
+
+- M&A Transactions: Consideration, earnouts, adjustments, closing conditions, protections
+- Debt Instruments: Principal, rate, maturity, covenants, security, use of proceeds
+- Equity Offerings: Shares, price, proceeds, underwriter terms, lock-ups
+- Credit Facilities: Size, tranches, rates, covenants, security, fees
+- Asset Transactions: Price, liabilities, adjustments, leaseback terms
+- Joint Ventures: Ownership, contributions, governance, exit rights
+- Restructuring: Exchange ratios, consent fees, thresholds
+
+Format:
+{
+  "bullet_id": "acquisition_consideration",
+  "topic_label": "Acquisition Consideration",
+  "content": "[Transaction term]: [Specific details disclosed]"
+}
+
+Examples:
+{
+  "bullet_id": "purchase_price",
+  "topic_label": "Purchase Price",
+  "content": "Purchase price $2.5B: $2.0B cash at close, $500M in common stock; additional earnout up to $300M based on 2026-2027 revenue exceeding $1.5B"
+}
+
+{
+  "bullet_id": "closing_conditions",
+  "topic_label": "Closing Conditions",
+  "content": "Closing subject to HSR approval, EU merger clearance, and TEGNA shareholder approval; expected completion by second half of 2026"
+}
+
+CRITICAL: Only include terms explicitly disclosed. If filing provides minimal
+detail, write what's provided without elaboration.
+
+If no material transaction disclosed:
+Return empty array: []
 
 ═══════════════════════════════════════════════════════════════════════════════
 GUIDANCE (Always if guidance provided or updated)
@@ -893,7 +903,7 @@ If no guidance provided:
 {
   "bullet_id": "no_formal_guidance",
   "topic_label": "No Formal Guidance",
-  "content": "No formal guidance: Management stated not providing specific targets per earnings release"
+  "content": "Management stated not providing specific targets"
 }
 
 If no guidance discussed:
@@ -925,7 +935,7 @@ Example:
 {
   "bullet_id": "smr_exploration",
   "topic_label": "SMR Exploration",
-  "content": "SMR exploration: Company stated exploring Small Modular Reactors per earnings release; characterized as '10-15 year horizon'"
+  "content": "Company stated exploring Small Modular Reactors; characterized as '10-15 year horizon'"
 }
 
 If no strategic initiatives discussed:
@@ -947,20 +957,20 @@ Format:
 {
   "bullet_id": "aluminum_supply_disruption",
   "topic_label": "Aluminum Supply Risk",
-  "content": "Aluminum Supply Risk: [Factual description per release]"
+  "content": "Aluminum Supply Risk: [Factual description]"
 }
 
 Examples:
 {
   "bullet_id": "aluminum_supply_disruption",
   "topic_label": "Aluminum Supply Risk",
-  "content": "Aluminum Supply Risk: Management stated supplier declared force majeure affecting production per earnings release; exploring alternatives; expects resolution by Q1 2026"
+  "content": "Management stated supplier declared force majeure affecting production; exploring alternatives; expects resolution by Q1 2026"
 }
 
 {
   "bullet_id": "customer_concentration",
   "topic_label": "Customer Concentration",
-  "content": "Customer Concentration: Top customer at 34% revenue per earnings release; CEO stated '15-year relationship with strong renewal history'"
+  "content": "Top customer represents 34% of revenue; CEO stated '15-year relationship with strong renewal history'"
 }
 
 If no risks discussed:
@@ -996,7 +1006,7 @@ Examples:
 {
   "bullet_id": "pjm_capacity_pricing",
   "topic_label": "PJM Capacity Pricing",
-  "content": "PJM Capacity Pricing: Management noted PJM capacity prices increased from $50/MW-day (2024/2025) to $270/MW-day (2025/2026) per earnings release; supports strong margin outlook per CEO"
+  "content": "Management noted PJM capacity prices increased from $50/MW-day (2024/2025) to $270/MW-day (2025/2026); supports strong margin outlook per CEO"
 }
 
 If no industry/competitive discussion:
@@ -1029,185 +1039,17 @@ Examples:
 {
   "bullet_id": "share_repurchases",
   "topic_label": "Share Repurchases",
-  "content": "Share repurchases: $100M YTD vs $500M annual target per earnings release; CEO reaffirmed $500M full-year commitment"
+  "content": "Share repurchases $100M YTD vs $500M annual target; CEO reaffirmed $500M full-year commitment"
 }
 
 {
   "bullet_id": "debt_refinancing",
   "topic_label": "Debt Refinancing",
-  "content": "Debt refinancing: Issued $1.5B senior notes at 5.25% per earnings release; CFO stated extends maturity profile and reduces interest expense by $15M annually"
+  "content": "Issued $1.5B senior notes at 5.25%; CFO stated extends maturity profile and reduces interest expense by $15M annually"
 }
 
 If not discussed:
 Return empty array: []
-
-═══════════════════════════════════════════════════════════════════════════════
-UPSIDE SCENARIO (Only if bullish developments exist - single paragraph, 80-100 words)
-═══════════════════════════════════════════════════════════════════════════════
-
-MANDATORY PRE-WRITE CHECKPOINT
-Before writing, verify you will NOT write these BANNED PHRASES:
-❌ "alternative strategic options"
-❌ "could pursue alternatives"
-❌ "may explore other alternatives"
-❌ "various strategic paths"
-❌ "strategic flexibility"
-❌ "multiple options available"
-
-ONLY write attributed statements:
-✅ "CEO stated company is positioned to [specific outcome they said]"
-✅ "Management projected [specific view they expressed]"
-
-If you were about to write a banned phrase → STOP → Rewrite as attributed view from management.
-
-INCLUDE this section if release contains material positive developments.
-
-Format:
-{
-  "content": "Single paragraph, 3-4 sentences. Reference developments from above sections WITHOUT repeating specific numbers. Present ONLY what bullish management statements concluded with clear attribution."
-}
-
-ATTRIBUTION REQUIREMENT: Every conclusion must cite management:
-- "CEO stated..."
-- "CFO highlighted..."
-- "Management projected..."
-
-CONFIDENCE LEVEL PRESERVATION:
-
-When synthesizing multiple management statements, preserve the WEAKEST confidence level across all combined statements.
-
-CRITICAL RULE: Synthesis cannot increase confidence. Management's hedging is intentional.
-
-Confidence hierarchy (preserve lowest):
-CERTAIN: "will/committed/guaranteed" → Keep exact
-STRONG: "expect/plan/target" → Keep exact
-MODERATE: "believe/think/anticipate" → Keep exact
-WEAK: "hope/may/could/exploring/monitoring/watching/assessing" → Keep exact
-
-Examples of incorrect confidence escalation:
-
-❌ "seeing improvement" + "ahead of plan" → "outperforming across metrics" (escalated to superlative)
-✅ "seeing improvement" + "ahead of plan" → "management noted improvement and stated ahead of plan" (preserved both)
-
-❌ "exploring options" + "talking to partners" → "actively pursuing partnerships" (weak → strong escalation)
-✅ "exploring options" + "talking to partners" → "management stated exploring options including partner discussions" (preserved weak)
-
-❌ "hopeful about approval" + "on track for filing" → "confident in regulatory success" (moderate + strong → certain)
-✅ "hopeful about approval" + "on track for filing" → "management expressed optimism on approval timing with filing on track" (preserved moderate)
-
-MULTI-STATEMENT SYNTHESIS:
-
-When combining 3+ statements with varying confidence levels:
-
-Example:
-- Statement 1: "committed to launching" (certain)
-- Statement 2: "exploring partnerships" (weak)
-- Statement 3: "plan to expand" (strong)
-
-❌ WRONG: "Management committed to launching with partnership expansion" (uses highest confidence)
-✅ CORRECT: "Management committed to launching per CEO; exploring partnerships per CFO" (preserves each level)
-
-OR if combining is essential:
-✅ CORRECT: "Management stated exploring partnerships to support committed launch and planned expansion" (uses weakest level as frame)
-
-VERIFICATION STEPS:
-
-Before finalizing any synthesis:
-1. Identify confidence level of EACH component statement
-2. Rank them (certain > strong > moderate > weak)
-3. Use WEAKEST level for final output
-4. If uncertain about level → Default to "stated" (neutral attribution verb)
-
-Test: Can you point to exact management words that support this confidence level?
-- If YES → Proceed with that level
-- If NO → Downgrade to weaker level or separate statements
-
-Example structure:
-"CEO stated [development] positions company for [what they said]. CFO highlighted [metric] demonstrating [their conclusion], projecting [their view]. Management noted [dynamic] creates [advantage they identified]."
-
-DO NOT include this section if no bullish management views exist.
-
-SEVERITY MATCHING PRINCIPLE:
-
-Match your language severity to management language - don't inflate or deflate:
-
-PRESERVE EXACT SEVERITY:
-- Management says "minor delay" → Write "minor delay" (not "threatens timeline")
-- Management says "exploring options" → Write "exploring options" (not "plans to divest")
-- Management says "monitoring costs" → Write "monitoring costs" (not "faces margin pressure")
-- Management says "challenging" → Write "challenging" (not "crisis" or "severe")
-- Management says "transformational" → Use their word with attribution (not downgrade to "significant")
-- Management says "improvement" → Write "improvement" (not "outperforming")
-- Management says "on track" → Write "on track" (not "ahead of schedule")
-
-RULE: Report what management stated using their framing and severity.
-
-Examples of severity inflation (WRONG):
-❌ "seeing challenges" → "facing severe headwinds"
-❌ "monitoring situation" → "crisis management mode"
-❌ "working on improvements" → "committed to transformational change"
-❌ "better than expected" → "exceeding all targets"
-❌ "more than we thought" → "significantly above guidance"
-
-Examples preserving severity (CORRECT):
-✓ "Management noted challenges in European market"
-✓ "CEO stated monitoring macro situation closely"
-✓ "CFO described working on margin improvements"
-✓ "Results better than management anticipated"
-✓ "Revenue higher than initial expectations"
-
-═══════════════════════════════════════════════════════════════════════════════
-DOWNSIDE SCENARIO (Only if bearish developments exist - single paragraph, 80-100 words)
-═══════════════════════════════════════════════════════════════════════════════
-
-MANDATORY PRE-WRITE CHECKPOINT
-Before writing, verify you will NOT write these BANNED PHRASES:
-❌ "alternative strategic options"
-❌ "could pursue alternatives"
-❌ "may explore other alternatives"
-❌ "various strategic paths"
-❌ "strategic flexibility"
-❌ "multiple options available"
-❌ "potential strategic alternatives"
-❌ "might consider other options"
-
-ONLY write attributed statements:
-✅ "CFO warned [specific risk they identified]"
-✅ "Management raised concerns about [specific issue they flagged]"
-
-If you were about to write a banned phrase → STOP → Rewrite as attributed view.
-
-INCLUDE this section if release acknowledges material risks or challenges.
-
-Format:
-{
-  "content": "Single paragraph, 3-4 sentences. Reference developments from above sections WITHOUT repeating specific numbers. Present ONLY what bearish management statements concluded with clear attribution."
-}
-
-ATTRIBUTION REQUIREMENT: Every conclusion must cite management:
-- "CFO warned..."
-- "Management raised concerns..."
-- "CEO noted risks..."
-
-SYNTHESIS CONFIDENCE PRESERVATION:
-
-When combining statements, preserve management's weakest confidence level:
-
-❌ "seeing challenges" + "monitoring situation" → "facing severe headwinds"
-✅ "seeing challenges" + "monitoring situation" → "management noted challenges and stated monitoring situation"
-
-Confidence hierarchy (preserve lowest):
-CERTAIN: "will face/confirmed headwind" → Keep exact
-STRONG: "expect pressure/anticipate challenges" → Keep exact
-MODERATE: "may see/could face" → Keep exact
-WEAK: "monitoring/watching/assessing" → Keep exact
-
-RULE: Don't escalate risk language. If management hedged ("may"), you hedge.
-
-Example structure:
-"CFO flagged [risk] constraining [what they stated]. Management highlighted [headwind] continuing [trajectory they described], potentially pressuring [outcome they projected]."
-
-DO NOT include this section if no risks acknowledged.
 
 ═══════════════════════════════════════════════════════════════════════════════
 KEY VARIABLES TO MONITOR (Include if variables discussed - 3-5 bullets max)
@@ -1229,7 +1071,7 @@ Examples:
 {
   "bullet_id": "q4_ebitda_trajectory",
   "topic_label": "Q4 EBITDA Trajectory",
-  "content": "Q4 EBITDA trajectory: Actual vs H2 guidance $400M-$450M total per earnings release - Timeline: Q4 2025 earnings"
+  "content": "Q4 EBITDA trajectory: Actual vs H2 guidance of $400M-$450M total - Timeline: Q4 2025 earnings"
 }
 
 {
@@ -1338,13 +1180,12 @@ ALWAYS include (mandatory for ALL earnings releases):
 - major_developments
 
 Include ONLY if management discussed:
+- transaction_details (if material transaction disclosed)
 - guidance (if provided or updated)
 - strategic_initiatives (if strategy discussed)
 - risk_factors (if risks discussed)
 - industry_competitive (if discussed)
 - capital_allocation (if discussed)
-- upside_scenario (if bullish developments exist)
-- downside_scenario (if bearish developments exist)
 - key_variables (if variables flagged)
 
 If section has no content, return empty array [] or omit content field.
@@ -1358,7 +1199,7 @@ Before finalizing output, verify these critical requirements:
 1. JSON STRUCTURE
 ═══════════════════════════════════════════════════════════════════════════════
 □ Valid JSON (parseable by json.loads())
-□ All 12 sections present in "sections" object
+□ All 11 sections present in "sections" object
 □ Empty bullet sections = [] (empty array, not null or omitted)
 □ Bottom Line has word_count field
 □ All strings properly escaped (quotes, newlines)
@@ -1372,32 +1213,22 @@ Before finalizing output, verify these critical requirements:
 □ Financial Results: 4-8 bullets with all quantified metrics
 □ Operational Metrics: 3-6 bullets
 □ Major Developments: 2-5 bullets
+□ Transaction Details: 2-8 bullets (if material transaction disclosed)
 □ Guidance: All metrics management provided (no omissions)
 □ Strategic Initiatives: 2-4 bullets
 □ Risk Factors: 2-5 bullets (if risks discussed)
 □ Industry & Competitive: 2-4 bullets
 □ Capital Allocation: 2-4 bullets (if discussed)
-□ Upside Scenario: Present if management made positive statements
-□ Downside Scenario: Present if management acknowledged risks
 □ Key Variables: 3-5 bullets
 
-3. ATTRIBUTION QUALITY
-═══════════════════════════════════════════════════════════════════════════════
-□ Every claim traceable to specific speaker (CEO, CFO) or "per earnings release"
-□ Every implication attributed to who said it ("CEO stated...", "CFO highlighted...")
-□ No phrases like "positions company for X" without attribution
-□ Upside/Downside scenarios cite specific management statements
-□ No vague attribution ("reportedly")
-□ Split attribution when different claims from different sources in same sentence
-
-4. RELEASE-FIRST COMPLIANCE
+3. RELEASE-FIRST COMPLIANCE
 ═══════════════════════════════════════════════════════════════════════════════
 □ Every bullet triggered by release content (not external analysis)
 □ No data from outside sources unless management cited them
 □ Competitor/industry news included only if management explicitly discussed
 □ All numbers came directly from management statements
 
-5. INFERENCE BOUNDARIES
+4. INFERENCE BOUNDARIES
 ═══════════════════════════════════════════════════════════════════════════════
 □ Tier 0 (bullet content): Only direct statements from release with attribution
 □ Tier 1 (section assignment): Single-step logical connections only for categorization
@@ -1406,7 +1237,7 @@ Before finalizing output, verify these critical requirements:
 □ Did I create any prohibited multi-step inferences? (Should be NO)
 □ Did I attribute every implication to management? (Should be YES)
 
-6. LANGUAGE PRESERVATION
+5. LANGUAGE PRESERVATION
 ═══════════════════════════════════════════════════════════════════════════════
 □ Preserved management's confidence levels ("may" stays "may", "exploring" stays "exploring")
 □ No upgrading certainty ("exploring" → "pursuing" = WRONG)
@@ -1416,21 +1247,21 @@ Before finalizing output, verify these critical requirements:
 □ "transformational" used with attribution if management said it (not downgraded to "significant")
 □ No editorial characterization in Bottom Line (banned: "positive", "bullish", "growing concerns", "mounting pressure")
 
-7. FABRICATION PREVENTION
+6. FABRICATION PREVENTION
 ═══════════════════════════════════════════════════════════════════════════════
 □ Every number came from the release (no calculations unless management showed them)
 □ No "undisclosed" claims unless management said "undisclosed"
 □ Release silence = missing information (not "information was not disclosed")
 □ No invented metrics or KPIs not mentioned by management
 
-8. LEGAL COMPLIANCE
+7. LEGAL COMPLIANCE
 ═══════════════════════════════════════════════════════════════════════════════
 □ No investment advice ("buy", "sell", "we recommend", "you should")
 □ All recommendations attributed to management
 □ Scenarios framed as "per management" not personal recommendations
 □ No promises or guarantees on management's behalf beyond what they stated
 
-9. TEMPORAL LOGIC
+8. TEMPORAL LOGIC
 ═══════════════════════════════════════════════════════════════════════════════
 □ DATES: For any sentence with 2+ dates, verify chronological order
   - List all dates in the sentence
@@ -1440,7 +1271,7 @@ Before finalizing output, verify these critical requirements:
   - If sequence unclear or dates conflict: Use range format or single most recent date
 □ Guidance periods correctly sequenced (Q4 before FY, FY 2024 before FY 2025)
 
-10. UNIT CONSISTENCY
+9. UNIT CONSISTENCY
 ═══════════════════════════════════════════════════════════════════════════════
 □ UNITS: For repeated metrics (Bcf, MMBtu, GW, $B, MW, bps, TWh), verify all instances match source
   - Search output for each unit type (e.g., all instances of "Bcf")

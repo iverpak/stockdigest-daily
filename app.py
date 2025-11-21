@@ -2609,7 +2609,7 @@ def map_company_release_to_article_dict(release_row: Dict) -> Dict | None:
             "published_at": filing_datetime,  # For chronological sorting
 
             # METADATA (useful for tracking and display)
-            "id": f"release_{release_id}",  # Prefix to avoid ID conflicts with articles
+            "id": -release_id,  # Negative integer to distinguish from articles (positive)
             "ticker": ticker,
             "company_name": release_row.get("company_name"),
             "release_type": release_row.get("release_type"),  # '8k' or 'fmp_press_release'
@@ -14595,8 +14595,15 @@ def generate_email_html_core(
             # Parse JSON string to Python list for SQL query
             flagged_article_ids = json.loads(result['article_ids'])
 
+    # Split article IDs by type: positive = real articles, negative = company releases
+    real_article_ids = [aid for aid in flagged_article_ids if aid > 0]
+    company_release_ids = [abs(aid) for aid in flagged_article_ids if aid < 0]
+
+    articles = []
+
     with db() as conn, conn.cursor() as cur:
-        if flagged_article_ids and len(flagged_article_ids) > 0:
+        # Query real articles from articles table
+        if real_article_ids:
             cur.execute("""
                 SELECT a.id, a.title, a.resolved_url, a.domain, a.published_at,
                        ta.category, ta.ticker, ta.search_keyword, ta.competitor_ticker, ta.value_chain_type,
@@ -14609,16 +14616,43 @@ def generate_email_html_core(
                 AND ta.ai_summary IS NOT NULL
                 AND (ta.ai_model IS NULL OR ta.ai_model != 'spam')
                 ORDER BY a.published_at DESC NULLS LAST
-            """, (ticker, flagged_article_ids))
-            articles = cur.fetchall()
+            """, (ticker, real_article_ids))
+            articles = list(cur.fetchall())
+            LOG.info(f"[{ticker}] Email #3: Fetched {len(articles)} real articles")
 
-            # Group articles by category
-            for article in articles:
-                category = article['category']
-                if category in articles_by_category:
-                    articles_by_category[category].append(article)
-        else:
-            articles = []
+        # Query company releases and map to article format
+        if company_release_ids:
+            cur.execute("""
+                SELECT id, ticker, company_name, filing_date, report_title,
+                       summary_markdown, release_type, source_type
+                FROM company_releases
+                WHERE id = ANY(%s)
+                ORDER BY filing_date DESC
+            """, (company_release_ids,))
+
+            releases_fetched = 0
+            for release_row in cur.fetchall():
+                article_dict = map_company_release_to_article_dict(dict(release_row))
+                if article_dict:
+                    # Convert to match articles table structure (add missing fields)
+                    article_dict.update({
+                        'search_keyword': None,
+                        'competitor_ticker': None,
+                        'value_chain_type': None,
+                        'relevance_score': None,
+                        'relevance_reason': None,
+                        'is_rejected': False
+                    })
+                    articles.append(article_dict)
+                    releases_fetched += 1
+
+            LOG.info(f"[{ticker}] Email #3: Fetched {releases_fetched} company releases")
+
+        # Group all articles (real + company releases) by category
+        for article in articles:
+            category = article.get('category', 'company')  # Default to company if missing
+            if category in articles_by_category:
+                articles_by_category[category].append(article)
 
     # Calculate metrics
     analyzed_count = sum(len(arts) for arts in articles_by_category.values())
@@ -14809,7 +14843,8 @@ def send_user_intelligence_report(
     tickers: List[str] = None,
     recipient_email: str = None,
     bcc: str = None,
-    summary_date: date = None
+    summary_date: date = None,
+    report_type: str = None
 ) -> Dict:
     """
     Email #3 wrapper - SAME AS send_user_intelligence_report but uses Phase 3 integrated version.
@@ -14832,11 +14867,19 @@ def send_user_intelligence_report(
     ticker = tickers[0]
     LOG.info(f"Generating stock intelligence report for {ticker} → {recipient_email or DIGEST_TO}")
 
+    # Determine report_type if not provided (use day-of-week detection)
+    if not report_type:
+        report_type, _ = get_report_type_and_lookback()
+        LOG.info(f"Test mode: Using day-of-week detection for report_type: {report_type}")
+    else:
+        LOG.info(f"Test mode: Using explicit report_type: {report_type}")
+
     # Call core function
     email_data = generate_email_html_core(
         ticker=ticker,
         hours=hours,
-        recipient_email=recipient_email or DIGEST_TO
+        recipient_email=recipient_email or DIGEST_TO,
+        report_type=report_type
     )
 
     if not email_data:
@@ -14945,7 +14988,7 @@ _last_worker_activity = None
 # Forward declarations - these reference functions defined later in the file
 # We use globals() to avoid circular imports
 
-async def process_ingest_phase(job_id: str, ticker: str, minutes: int, batch_size: int, triage_batch_size: int, mode: str = 'daily'):
+async def process_ingest_phase(job_id: str, ticker: str, minutes: int, batch_size: int, triage_batch_size: int, mode: str = 'daily', report_type: str = 'daily'):
     """Wrapper for ingest logic with error handling and progress tracking"""
     try:
         # Call the actual cron_ingest function which is defined later
@@ -14966,7 +15009,8 @@ async def process_ingest_phase(job_id: str, ticker: str, minutes: int, batch_siz
             tickers=[ticker],
             batch_size=batch_size,
             triage_batch_size=triage_batch_size,
-            mode=mode
+            mode=mode,
+            report_type=report_type
         )
 
         LOG.info(f"[JOB {job_id}] cron_ingest completed for {ticker}")
@@ -15916,30 +15960,58 @@ async def process_quality_review_phase(job: dict):
 
         LOG.info(f"[{ticker}] Found {len(article_ids)} article IDs for review")
 
+        # Split article IDs by type: positive = real articles, negative = company releases
+        real_article_ids = [aid for aid in article_ids if aid > 0]
+        company_release_ids = [abs(aid) for aid in article_ids if aid < 0]
+
+        articles = []
+
         # Fetch article objects (domain + summary) for Phase 1 attribution validation
         with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                SELECT a.domain, a.title, ta.ai_summary, ta.article_id
-                FROM ticker_articles ta
-                JOIN articles a ON ta.article_id = a.id
-                WHERE ta.ticker = %s
-                AND ta.article_id = ANY(%s)
-                AND ta.ai_summary IS NOT NULL
-                ORDER BY ta.article_id
-            """, (ticker, article_ids))
+            # Fetch real articles
+            if real_article_ids:
+                cur.execute("""
+                    SELECT a.domain, a.title, ta.ai_summary, ta.article_id
+                    FROM ticker_articles ta
+                    JOIN articles a ON ta.article_id = a.id
+                    WHERE ta.ticker = %s
+                    AND ta.article_id = ANY(%s)
+                    AND ta.ai_summary IS NOT NULL
+                    ORDER BY ta.article_id
+                """, (ticker, real_article_ids))
 
-            rows = cur.fetchall()
+                articles.extend([
+                    {
+                        "domain": row['domain'],
+                        "title": row['title'],
+                        "ai_summary": row['ai_summary'],
+                        "article_id": row['article_id']
+                    }
+                    for row in cur.fetchall() if row['ai_summary']
+                ])
+                LOG.info(f"[{ticker}] Quality review: Fetched {len(articles)} real article summaries")
 
-        # Build article objects with domain metadata
-        articles = [
-            {
-                "domain": row['domain'],
-                "title": row['title'],
-                "ai_summary": row['ai_summary'],
-                "article_id": row['article_id']
-            }
-            for row in rows if row['ai_summary']
-        ]
+            # Fetch company releases
+            if company_release_ids:
+                cur.execute("""
+                    SELECT id, report_title, summary_markdown
+                    FROM company_releases
+                    WHERE id = ANY(%s)
+                    ORDER BY id
+                """, (company_release_ids,))
+
+                releases_fetched = 0
+                for row in cur.fetchall():
+                    if row['summary_markdown']:
+                        articles.append({
+                            "domain": "Company Release",
+                            "title": row['report_title'],
+                            "ai_summary": row['summary_markdown'],
+                            "article_id": -row['id']  # Preserve negative ID for consistency
+                        })
+                        releases_fetched += 1
+
+                LOG.info(f"[{ticker}] Quality review: Fetched {releases_fetched} company release summaries")
 
         if not articles:
             raise ValueError("No articles found for verification")
@@ -17520,6 +17592,7 @@ async def process_ticker_job(job: dict):
     minutes = config.get('minutes', 1440)
     batch_size = config.get('batch_size', 3)
     triage_batch_size = config.get('triage_batch_size', 3)
+    report_type = config.get('report_type', 'daily')
 
     start_time = time.time()
     memory_start = memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else 0
@@ -17528,7 +17601,7 @@ async def process_ticker_job(job: dict):
     reset_cost_tracker()
 
     LOG.info(f"[{ticker}] 🚀 [JOB {job_id}] Starting processing for {ticker}")
-    LOG.info(f"   Config: minutes={minutes}, batch={batch_size}, triage_batch={triage_batch_size}")
+    LOG.info(f"   Config: minutes={minutes}, batch={batch_size}, triage_batch={triage_batch_size}, report_type={report_type}")
 
     try:
         # START HEARTBEAT THREAD - Updates last_updated every 60s to prevent premature reclaim
@@ -17586,7 +17659,8 @@ async def process_ticker_job(job: dict):
             minutes=minutes,
             batch_size=batch_size,
             triage_batch_size=triage_batch_size,
-            mode=config.get('mode', 'daily')
+            mode=config.get('mode', 'daily'),
+            report_type=report_type
         )
 
         update_job_status(job_id, progress=60)
@@ -17919,7 +17993,8 @@ async def process_ticker_job(job: dict):
                                     hours=int(minutes/60),
                                     tickers=[ticker],
                                     recipient_email=DIGEST_TO,
-                                    summary_date=datetime.now().date()
+                                    summary_date=datetime.now().date(),
+                                    report_type=report_type
                                 )
 
                                 if editorial_result and editorial_result.get('status') == 'sent':
@@ -20461,7 +20536,8 @@ async def cron_ingest(
     tickers: List[str] = Query(default=None, description="Specific tickers to ingest"),
     batch_size: int = Query(default=None, description="Batch size for concurrent processing"),
     triage_batch_size: int = Query(default=2, description="Batch size for triage processing"),
-    mode: str = 'daily'
+    mode: str = 'daily',
+    report_type: str = 'daily'
 ):
     """Enhanced ingest with comprehensive memory monitoring and async batch processing"""
     # Set batch size from parameter or environment variable
@@ -20876,9 +20952,9 @@ async def cron_ingest(
         LOG.info("=== PHASE 3: SENDING ENHANCED QUICK TRIAGE EMAIL ===")
         memory_monitor.take_snapshot("PHASE3_START")
 
-        # NEW (Nov 2025): Determine report_type from minutes
-        # Weekly reports use 7-day lookback (10080 min), daily use 1-day (1440 min)
-        report_type = 'weekly' if minutes > 1440 else 'daily'
+        # NEW (Nov 2025): Use report_type from parameter (already set by caller)
+        # report_type controls Email #1 subject label (Daily vs Weekly)
+        LOG.info(f"Using report_type '{report_type}' for Email #1 subject label")
 
         with resource_cleanup_context("email_sending"):
             quick_email_sent = send_enhanced_quick_intelligence_email(articles_by_ticker, triage_results, minutes, mode=mode, report_type=report_type)
@@ -28290,22 +28366,58 @@ async def regenerate_email_api(request: Request):
         original_article_ids = json.loads(summary_row['article_ids'])
         LOG.info(f"[{ticker}] Using {len(original_article_ids)} article IDs from original run")
 
-        # Step 3: Fetch those exact articles (by ID, not by date)
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                SELECT a.id, a.title, a.url, a.resolved_url, a.domain, a.published_at,
-                       ta.category, ta.search_keyword, ta.competitor_ticker,
-                       ta.relevance_score, ta.relevance_reason,
-                       ta.ai_summary
-                FROM articles a
-                JOIN ticker_articles ta ON a.id = ta.article_id
-                WHERE ta.ticker = %s
-                AND a.id = ANY(%s)
-                AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
-                ORDER BY a.published_at DESC
-            """, (ticker, original_article_ids))
+        # Step 3: Split article IDs by type and fetch separately
+        real_article_ids = [aid for aid in original_article_ids if aid > 0]
+        company_release_ids = [abs(aid) for aid in original_article_ids if aid < 0]
 
-            articles = cur.fetchall()
+        articles = []
+
+        with db() as conn, conn.cursor() as cur:
+            # Fetch real articles from articles table
+            if real_article_ids:
+                cur.execute("""
+                    SELECT a.id, a.title, a.url, a.resolved_url, a.domain, a.published_at,
+                           ta.category, ta.search_keyword, ta.competitor_ticker,
+                           ta.relevance_score, ta.relevance_reason,
+                           ta.ai_summary
+                    FROM articles a
+                    JOIN ticker_articles ta ON a.id = ta.article_id
+                    WHERE ta.ticker = %s
+                    AND a.id = ANY(%s)
+                    AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
+                    ORDER BY a.published_at DESC
+                """, (ticker, real_article_ids))
+                articles = list(cur.fetchall())
+                LOG.info(f"[{ticker}] Regenerate: Fetched {len(articles)} real articles")
+
+            # Fetch company releases and map to article format
+            if company_release_ids:
+                cur.execute("""
+                    SELECT id, ticker, company_name, filing_date, report_title,
+                           summary_markdown, release_type, source_type
+                    FROM company_releases
+                    WHERE id = ANY(%s)
+                    ORDER BY filing_date DESC
+                """, (company_release_ids,))
+
+                releases_fetched = 0
+                for release_row in cur.fetchall():
+                    article_dict = map_company_release_to_article_dict(dict(release_row))
+                    if article_dict:
+                        # Add fields needed for regenerate flow
+                        article_dict.update({
+                            'url': '#',
+                            'resolved_url': None,
+                            'search_keyword': None,
+                            'competitor_ticker': None,
+                            'relevance_score': None,
+                            'relevance_reason': None,
+                            'ai_summary': article_dict['ai_summary']  # Already mapped from summary_markdown
+                        })
+                        articles.append(article_dict)
+                        releases_fetched += 1
+
+                LOG.info(f"[{ticker}] Regenerate: Fetched {releases_fetched} company releases")
 
         if not articles:
             return {
@@ -28316,17 +28428,20 @@ async def regenerate_email_api(request: Request):
         if len(articles) != len(original_article_ids):
             LOG.warning(f"[{ticker}] Expected {len(original_article_ids)} articles, found {len(articles)}")
 
-        LOG.info(f"[{ticker}] Found {len(articles)} flagged articles from original run")
+        LOG.info(f"[{ticker}] Found {len(articles)} total items from original run")
 
         # Step 4: Group articles by category for executive summary generation
         categories = {"company": [], "industry": [], "competitor": [], "value_chain": []}
         flagged_article_ids = []
 
         for article in articles:
-            category = article['category']
+            category = article.get('category', 'company')  # Default to company if missing
             if category in categories:
                 categories[category].append(dict(article))
-            flagged_article_ids.append(article['id'])
+            # Preserve original ID format (positive or negative)
+            article_id = article.get('id')
+            if article_id:
+                flagged_article_ids.append(article_id)
 
         # Step 5: Regenerate executive summary using Phase 1 (articles only)
         LOG.info(f"[{ticker}] Regenerating executive summary (Phase 1) with {len(flagged_article_ids)} articles")

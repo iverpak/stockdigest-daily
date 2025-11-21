@@ -2056,6 +2056,16 @@ def convert_earnings_json_to_markdown(json_data: dict, ticker: str, company_name
             lines.append(content)
             lines.append("")
 
+    # Transaction Details
+    if 'transaction_details' in sections and sections['transaction_details']:
+        lines.append("## Transaction Details\n")
+        for bullet in sections['transaction_details']:
+            topic = bullet.get('topic_label', '')
+            content = bullet.get('content', '')
+            lines.append(f"**{topic}**")
+            lines.append(content)
+            lines.append("")
+
     # Guidance
     if 'guidance' in sections and sections['guidance']:
         lines.append("## Guidance\n")
@@ -2105,18 +2115,6 @@ def convert_earnings_json_to_markdown(json_data: dict, ticker: str, company_name
             lines.append(f"**{topic}**")
             lines.append(content)
             lines.append("")
-
-    # Upside Scenario
-    if 'upside_scenario' in sections and sections['upside_scenario'].get('content'):
-        lines.append("## Upside Scenario\n")
-        lines.append(sections['upside_scenario']['content'])
-        lines.append("")
-
-    # Downside Scenario
-    if 'downside_scenario' in sections and sections['downside_scenario'].get('content'):
-        lines.append("## Downside Scenario\n")
-        lines.append(sections['downside_scenario']['content'])
-        lines.append("")
 
     # Key Variables
     if 'key_variables' in sections and sections['key_variables']:
@@ -2536,13 +2534,12 @@ def parse_company_release_sections(json_output: dict) -> Dict[str, List[str]]:
         "financial_results": [],
         "operational_metrics": [],
         "major_developments": [],
+        "transaction_details": [],
         "guidance": [],
         "strategic_initiatives": [],
         "risk_factors": [],
         "industry_competitive": [],
         "capital_allocation": [],
-        "upside_scenario": [],
-        "downside_scenario": [],
         "key_variables": []
     }
 
@@ -2551,8 +2548,8 @@ def parse_company_release_sections(json_output: dict) -> Dict[str, List[str]]:
 
     json_sections = json_output['sections']
 
-    # Handle paragraph sections (bottom_line, upside/downside scenarios)
-    for section_key in ['bottom_line', 'upside_scenario', 'downside_scenario']:
+    # Handle paragraph sections (bottom_line only)
+    for section_key in ['bottom_line']:
         if section_key in json_sections and json_sections[section_key]:
             section_data = json_sections[section_key]
             if isinstance(section_data, dict) and 'content' in section_data:
@@ -2568,7 +2565,7 @@ def parse_company_release_sections(json_output: dict) -> Dict[str, List[str]]:
     # Handle bullet sections (all others)
     bullet_sections = [
         'financial_results', 'operational_metrics', 'major_developments',
-        'guidance', 'strategic_initiatives', 'risk_factors',
+        'transaction_details', 'guidance', 'strategic_initiatives', 'risk_factors',
         'industry_competitive', 'capital_allocation', 'key_variables'
     ]
 
@@ -2648,13 +2645,12 @@ def build_company_release_html(sections: Dict[str, List[str]]) -> str:
     html += build_section("Financial Results", sections.get("financial_results", []), use_bullets=True)
     html += build_section("Operational Metrics", sections.get("operational_metrics", []), use_bullets=True)
     html += build_section("Major Developments", sections.get("major_developments", []), use_bullets=True)
+    html += build_section("Transaction Details", sections.get("transaction_details", []), use_bullets=True)
     html += build_section("Guidance", sections.get("guidance", []), use_bullets=True)
     html += build_section("Strategic Initiatives", sections.get("strategic_initiatives", []), use_bullets=True)
     html += build_section("Risk Factors & Headwinds", sections.get("risk_factors", []), use_bullets=True)
     html += build_section("Industry & Competitive Dynamics", sections.get("industry_competitive", []), use_bullets=True)
     html += build_section("Capital Allocation", sections.get("capital_allocation", []), use_bullets=True)
-    html += build_section("Upside Scenario", sections.get("upside_scenario", []), use_bullets=False)
-    html += build_section("Downside Scenario", sections.get("downside_scenario", []), use_bullets=False)
     html += build_section("Key Variables to Monitor", sections.get("key_variables", []), use_bullets=True)
 
     return html

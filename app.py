@@ -3232,8 +3232,42 @@ def normalize_ticker_format(ticker: str) -> str:
         normalized = '.'.join(parts)
     else:
         normalized = normalized.replace('_', '-')
-    
+
     return normalized
+
+
+def validate_and_normalize_ticker(ticker_raw: str) -> tuple[str, dict]:
+    """
+    Validate and normalize ticker, ensuring it exists in ticker_reference.
+
+    Args:
+        ticker_raw: Raw ticker input from user/API
+
+    Returns:
+        Tuple of (normalized_ticker, ticker_config)
+
+    Raises:
+        ValueError: If ticker is invalid or not found in ticker_reference
+    """
+    if not ticker_raw or not ticker_raw.strip():
+        raise ValueError("Ticker cannot be empty")
+
+    # Normalize to standard format
+    ticker = normalize_ticker_format(ticker_raw)
+
+    if not ticker:
+        raise ValueError(f"Invalid ticker format: '{ticker_raw}'")
+
+    # Validate against ticker_reference
+    config = get_ticker_config(ticker)
+
+    if not config or not config.get('has_full_config', True):
+        raise ValueError(
+            f"Ticker '{ticker}' (normalized from '{ticker_raw}') not found in ticker_reference. "
+            f"Please add it via /admin endpoint first."
+        )
+
+    return (ticker, config)
 
 # 4. TICKER VALIDATION HELPER FUNCTIONS
 def get_ticker_exchange_info(ticker: str) -> Dict[str, str]:
@@ -15655,8 +15689,13 @@ def get_filing_stock_data(ticker: str) -> dict:
 async def process_company_profile_phase(job: dict):
     """Process company profile generation (5-15 min, Gemini 2.5)"""
     job_id = job['job_id']
-    ticker = job['ticker']
+    ticker_raw = job['ticker']
     config = job['config'] if isinstance(job['config'], dict) else {}
+
+    # DEFENSE IN DEPTH: Normalize ticker even if job config should already have it normalized
+    ticker = normalize_ticker_format(ticker_raw)
+    if ticker != ticker_raw:
+        LOG.warning(f"[JOB {job_id}] Normalized ticker from '{ticker_raw}' to '{ticker}'")
 
     try:
         # Start heartbeat thread
@@ -24131,7 +24170,7 @@ async def generate_transcript_summary_api(request: Request):
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
-    ticker = body.get('ticker')
+    ticker_raw = body.get('ticker')
     report_type = body.get('report_type')  # 'transcript' or 'press_release'
     quarter = body.get('quarter')  # Integer (3) for transcripts
     year = body.get('year')  # Integer (2024) for transcripts
@@ -24139,10 +24178,11 @@ async def generate_transcript_summary_api(request: Request):
     pr_title = body.get('pr_title')  # String title for press releases (optional, for exact matching)
 
     try:
-        # Validate ticker exists (quick check before queuing)
-        config = get_ticker_config(ticker)
-        if not config:
-            return {"status": "error", "message": f"Ticker {ticker} not found in database"}
+        # Validate and normalize ticker
+        try:
+            ticker, config = validate_and_normalize_ticker(ticker_raw)
+        except ValueError as e:
+            return {"status": "error", "message": str(e)}
 
         # Determine phase based on report type
         if report_type == 'transcript':
@@ -24266,7 +24306,7 @@ async def generate_8k_summary_api(request: Request):
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
-    ticker = body.get('ticker')
+    ticker_raw = body.get('ticker')
     cik = body.get('cik')
     accession_number = body.get('accession_number')
     filing_date = body.get('filing_date')
@@ -24275,13 +24315,14 @@ async def generate_8k_summary_api(request: Request):
     item_codes = body.get('item_codes')
 
     try:
-        LOG.info(f"📋 Creating 8-K processing job for {ticker} ({filing_date})")
-        LOG.info(f"[8K_REQUEST_DEBUG] Documents URL: {documents_url}")
+        # Validate and normalize ticker
+        try:
+            ticker, config = validate_and_normalize_ticker(ticker_raw)
+        except ValueError as e:
+            return {"status": "error", "message": str(e)}
 
-        # Get ticker config
-        config = get_ticker_config(ticker)
-        if not config:
-            return {"status": "error", "message": f"Ticker {ticker} not found in database"}
+        LOG.info(f"📋 Creating 8-K processing job for {ticker} ({filing_date}) [normalized from '{ticker_raw}']")
+        LOG.info(f"[8K_REQUEST_DEBUG] Documents URL: {documents_url}")
 
         # Build job config
         job_config = {
@@ -24933,7 +24974,7 @@ async def generate_company_profile_api(request: Request):
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
-    ticker = body.get('ticker')
+    ticker_raw = body.get('ticker')
     filing_type = body.get('filing_type', '10-K')  # '10-K' or '10-Q'
     fiscal_year = body.get('fiscal_year')
     fiscal_quarter = body.get('fiscal_quarter')  # Required for 10-Q (e.g., 'Q3')
@@ -24944,13 +24985,14 @@ async def generate_company_profile_api(request: Request):
     file_name = body.get('file_name')  # Optional
 
     try:
-        filing_desc = f"{fiscal_quarter} {fiscal_year}" if filing_type == '10-Q' else f"FY{fiscal_year}"
-        LOG.info(f"📊 Creating {filing_type} profile job for {ticker} {filing_desc}")
+        # Validate and normalize ticker
+        try:
+            ticker, config = validate_and_normalize_ticker(ticker_raw)
+        except ValueError as e:
+            return {"status": "error", "message": str(e)}
 
-        # Get ticker config
-        config = get_ticker_config(ticker)
-        if not config:
-            return {"status": "error", "message": f"Ticker {ticker} not found in database"}
+        filing_desc = f"{fiscal_quarter} {fiscal_year}" if filing_type == '10-Q' else f"FY{fiscal_year}"
+        LOG.info(f"📊 Creating {filing_type} profile job for {ticker} {filing_desc} (normalized from '{ticker_raw}')")
 
         # Validate parameters
         if filing_type == '10-Q' and not fiscal_quarter:

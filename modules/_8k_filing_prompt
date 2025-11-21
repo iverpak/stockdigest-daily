@@ -586,6 +586,7 @@ BOTTOM LINE - EDITORIAL DISCIPLINE
 ═══════════════════════════════════════════════════════════════════════════════
 
 Bottom Line is a PARAGRAPH, not bullets. ≤150 words HARD CAP.
+Logic: The 60-second elevator pitch - what matters most from this release
 
 CRITICAL - BOTTOM LINE INFERENCE TIER:
 
@@ -674,6 +675,7 @@ FINANCIAL RESULTS (Always - 4-8 bullets)
 Report financial metrics as disclosed by management in the release.
 
 SCOPE: Accounting metrics (revenue, EBITDA, EPS, margins, net income, free cash flow)
+Logic: The "what" of financial performance - numbers that hit the P&L and balance sheet
 
 Format:
 {
@@ -754,6 +756,7 @@ OPERATIONAL METRICS (Always - 3-6 bullets)
 ═══════════════════════════════════════════════════════════════════════════════
 
 SCOPE: Business-specific KPIs that drive financial performance
+Logic: The "how" behind the numbers - operational levers management pulls
 
 DISTINCTION FROM FINANCIAL RESULTS:
 - Financial Results = accounting metrics (revenue, EBITDA, EPS, margins)
@@ -802,6 +805,12 @@ MAJOR DEVELOPMENTS (Always - 2-5 bullets)
 ═══════════════════════════════════════════════════════════════════════════════
 
 SCOPE: Company-specific announcements, strategic actions, material events disclosed in release
+Logic: Material events that occurred or were announced - "what happened" this quarter
+
+TEMPORAL GUIDANCE: Typically backward-looking (completed/announced events)
+- Completed acquisitions, regulatory approvals received, contracts signed
+- Announcements of future initiatives should focus on the announcement itself
+- If initiative spans multiple quarters, consider also including in Strategic Initiatives
 
 Include:
 - M&A: Acquisitions, divestitures, partnerships (with amounts and timing)
@@ -825,11 +834,38 @@ Example:
   "content": "Company announced 1.9 GW arrangement doubling original contract through 2042; valued at $XXM annually per CFO"
 }
 
+DISTINCTION FROM TRANSACTION DETAILS:
+- Major Developments: Announcement (WHAT happened)
+  Example: "Acquired ACME Corp for $2.5B"
+- Transaction Details: Terms and mechanics (HOW structured)
+  Example: "$2.0B cash + $500M stock, HSR approval required, closing H2 2026"
+- If transaction has extensive disclosed terms → include both sections
+- If transaction mentioned briefly with minimal detail → Major Developments only
+
+DISTINCTION FROM CAPITAL ALLOCATION:
+- Major Developments: Authorization or announcement
+  Example: "Authorized $500M share repurchase program"
+- Capital Allocation: Execution and results
+  Example: "Repurchased $120M shares in Q3, $380M remaining under authorization"
+- Significant authorizations/announcements → Major Developments
+- Actual deployment and cash flow impacts → Capital Allocation
+- Can appear in both sections when announcement + execution both disclosed
+
+DISTINCTION FROM STRATEGIC INITIATIVES:
+- Major Developments: One-time events or announcements
+  Example: "Opened new Texas facility"
+- Strategic Initiatives: Multi-quarter programs
+  Example: "Expanding manufacturing footprint with 3 new facilities over 2025-2026"
+- Brief mentions of strategy → Major Developments
+- Detailed multi-quarter programs management emphasized → Strategic Initiatives
+- When uncertain, default to Major Developments (more concrete)
+
 ═══════════════════════════════════════════════════════════════════════════════
 TRANSACTION DETAILS (Include if material transaction disclosed - 2-8 bullets)
 ═══════════════════════════════════════════════════════════════════════════════
 
 SCOPE: Economic terms, conditions, and mechanics of material transactions
+Logic: Deep dive on transaction terms - the "HOW" that provides more detail than Major Developments
 
 This section captures the "HOW" of transactions announced in Major Developments.
 Extract specific terms disclosed in the filing.
@@ -876,6 +912,7 @@ GUIDANCE (Always if guidance provided or updated)
 ═══════════════════════════════════════════════════════════════════════════════
 
 CRITICAL: Include ALL guidance metrics with exact ranges, even if reiterated
+Logic: Everything with a future date - management's explicit forecasts
 
 Format:
 {
@@ -914,6 +951,12 @@ STRATEGIC INITIATIVES (Always if strategy discussed - 2-4 bullets)
 ═══════════════════════════════════════════════════════════════════════════════
 
 SCOPE: Forward-looking strategic direction, investments, transformations
+Logic: The "where we're going" - multi-quarter programs and strategic direction
+
+TEMPORAL GUIDANCE: Typically multi-quarter programs and transformations
+- Market expansions, digital transformations, multi-year investments
+- One-time product launches may fit better in Major Developments
+- Include here when management frames as strategic program vs. one-time event
 
 Format:
 {
@@ -946,6 +989,12 @@ RISK FACTORS & HEADWINDS (Always if risks discussed - 2-5 bullets)
 ═══════════════════════════════════════════════════════════════════════════════
 
 SCOPE: Challenges, obstacles, concerns that could impact performance
+Logic: What keeps management up at night - forward-looking or ongoing challenges
+
+TEMPORAL GUIDANCE: Typically forward-looking or ongoing challenges
+- Future concerns management identified (margin pressure, demand uncertainty)
+- Ongoing issues not yet resolved (supply disruptions, regulatory investigations)
+- Resolved past issues belong in Major Developments
 
 Include risks/headwinds that management explicitly identified:
 1. Management proactively discusses challenges, headwinds, obstacles
@@ -981,6 +1030,7 @@ INDUSTRY & COMPETITIVE LANDSCAPE (Always - 2-4 bullets)
 ═══════════════════════════════════════════════════════════════════════════════
 
 SCOPE: Management's view of external environment and competitive position
+Logic: External context that explains performance and strategy
 
 CRITICAL FOR COMMODITY-EXPOSED COMPANIES: When management discusses forward curve shifts, ALWAYS include:
 - What changed (backwardation → contango, curve steepening/flattening)
@@ -1016,7 +1066,27 @@ Return empty array: []
 CAPITAL ALLOCATION & BALANCE SHEET (Always if discussed - 2-4 bullets)
 ═══════════════════════════════════════════════════════════════════════════════
 
-SCOPE: Cash deployment priorities, balance sheet strength, shareholder returns
+SCOPE: How cash is generated and deployed - the complete cash story
+Logic: Cash flow cycle from generation through deployment to balance sheet impact
+
+Include the COMPLETE cash flow story:
+
+GENERATION:
+- Operating cash flow
+- Free cash flow
+- Working capital changes
+
+DEPLOYMENT:
+- Share repurchases (executed, not just authorized)
+- Dividends (declared/paid)
+- M&A (capital allocated)
+- Debt activity (issuance/repayment)
+- Capex (actual vs guidance, growth vs maintenance split)
+
+BALANCE SHEET:
+- Cash position
+- Liquidity
+- Leverage ratios
 
 Format:
 {
@@ -1024,14 +1094,6 @@ Format:
   "topic_label": "Share Repurchases",
   "content": "[Topic]: [Details with figures management provided]"
 }
-
-Include:
-- Share repurchases: Actual vs target, pace, authorization remaining
-- Dividends: Declarations, changes, payout ratio
-- Debt: Issuance, refinancing, paydown, leverage metrics
-- M&A: Capital allocated, financing approach
-- Capex: Actual vs guidance, growth vs maintenance split
-- Balance sheet: Cash position, liquidity, debt ratios
 
 CRITICAL: Only include figures management explicitly disclosed.
 
@@ -1056,6 +1118,7 @@ KEY VARIABLES TO MONITOR (Include if variables discussed - 3-5 bullets max)
 ═══════════════════════════════════════════════════════════════════════════════
 
 CRITICAL: Report what management explicitly identified as important upcoming events/metrics to watch.
+Logic: Signposts management flagged - metrics and milestones that will indicate progress
 
 Format:
 {
@@ -1081,6 +1144,25 @@ Examples:
 }
 
 DO NOT include this section if management did not explicitly identify variables to monitor.
+
+═══════════════════════════════════════════════════════════════════════════════
+CROSS-SECTION COVERAGE - ENCOURAGED WITH DIFFERENT CONTEXTS
+═══════════════════════════════════════════════════════════════════════════════
+
+Same topic CAN appear in multiple sections when context differs:
+
+Acceptable cross-section examples:
+✓ Major Developments: "Authorized $500M buyback"
+  Capital Allocation: "Executed $120M of authorized program in Q3"
+
+✓ Major Developments: "Announced European expansion"
+  Strategic Initiatives: "European expansion: 5-country rollout over 18 months per CEO"
+
+✓ Financial Results: "Operating margin 42%, -180 bps YoY"
+  Risk Factors: "Management cited persistent cost inflation pressuring margins"
+
+PRINCIPLE: Include in all relevant sections - repetition with different context
+is better than omission. Each section serves a different analytical purpose.
 
 ═══════════════════════════════════════════════════════════════════════════════
 INTELLIGENCE SYNTHESIS APPROACH

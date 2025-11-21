@@ -1399,99 +1399,10 @@ def build_transcript_summary_html(sections: Dict[str, List[str]], content_type: 
 
 
 # ==============================================================================
-# EMAIL GENERATION
+# EMAIL GENERATION (v2 only - see generate_transcript_email_v2 above)
 # ==============================================================================
 
-def generate_transcript_email(
-    ticker: str,
-    company_name: str,
-    report_type: str,  # 'transcript' or 'press_release'
-    quarter: str = None,  # 'Q3' for transcripts, None for PRs
-    year: int = None,
-    report_date: str = None,  # 'Oct 25, 2024'
-    pr_title: str = None,
-    summary_text: str = None,
-    fmp_url: str = None,
-    stock_price: str = None,
-    price_change_pct: str = None,
-    price_change_color: str = "#4ade80",
-    ytd_return_pct: str = None,
-    ytd_return_color: str = "#4ade80",
-    market_status: str = "LAST CLOSE",
-    return_label: str = "1D"
-) -> Dict[str, str]:
-    """
-    Generate transcript/press release email HTML using unified Jinja2 template.
-
-    Returns:
-        {
-            "html": Full email HTML string,
-            "subject": Email subject line
-        }
-    """
-    LOG.info(f"Generating transcript email for {ticker} ({report_type}) using unified template")
-
-    # Parse sections from summary text
-    sections = parse_transcript_summary_sections(summary_text, ticker=ticker)
-
-    # Build summary HTML
-    summary_html = build_transcript_summary_html(sections, report_type)
-
-    current_date = datetime.now(timezone.utc).astimezone(pytz.timezone('US/Eastern')).strftime("%b %d, %Y")
-
-    # Configure based on report type
-    if report_type == 'transcript':
-        report_type_label = "EARNINGS CALL TRANSCRIPT"
-        fiscal_period = f"{quarter} {year}"
-        date_label = f"Call Date: {report_date}"
-        filing_date_display = f"Call Date: {report_date}"
-        transition_text = f"Summary generated from {company_name} {quarter} {year} earnings call transcript."
-        fmp_link_text = "View full transcript on FMP"
-    else:  # press_release
-        report_type_label = "PRESS RELEASE"
-        fiscal_period = report_date
-        date_label = f"Release Date: {report_date}"
-        filing_date_display = f"Release Date: {report_date}"
-        transition_text = f"Summary generated from {company_name} press release dated {report_date}."
-        fmp_link_text = "View original release on FMP"
-
-    # Build FMP link box HTML
-    fmp_link_html = f'''
-    <div style="margin: 32px 0 20px 0; padding: 12px 16px; background-color: #eff6ff; border-left: 4px solid #1e40af; border-radius: 4px;">
-        <p style="margin: 0; font-size: 12px; color: #1e40af; font-weight: 600; line-height: 1.4;">
-            {transition_text} <a href="{fmp_url}" style="color: #1e40af; text-decoration: none;">→ {fmp_link_text}</a>
-        </p>
-    </div>'''
-
-    # Combine summary HTML with FMP link
-    content_html = summary_html + fmp_link_html
-
-    # Render template with variables
-    html = research_template.render(
-        report_title=f"{ticker} Research Summary",
-        report_type_label=report_type_label,
-        company_name=company_name,
-        ticker=ticker,
-        industry=None,  # Transcripts don't include industry
-        fiscal_period=fiscal_period,
-        date_label=date_label,
-        filing_date=filing_date_display,
-        stock_price=stock_price,
-        price_change_pct=price_change_pct,
-        price_change_color=price_change_color,
-        ytd_return_pct=ytd_return_pct,
-        ytd_return_color=ytd_return_color,
-        return_label=return_label,
-        content_html=content_html
-    )
-
-    # Subject line
-    if report_type == 'transcript':
-        subject = f"📊 Earnings Call Summary: {company_name} ({ticker}) {quarter} {year}"
-    else:
-        subject = f"📰 Press Release: {ticker} - {pr_title}"
-
-    return {"html": html, "subject": subject}
+# v1 function deleted - all emails now use generate_transcript_email_v2()
 
 
 # ==============================================================================

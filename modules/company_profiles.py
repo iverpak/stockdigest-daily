@@ -235,7 +235,7 @@ def fetch_sec_html_text(url: str) -> str:
     try:
         # SEC requires proper User-Agent to prevent blocking
         headers = {
-            "User-Agent": "StockDigest/1.0 (stockdigest.research@gmail.com)"
+            "User-Agent": "Weavara/1.0 (weavara.research@gmail.com)"
         }
 
         response = requests.get(url, headers=headers, timeout=60)
@@ -395,7 +395,7 @@ def parse_sec_8k_filing_list(cik: str, count: int = 10) -> List[Dict]:
     try:
         url = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={cik}&type=8-K&count={count}"
         headers = {
-            'User-Agent': 'StockDigest/1.0 (stockdigest.research@gmail.com)'
+            'User-Agent': 'Weavara/1.0 (weavara.research@gmail.com)'
         }
 
         LOG.info(f"[8K_DEBUG] Making request to SEC for CIK {cik}...")
@@ -473,7 +473,7 @@ def get_8k_html_url(documents_url: str) -> dict:
 
     try:
         headers = {
-            'User-Agent': 'StockDigest/1.0 (stockdigest.research@gmail.com)'
+            'User-Agent': 'Weavara/1.0 (weavara.research@gmail.com)'
         }
 
         response = requests.get(documents_url, headers=headers, timeout=10)
@@ -596,7 +596,7 @@ def get_all_8k_exhibits(documents_url: str) -> List[Dict[str, Any]]:
 
     try:
         headers = {
-            'User-Agent': 'StockDigest/1.0 (stockdigest.research@gmail.com)'
+            'User-Agent': 'Weavara/1.0 (weavara.research@gmail.com)'
         }
 
         response = requests.get(documents_url, headers=headers, timeout=10)
@@ -755,7 +755,7 @@ def get_main_8k_url(documents_url: str) -> Optional[str]:
 
     try:
         headers = {
-            'User-Agent': 'StockDigest/1.0 (stockdigest.research@gmail.com)'
+            'User-Agent': 'Weavara/1.0 (weavara.research@gmail.com)'
         }
 
         response = requests.get(documents_url, headers=headers, timeout=10)
@@ -916,7 +916,7 @@ def quick_parse_8k_header(sec_html_url: str, rate_limit_delay: float = 0.15) -> 
 
     try:
         headers = {
-            'User-Agent': 'StockDigest/1.0 (stockdigest.research@gmail.com)',
+            'User-Agent': 'Weavara/1.0 (weavara.research@gmail.com)',
             'Range': 'bytes=0-15000'  # Fetch first 15KB to get past iXBRL overhead
         }
 
@@ -1053,7 +1053,7 @@ def extract_8k_html_content(exhibit_url: str) -> str:
 
     # SEC requires proper User-Agent
     headers = {
-        "User-Agent": "StockDigest/1.0 (stockdigest.research@gmail.com)"
+        "User-Agent": "Weavara/1.0 (weavara.research@gmail.com)"
     }
 
     try:
@@ -1866,127 +1866,7 @@ def load_press_release_prompt() -> str:
         raise
 
 
-def generate_parsed_press_release_with_gemini(
-    ticker: str,
-    company_name: str,
-    content: str,
-    document_title: str,
-    source_type: str,  # 'fmp' or '8k'
-    item_codes: str = None,  # 8-K item codes (e.g., "2.02, 9.01")
-    gemini_api_key: str = None
-) -> Optional[Dict]:
-    """
-    Generate structured summary of press release or 8-K exhibit using Gemini 2.5 Flash.
-
-    This creates a unified summary format that can be fed into Phase 1 executive summaries
-    as a pseudo-article that auto-passes triage.
-
-    Args:
-        ticker: Stock ticker (e.g., 'AAPL')
-        company_name: Company name for context
-        content: Full text of press release or 8-K exhibit
-        document_title: Title of the document
-        source_type: 'fmp' for FMP press releases, '8k' for SEC 8-K exhibits
-        item_codes: 8-K item codes for context (optional)
-        gemini_api_key: Gemini API key
-
-    Returns:
-        {
-            'parsed_summary': str (structured extraction),
-            'metadata': {
-                'model': str,
-                'generation_time_seconds': int,
-                'token_count_input': int,
-                'token_count_output': int
-            }
-        }
-    """
-    if not gemini_api_key:
-        LOG.error("❌ Gemini API key not configured for parsed press release generation")
-        return None
-
-    if not content or len(content.strip()) < 100:
-        LOG.error(f"❌ Content too short for {ticker} ({len(content) if content else 0} chars)")
-        return None
-
-    try:
-        genai.configure(api_key=gemini_api_key)
-
-        # Load prompt
-        prompt_template = load_press_release_prompt()
-
-        # Build context header based on source type
-        if source_type == '8k':
-            source_context = f"SEC 8-K Filing"
-            if item_codes:
-                source_context += f" (Items: {item_codes})"
-        else:
-            source_context = "Company Press Release"
-
-        LOG.info(f"Generating parsed summary for {ticker} - {source_context}")
-        LOG.info(f"Document: {document_title[:80]}...")
-        LOG.info(f"Content length: {len(content):,} chars")
-
-        # Gemini 2.5 Flash
-        model = genai.GenerativeModel('gemini-2.5-flash')
-
-        generation_config = {
-            "temperature": 0.0,  # Maximum determinism for consistent extraction
-            "max_output_tokens": 8192  # Sufficient for 2-6 paragraph summary
-        }
-
-        start_time = datetime.now(timezone.utc)
-
-        # Build user content with document context
-        user_content = f"""Company: {company_name} ({ticker})
-Document Type: {source_context}
-Title: {document_title}
-
----
-DOCUMENT CONTENT:
-
-{content[:400000]}
-"""
-
-        # Combine prompt with content
-        full_prompt = f"{prompt_template}\n\n---\n\n{user_content}"
-
-        response = model.generate_content(
-            full_prompt,
-            generation_config=generation_config
-        )
-
-        end_time = datetime.now(timezone.utc)
-        generation_time = int((end_time - start_time).total_seconds())
-
-        parsed_summary = response.text.strip()
-
-        # Get token counts from usage metadata
-        token_count_input = 0
-        token_count_output = 0
-        if hasattr(response, 'usage_metadata'):
-            token_count_input = getattr(response.usage_metadata, 'prompt_token_count', 0)
-            token_count_output = getattr(response.usage_metadata, 'candidates_token_count', 0)
-
-        # Log success
-        word_count = len(parsed_summary.split())
-        LOG.info(f"✅ Generated parsed summary for {ticker}: {word_count} words in {generation_time}s")
-        LOG.info(f"   Tokens: {token_count_input:,} input, {token_count_output:,} output")
-
-        return {
-            'parsed_summary': parsed_summary,
-            'metadata': {
-                'model': 'gemini-2.5-flash',
-                'generation_time_seconds': generation_time,
-                'token_count_input': token_count_input,
-                'token_count_output': token_count_output
-            }
-        }
-
-    except Exception as e:
-        LOG.error(f"❌ Gemini generation failed for {ticker} parsed PR: {e}")
-        LOG.error(traceback.format_exc())
-        return None
+# generate_parsed_press_release_with_gemini() deleted - replaced by generate_earnings_release_with_gemini()
 
 
 def load_8k_filing_prompt() -> str:
@@ -2263,7 +2143,7 @@ Analyze this earnings release PDF and extract all material information."""
                                 # Download image
                                 img_response = requests.get(
                                     img_url,
-                                    headers={'User-Agent': 'StockDigest/1.0 (stockdigest.research@gmail.com)'},
+                                    headers={'User-Agent': 'Weavara/1.0 (weavara.research@gmail.com)'},
                                     timeout=30
                                 )
                                 img_response.raise_for_status()

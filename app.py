@@ -76,7 +76,6 @@ from modules.transcript_summaries import (
     fetch_fmp_transcript,
     fetch_fmp_press_releases,
     fetch_fmp_press_release_by_date,
-    generate_transcript_email,
     save_transcript_summary_to_database
 )
 from modules.company_profiles import (
@@ -100,7 +99,6 @@ from modules.company_profiles import (
     classify_exhibit_type,    # NEW: Auto-classify exhibits (earnings_release, investor_presentation, etc.)
     should_process_exhibit,   # NEW: Filter zero-value exhibits (auditor letters, consents, XBRL, etc.)
     # Parsed press releases (Nov 2025 - unified Gemini summaries for FMP PRs and 8-K exhibits)
-    generate_parsed_press_release_with_gemini,
     generate_earnings_release_with_gemini,  # NEW: Comprehensive earnings release analysis
     get_all_parsed_press_releases,  # Query company_releases table
     # Company releases (Nov 2025 - JSON-based email system for 8-K and FMP releases)
@@ -787,7 +785,7 @@ if not LOG.handlers:
 # ------------------------------------------------------------------------------
 # Config / Environment
 # ------------------------------------------------------------------------------
-APP = FastAPI(title="StockDigest Stock Intelligence Platform")
+APP = FastAPI(title="Weavara Stock Intelligence Platform")
 
 # Templates setup for landing page
 templates = Jinja2Templates(directory="templates")
@@ -1770,7 +1768,9 @@ def ensure_schema():
                     year INTEGER,  -- 2024 or NULL for press releases
                     report_date DATE,  -- Date of transcript/PR
                     pr_title VARCHAR(500),  -- Press release title (NULL for transcripts)
-                    summary_text TEXT NOT NULL,  -- Full AI-generated summary
+                    summary_text TEXT NOT NULL,  -- Full AI-generated summary (markdown for Phase 2)
+                    summary_json JSONB,  -- Structured JSON (for email generation v2)
+                    prompt_version VARCHAR(10) DEFAULT 'v2',  -- Prompt version used
                     source_url TEXT,  -- FMP API URL for reference
                     ai_provider VARCHAR(20) NOT NULL,  -- 'claude' or 'openai'
                     ai_model VARCHAR(50),  -- Model name (e.g., 'claude-sonnet-4.5', 'gemini-2.5-flash')
@@ -2278,14 +2278,6 @@ def ensure_schema():
                 # STEP 4: CRITICAL - Always release the advisory lock
                 cur.execute("SELECT pg_advisory_unlock(%s)", (SCHEMA_LOCK_ID,))
                 LOG.info("🔓 Schema initialization lock released")
-
-def update_schema_for_content():
-    """Deprecated - schema already created in ensure_schema()"""
-    pass
-
-def update_schema_for_qb_scores():
-    """Deprecated - schema already created in ensure_schema()"""
-    pass
 
 # Helper Functions for New Schema
 def insert_article_if_new(url_hash: str, url: str, title: str, description: str,
@@ -7142,11 +7134,6 @@ def _check_ingestion_limit_with_existing_count(category: str, keyword: str, exis
         return total_count < ingestion_stats["limits"]["value_chain_per_keyword"]
 
     return False
-
-# Update the database schema to include ai_summary field
-def update_schema_for_ai_summary():
-    """Deprecated - schema already created in ensure_schema()"""
-    pass
 
 # Updated article formatting function
 def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_metadata_cache: Dict = None,
@@ -14743,9 +14730,9 @@ def generate_email_html_core(
     if recipient_email:
         unsubscribe_token = get_or_create_unsubscribe_token(recipient_email)
         if unsubscribe_token:
-            unsubscribe_url = f"https://stockdigest.app/unsubscribe?token={unsubscribe_token}"
+            unsubscribe_url = f"https://weavara.io/unsubscribe?token={unsubscribe_token}"
         else:
-            unsubscribe_url = "https://stockdigest.app/unsubscribe"
+            unsubscribe_url = "https://weavara.io/unsubscribe"
             LOG.warning(f"No unsubscribe token for {recipient_email}, using generic link")
     else:
         unsubscribe_url = "{{UNSUBSCRIBE_TOKEN}}"
@@ -14845,11 +14832,11 @@ def generate_email_html_core(
 
                                         <!-- Links -->
                                         <div style="font-size: 11px; margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.2);">
-                                            <a href="https://stockdigest.app/terms-of-service" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Terms of Service</a>
+                                            <a href="https://weavara.io/terms-of-service" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Terms of Service</a>
                                             <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
-                                            <a href="https://stockdigest.app/privacy-policy" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Privacy Policy</a>
+                                            <a href="https://weavara.io/privacy-policy" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Privacy Policy</a>
                                             <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
-                                            <a href="mailto:stockdigest.research@gmail.com" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Contact</a>
+                                            <a href="mailto:{os.getenv('ADMIN_EMAIL', 'weavara.research@gmail.com')}" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Contact</a>
                                             <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
                                             <a href="{unsubscribe_url}" style="color: #ffffff; text-decoration: none; opacity: 0.9;">Unsubscribe</a>
                                         </div>
@@ -16487,90 +16474,46 @@ async def process_transcript_phase(job: dict):
         import json
         summary_text_markdown = convert_json_to_markdown(json_output, 'transcript')
 
+        # Save both JSON (for email v2) and markdown (for Phase 2) to database
         with db() as conn, conn.cursor() as cur:
-            # Check if summary_json column exists (backward compatibility)
+            # Use Json adapter for psycopg3 JSONB support
+            try:
+                from psycopg.types.json import Json
+                json_param = Json(json_output)
+            except ImportError:
+                # psycopg2 fallback - pass dict directly
+                json_param = json.dumps(json_output)
+
             cur.execute("""
-                SELECT column_name
-                FROM information_schema.columns
-                WHERE table_name = 'transcript_summaries'
-                AND column_name IN ('summary_json', 'prompt_version')
-            """)
-            rows = cur.fetchall()
-            # Handle both tuple and dict cursor types
-            if rows and isinstance(rows[0], dict):
-                existing_columns = {row['column_name'] for row in rows}
-            else:
-                existing_columns = {row[0] for row in rows}
-            has_json_columns = 'summary_json' in existing_columns and 'prompt_version' in existing_columns
-
-            if has_json_columns:
-                # New schema: Save both text (for backward compat) and JSON
-                # Use Json adapter for psycopg3 JSONB support
-                try:
-                    from psycopg.types.json import Json
-                    json_param = Json(json_output)
-                except ImportError:
-                    # psycopg2 fallback - pass dict directly
-                    json_param = json.dumps(json_output)
-
-                cur.execute("""
-                    INSERT INTO transcript_summaries (
-                        ticker, company_name, report_type, quarter, year,
-                        report_date, summary_text, summary_json, prompt_version,
-                        source_url, ai_provider, ai_model
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (ticker, report_type, quarter, year)
-                    DO UPDATE SET
-                        summary_text = EXCLUDED.summary_text,
-                        summary_json = EXCLUDED.summary_json,
-                        prompt_version = EXCLUDED.prompt_version,
-                        ai_provider = EXCLUDED.ai_provider,
-                        ai_model = EXCLUDED.ai_model,
-                        generated_at = NOW()
-                """, (
-                    ticker,
-                    ticker_config.get('company_name'),
-                    'transcript',
-                    quarter_formatted,
-                    year,
-                    data[0].get('date'),
-                    summary_text_markdown,  # Clean markdown for research page
-                    json_param,             # Structured JSON (summary_json column)
-                    'v2',                   # Mark as v2 prompt
-                    fmp_url,
-                    ai_provider,  # "gemini" or "claude"
-                    model_used    # Full model name
-                ))
-                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Saved with JSON columns (v2)")
-            else:
-                # Old schema: Save JSON as text only (pre-migration)
-                cur.execute("""
-                    INSERT INTO transcript_summaries (
-                        ticker, company_name, report_type, quarter, year,
-                        report_date, summary_text, source_url, ai_provider, ai_model
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (ticker, report_type, quarter, year)
-                    DO UPDATE SET
-                        summary_text = EXCLUDED.summary_text,
-                        ai_provider = EXCLUDED.ai_provider,
-                        ai_model = EXCLUDED.ai_model,
-                        generated_at = NOW()
-                """, (
-                    ticker,
-                    ticker_config.get('company_name'),
-                    'transcript',
-                    quarter_formatted,
-                    year,
-                    data[0].get('date'),
-                    summary_text_markdown,  # Clean markdown for research page
-                    fmp_url,
-                    ai_provider,  # "gemini" or "claude"
-                    model_used    # Full model name
-                ))
-                LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Saved as text only (run migration to enable JSON columns)")
-
+                INSERT INTO transcript_summaries (
+                    ticker, company_name, report_type, quarter, year,
+                    report_date, summary_text, summary_json, prompt_version,
+                    source_url, ai_provider, ai_model
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (ticker, report_type, quarter, year)
+                DO UPDATE SET
+                    summary_text = EXCLUDED.summary_text,
+                    summary_json = EXCLUDED.summary_json,
+                    prompt_version = EXCLUDED.prompt_version,
+                    ai_provider = EXCLUDED.ai_provider,
+                    ai_model = EXCLUDED.ai_model,
+                    generated_at = NOW()
+            """, (
+                ticker,
+                ticker_config.get('company_name'),
+                'transcript',
+                quarter_formatted,
+                year,
+                data[0].get('date'),
+                summary_text_markdown,  # Clean markdown for Phase 2
+                json_param,             # Structured JSON for email v2
+                'v2',                   # Prompt version
+                fmp_url,
+                ai_provider,  # "gemini" or "claude"
+                model_used    # Full model name
+            ))
+            LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Saved transcript with JSON + markdown")
             conn.commit()
 
         # Progress: 95% - Sending email
@@ -17567,7 +17510,7 @@ Generate the complete page-by-page deck analysis now.
             send_email(
                 subject=email_data['subject'],
                 html_body=email_data['html'],
-                to='stockdigest.research@gmail.com'
+                to=DIGEST_TO  # ✅ Uses ADMIN_EMAIL env var
             )
 
         # Clean up temp PDF file
@@ -18907,7 +18850,7 @@ class CLIRequest(BaseModel):
 # ------------------------------------------------------------------------------
 @APP.get("/", response_class=HTMLResponse)
 async def landing_page(request: Request):
-    """Serve the StockDigest beta signup landing page"""
+    """Serve the Weavara beta signup landing page"""
     return templates.TemplateResponse("signup.html", {"request": request})
 
 
@@ -18949,7 +18892,7 @@ async def unsubscribe_page(request: Request, token: str = Query(...)):
                     <!DOCTYPE html>
                     <html>
                     <head>
-                        <title>Invalid Link - StockDigest</title>
+                        <title>Invalid Link - Weavara</title>
                         <style>
                             body {
                                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -18978,7 +18921,7 @@ async def unsubscribe_page(request: Request, token: str = Query(...)):
                         <div class="container">
                             <h1>❌ Invalid Unsubscribe Link</h1>
                             <p>This unsubscribe link is invalid or has expired.</p>
-                            <p>If you need assistance, please contact us at <a href="mailto:stockdigest.research@gmail.com">stockdigest.research@gmail.com</a></p>
+                            <p>If you need assistance, please contact us at <a href="mailto:{os.getenv('ADMIN_EMAIL', 'weavara.research@gmail.com')}">{os.getenv('ADMIN_EMAIL', 'weavara.research@gmail.com')}</a></p>
                             <p style="margin-top: 24px;"><a href="/">← Return to Home</a></p>
                         </div>
                     </body>
@@ -19023,7 +18966,7 @@ async def unsubscribe_page(request: Request, token: str = Query(...)):
                 <!DOCTYPE html>
                 <html>
                 <head>
-                    <title>Unsubscribed - StockDigest</title>
+                    <title>Unsubscribed - Weavara</title>
                     <style>
                         body {{
                             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -19052,14 +18995,14 @@ async def unsubscribe_page(request: Request, token: str = Query(...)):
                 <body>
                     <div class="container">
                         <h1>✅ Successfully Unsubscribed</h1>
-                        <p><strong>{name}</strong>, you've been unsubscribed from StockDigest.</p>
+                        <p><strong>{name}</strong>, you've been unsubscribed from Weavara.</p>
                         <p class="email">{email}</p>
                         <p style="margin-top: 24px;">You will no longer receive daily stock intelligence reports.</p>
                         <p style="margin-top: 16px; font-size: 14px; color: #6b7280;">
                             Changed your mind? <a href="/">Re-subscribe here</a>
                         </p>
                         <p style="margin-top: 24px; font-size: 14px; color: #6b7280;">
-                            Questions? <a href="mailto:stockdigest.research@gmail.com">Contact us</a>
+                            Questions? <a href="mailto:{os.getenv('ADMIN_EMAIL', 'weavara.research@gmail.com')}">Contact us</a>
                         </p>
                     </div>
                 </body>
@@ -19070,14 +19013,15 @@ async def unsubscribe_page(request: Request, token: str = Query(...)):
         LOG.error(f"Error processing unsubscribe: {e}")
         LOG.error(traceback.format_exc())
 
-        return HTMLResponse("""
+        admin_email = os.getenv('ADMIN_EMAIL', 'weavara.research@gmail.com')
+        return HTMLResponse(f"""
             <!DOCTYPE html>
             <html>
-            <head><title>Error - StockDigest</title></head>
+            <head><title>Error - Weavara</title></head>
             <body>
                 <h1>Something went wrong</h1>
                 <p>We couldn't process your unsubscribe request. Please try again or contact support.</p>
-                <p><a href="mailto:stockdigest.research@gmail.com">stockdigest.research@gmail.com</a></p>
+                <p><a href="mailto:{admin_email}">{admin_email}</a></p>
             </body>
             </html>
         """, status_code=500)
@@ -19824,7 +19768,7 @@ async def beta_signup_endpoint(signup: BetaSignupRequest):
 
         return {
             "status": "success",
-            "message": "Welcome to StockDigest beta!",
+            "message": "Welcome to Weavara beta!",
             "tickers": ticker_data
         }
 
@@ -26011,7 +25955,7 @@ async def email_research_api(request: Request):
                 # Include ai_provider to fetch the specific version (Gemini or Sonnet)
                 if ai_provider:
                     cur.execute("""
-                        SELECT ticker, quarter, year, report_date, summary_text, ai_provider, ai_model
+                        SELECT ticker, quarter, year, report_date, summary_text, summary_json, ai_provider, ai_model
                         FROM transcript_summaries
                         WHERE ticker = %s
                           AND report_type = 'transcript'
@@ -26023,7 +25967,7 @@ async def email_research_api(request: Request):
                 else:
                     # Fallback: fetch any version if ai_provider not specified
                     cur.execute("""
-                        SELECT ticker, quarter, year, report_date, summary_text, ai_provider, ai_model
+                        SELECT ticker, quarter, year, report_date, summary_text, summary_json, ai_provider, ai_model
                         FROM transcript_summaries
                         WHERE ticker = %s
                           AND report_type = 'transcript'
@@ -26036,7 +25980,11 @@ async def email_research_api(request: Request):
                 if not doc:
                     return {"status": "error", "message": f"No transcript found for {ticker}"}
 
-                content = doc['summary_text']
+                # Check for JSON (v2 format) - required for research library
+                if not doc.get('summary_json'):
+                    return {"status": "error", "message": "Legacy transcript format detected. Please regenerate this transcript to view via email."}
+
+                content = doc['summary_text']  # Still used for content check
                 model_label = f" ({doc.get('ai_model', doc.get('ai_provider', 'AI'))})" if ai_provider else ""
                 # doc['quarter'] from database already has "Q" prefix (e.g., "Q2")
                 subject = f"{ticker} {doc['quarter']} {year} Earnings Call Transcript{model_label}"
@@ -26140,16 +26088,18 @@ async def email_research_api(request: Request):
             subject = email_data['subject']
 
         elif research_type == 'transcript':
-            # Use transcript email template
-            email_data = generate_transcript_email(
+            # Use transcript email v2 template (JSON-based)
+            json_output = doc['summary_json'] if isinstance(doc['summary_json'], dict) else json.loads(doc['summary_json'])
+
+            email_data = generate_transcript_email_v2(
                 ticker=ticker,
                 company_name=company_name,
                 report_type='transcript',
                 quarter=doc['quarter'],
                 year=doc['year'],
-                report_date=doc.get('report_date'),  # Pass actual call date from database
+                report_date=doc.get('report_date'),
                 pr_title=None,
-                summary_text=content,
+                json_output=json_output,
                 fmp_url=f"https://financialmodelingprep.com/financial-summary/{ticker}",
                 stock_price=stock_data['stock_price'],
                 price_change_pct=stock_data['price_change_pct'],
@@ -26162,28 +26112,7 @@ async def email_research_api(request: Request):
             html_body = email_data['html']
             subject = email_data['subject']
 
-        elif research_type == 'press_release':
-            # Use transcript email template for press releases
-            email_data = generate_transcript_email(
-                ticker=ticker,
-                company_name=company_name,
-                report_type='press_release',
-                quarter=None,
-                year=None,
-                report_date=doc['report_date'],
-                pr_title=doc['pr_title'],  # Use actual title from database
-                summary_text=content,
-                fmp_url=f"https://financialmodelingprep.com/press-releases/{ticker}",
-                stock_price=stock_data['stock_price'],
-                price_change_pct=stock_data['price_change_pct'],
-                price_change_color=stock_data['price_change_color'],
-                ytd_return_pct=stock_data['ytd_return_pct'],
-                ytd_return_color=stock_data['ytd_return_color'],
-                market_status=stock_data['market_status'],
-                return_label=stock_data['return_label']
-            )
-            html_body = email_data['html']
-            subject = email_data['subject']
+        # press_release research type removed - returns error at line 26005-26006 directing users to Company Releases
 
         elif research_type == '8k_filing':
             # Use raw 8-K email template
@@ -30251,7 +30180,7 @@ async def send_ticker_api(request: Request):
                 unsubscribe_token = get_or_create_unsubscribe_token(recipient)
 
                 # Replace placeholder with full unsubscribe URL
-                unsubscribe_url = f"https://stockdigest.app/unsubscribe?token={unsubscribe_token}" if unsubscribe_token else "https://stockdigest.app/unsubscribe"
+                unsubscribe_url = f"https://weavara.io/unsubscribe?token={unsubscribe_token}" if unsubscribe_token else "https://weavara.io/unsubscribe"
                 final_html = email['email_html'].replace(
                     '{{UNSUBSCRIBE_TOKEN}}',
                     unsubscribe_url

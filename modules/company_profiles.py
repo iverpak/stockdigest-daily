@@ -2274,6 +2274,11 @@ Analyze this earnings release PDF and extract all material information."""
                         else:
                             mime_type = 'image/jpeg'
 
+                        # Skip GIF images (Gemini doesn't support GIF format)
+                        if mime_type == 'image/gif':
+                            LOG.info(f"   ⏭️  Skipping image {idx}/{len(img_tags)}: {img_size:,} bytes (GIF not supported by Gemini)")
+                            continue
+
                         # Create inline_data part for Gemini
                         image_parts.append({
                             "inline_data": {

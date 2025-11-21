@@ -16731,185 +16731,144 @@ async def process_press_release_phase(job: dict):
 
         LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Fetched {len(content)} characters")
 
-        # Progress: 30% - Generating summary with AI v2 (Gemini Pro → Claude Sonnet fallback)
-        update_job_status(job_id, progress=30)
-        LOG.info(f"[{ticker}] 🤖 [JOB {job_id}] Generating summary with AI v2 (JSON output, 30-60s)...")
-
+        # Get ticker config
         ticker_config = get_ticker_config(ticker)
-
-        # Use v2 JSON generation (Gemini-first, Claude-fallback)
-        from modules.transcript_summaries import generate_transcript_json_with_fallback, convert_json_to_markdown
-        result = generate_transcript_json_with_fallback(
-            ticker=ticker,
-            content=content,
-            config=ticker_config,
-            content_type='press_release',
-            anthropic_api_key=ANTHROPIC_API_KEY,
-            gemini_api_key=GEMINI_API_KEY
-        )
-
-        if not result or not result.get('json_output'):
-            raise ValueError("Both Gemini and Claude press release v2 summarization failed")
-
-        json_output = result['json_output']
-        model_used = result['model_used']
-        generation_time_ms = result.get('generation_time_ms', 0)
-        prompt_tokens = result.get('prompt_tokens', 0)
-        completion_tokens = result.get('completion_tokens', 0)
-
-        # Extract provider name from model string
-        ai_provider = "gemini" if "gemini" in model_used.lower() else "claude"
-
-        LOG.info(
-            f"[{ticker}] ✅ [JOB {job_id}] Generated {len(json_output.get('sections', {}))} sections "
-            f"with {model_used} ({generation_time_ms}ms, {prompt_tokens}→{completion_tokens} tokens)"
-        )
-
-        # Generate markdown for database storage
-        summary_text_markdown = convert_json_to_markdown(json_output, 'press_release')
-
-        # Progress: 80% - Skipping old press_releases table (deprecated)
-        update_job_status(job_id, progress=80)
-        LOG.info(f"[{ticker}] ⏭️ [JOB {job_id}] Skipping old press_releases table (deprecated)...")
 
         # FMP doesn't have separate source table (unlike 8-K which has sec_8k_filings)
         source_id = None
 
-        # Progress: 85% - Generating company release summary with new 8-K filing prompt
-        if True:  # Always generate for FMP
-            update_job_status(job_id, progress=85)
-            LOG.info(f"[{ticker}] 🔄 [JOB {job_id}] Generating company release summary using 8-K filing prompt...")
+        # Progress: 30% - Generating company release summary with 8-K filing prompt
+        update_job_status(job_id, progress=30)
+        LOG.info(f"[{ticker}] 🔄 [JOB {job_id}] Generating company release summary using 8-K filing prompt...")
 
-            try:
-                # Use new unified prompt for ALL FMP press releases
-                parsed_result = generate_earnings_release_with_gemini(
-                    ticker=ticker,
-                    company_name=ticker_config.get('company_name', ticker),
-                    content=content,  # Raw FMP content
-                    document_title=pr_title,
-                    item_codes=None,
-                    gemini_api_key=GEMINI_API_KEY
-                )
+        try:
+            # Use new unified prompt for ALL FMP press releases
+            parsed_result = generate_earnings_release_with_gemini(
+                ticker=ticker,
+                company_name=ticker_config.get('company_name', ticker),
+                content=content,  # Raw FMP content
+                document_title=pr_title,
+                item_codes=None,
+                gemini_api_key=GEMINI_API_KEY
+            )
 
-                if parsed_result and parsed_result.get('parsed_summary'):
-                    # Extract metadata and JSON output
-                    result_metadata = parsed_result.get('metadata', {})
+            if parsed_result and parsed_result.get('parsed_summary'):
+                # Extract metadata and JSON output
+                result_metadata = parsed_result.get('metadata', {})
 
-                    # Override report_title with FMP's actual title (FMP provides better titles)
-                    report_title = pr_title
+                # Override report_title with FMP's actual title (FMP provides better titles)
+                report_title = pr_title
 
-                    # FMP: Don't track fiscal period (abbreviated content = unreliable extraction)
-                    # Only 8-K releases (full official documents) get fiscal period tracking
-                    fiscal_quarter_db = None
-                    fiscal_year_db = None
+                # FMP: Don't track fiscal period (abbreviated content = unreliable extraction)
+                # Only 8-K releases (full official documents) get fiscal period tracking
+                fiscal_quarter_db = None
+                fiscal_year_db = None
 
-                    json_output_parsed = parsed_result.get('json_data', {})
-                    markdown_summary = parsed_result.get('parsed_summary', '')  # Extract markdown
+                json_output_parsed = parsed_result.get('json_data', {})
+                markdown_summary = parsed_result.get('parsed_summary', '')  # Extract markdown
 
-                    # Progress: 90% - Generate email and save to database (ALWAYS, regardless of send_email flag)
-                    update_job_status(job_id, progress=90)
-                    LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Generating company release email and saving to database...")
+                # Progress: 90% - Generate email and save to database (ALWAYS, regardless of send_email flag)
+                update_job_status(job_id, progress=90)
+                LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Generating company release email and saving to database...")
 
+                try:
+                    # Get stock data for email header
+                    stock_data = get_filing_stock_data(ticker)
+
+                    # Format press release date nicely
                     try:
-                        # Get stock data for email header
-                        stock_data = get_filing_stock_data(ticker)
+                        from datetime import datetime
+                        date_obj = datetime.strptime(pr_date[:10], '%Y-%m-%d')  # Extract date part only
+                        formatted_pr_date = date_obj.strftime('%b %d, %Y')  # "Nov 19, 2024"
+                    except:
+                        formatted_pr_date = pr_date[:10] if len(pr_date) >= 10 else pr_date
 
-                        # Format press release date nicely
-                        try:
-                            from datetime import datetime
-                            date_obj = datetime.strptime(pr_date[:10], '%Y-%m-%d')  # Extract date part only
-                            formatted_pr_date = date_obj.strftime('%b %d, %Y')  # "Nov 19, 2024"
-                        except:
-                            formatted_pr_date = pr_date[:10] if len(pr_date) >= 10 else pr_date
+                    # Generate email using new company release system
+                    email_result = generate_company_release_email(
+                        ticker=ticker,
+                        company_name=ticker_config.get('company_name', ticker),
+                        release_type='fmp_press_release',
+                        filing_date=formatted_pr_date,
+                        json_output=json_output_parsed,
+                        stock_price=stock_data.get('stock_price'),
+                        price_change_pct=stock_data.get('price_change_pct'),
+                        price_change_color=stock_data.get('price_change_color', '#4ade80'),
+                        ytd_return_pct=stock_data.get('ytd_return_pct'),
+                        ytd_return_color=stock_data.get('ytd_return_color', '#4ade80'),
+                        market_status=stock_data.get('market_status', 'LAST CLOSE'),
+                        return_label=stock_data.get('return_label', '1D')
+                    )
+                    email_html = email_result.get('html', '')
+                    email_subject = email_result.get('subject', f"📄 {ticker} Company Release")
 
-                        # Generate email using new company release system
-                        email_result = generate_company_release_email(
-                            ticker=ticker,
-                            company_name=ticker_config.get('company_name', ticker),
-                            release_type='fmp_press_release',
-                            filing_date=formatted_pr_date,
-                            json_output=json_output_parsed,
-                            stock_price=stock_data.get('stock_price'),
-                            price_change_pct=stock_data.get('price_change_pct'),
-                            price_change_color=stock_data.get('price_change_color', '#4ade80'),
-                            ytd_return_pct=stock_data.get('ytd_return_pct'),
-                            ytd_return_color=stock_data.get('ytd_return_color', '#4ade80'),
-                            market_status=stock_data.get('market_status', 'LAST CLOSE'),
-                            return_label=stock_data.get('return_label', '1D')
-                        )
-                        email_html = email_result.get('html', '')
-                        email_subject = email_result.get('subject', f"📄 {ticker} Company Release")
-
-                        # ALWAYS save to company_releases table (even when send_email=False)
-                        with db() as conn, conn.cursor() as cur:
-                            cur.execute("""
-                                INSERT INTO company_releases (
-                                    ticker, company_name, release_type, filing_date, report_title,
-                                    source_id, source_type, summary_json, summary_html, summary_markdown,
-                                    ai_provider, ai_model, processing_duration_seconds,
-                                    token_count_input, token_count_output, job_id,
-                                    fiscal_year, fiscal_quarter, generated_at
-                                )
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                                ON CONFLICT (ticker, filing_date, report_title)
-                                DO UPDATE SET
-                                    summary_json = EXCLUDED.summary_json,
-                                    summary_html = EXCLUDED.summary_html,
-                                    summary_markdown = EXCLUDED.summary_markdown,
-                                    fiscal_year = EXCLUDED.fiscal_year,
-                                    fiscal_quarter = EXCLUDED.fiscal_quarter,
-                                    generated_at = NOW()
-                            """, (
-                                ticker,
-                                ticker_config.get('company_name', ticker),
-                                'fmp_press_release',
-                                pr_date[:10],  # Date only
-                                report_title,
-                                source_id,
-                                'fmp_press_release',
-                                json.dumps(json_output_parsed),
-                                email_html,
-                                markdown_summary,  # Add markdown
-                                'gemini',
-                                result_metadata.get('model', 'gemini-2.5-flash'),
-                                result_metadata.get('generation_time_seconds', 0),
-                                result_metadata.get('token_count_input', 0),
-                                result_metadata.get('token_count_output', 0),
-                                job_id,
-                                fiscal_year_db,
-                                fiscal_quarter_db
-                            ))
-                            conn.commit()
-
-                        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Press release saved to company_releases table")
-
-                        # Progress: 95% - Send email (CONDITIONAL based on send_email flag)
-                        if config.get('send_email', True):
-                            update_job_status(job_id, progress=95)
-                            LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending company release email...")
-
-                            send_email(
-                                subject=email_subject,
-                                html_body=email_html,
-                                to=ADMIN_EMAIL
+                    # ALWAYS save to company_releases table (even when send_email=False)
+                    with db() as conn, conn.cursor() as cur:
+                        cur.execute("""
+                            INSERT INTO company_releases (
+                                ticker, company_name, release_type, filing_date, report_title,
+                                source_id, source_type, summary_json, summary_html, summary_markdown,
+                                ai_provider, ai_model, processing_duration_seconds,
+                                token_count_input, token_count_output, job_id,
+                                fiscal_year, fiscal_quarter, generated_at
                             )
-                            LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Company release email sent")
-                        else:
-                            LOG.info(f"[{ticker}] ⏭️ [JOB {job_id}] Email sending disabled - press release saved silently")
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                            ON CONFLICT (ticker, filing_date, report_title)
+                            DO UPDATE SET
+                                summary_json = EXCLUDED.summary_json,
+                                summary_html = EXCLUDED.summary_html,
+                                summary_markdown = EXCLUDED.summary_markdown,
+                                fiscal_year = EXCLUDED.fiscal_year,
+                                fiscal_quarter = EXCLUDED.fiscal_quarter,
+                                generated_at = NOW()
+                        """, (
+                            ticker,
+                            ticker_config.get('company_name', ticker),
+                            'fmp_press_release',
+                            pr_date[:10],  # Date only
+                            report_title,
+                            source_id,
+                            'fmp_press_release',
+                            json.dumps(json_output_parsed),
+                            email_html,
+                            markdown_summary,  # Add markdown
+                            'gemini',
+                            result_metadata.get('model', 'gemini-2.5-flash'),
+                            result_metadata.get('generation_time_seconds', 0),
+                            result_metadata.get('token_count_input', 0),
+                            result_metadata.get('token_count_output', 0),
+                            job_id,
+                            fiscal_year_db,
+                            fiscal_quarter_db
+                        ))
+                        conn.commit()
 
-                    except Exception as email_error:
-                        LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to generate/save company release: {email_error}")
-                        LOG.error(f"Stacktrace: {traceback.format_exc()}")
-                        raise  # Re-raise to mark job as failed
-                else:
-                    LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Summary generation returned empty result")
+                    LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Press release saved to company_releases table")
 
-            except Exception as parsed_error:
-                LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to generate company release: {parsed_error}")
-                LOG.error(f"Stacktrace: {traceback.format_exc()}")
-                # Continue - original PR was saved successfully
-        else:
-            LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Could not get source_id for company release")
+                    # Progress: 95% - Send email (CONDITIONAL based on send_email flag)
+                    if config.get('send_email', True):
+                        update_job_status(job_id, progress=95)
+                        LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending company release email...")
+
+                        send_email(
+                            subject=email_subject,
+                            html_body=email_html,
+                            to=ADMIN_EMAIL
+                        )
+                        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Company release email sent")
+                    else:
+                        LOG.info(f"[{ticker}] ⏭️ [JOB {job_id}] Email sending disabled - press release saved silently")
+
+                except Exception as email_error:
+                    LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to generate/save company release: {email_error}")
+                    LOG.error(f"Stacktrace: {traceback.format_exc()}")
+                    raise  # Re-raise to mark job as failed
+            else:
+                LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Summary generation returned empty result")
+
+        except Exception as parsed_error:
+            LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to generate company release: {parsed_error}")
+            LOG.error(f"Stacktrace: {traceback.format_exc()}")
+            # Continue - original PR was saved successfully
 
         # Mark complete
         update_job_status(job_id, status='completed', progress=100)

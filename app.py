@@ -2601,11 +2601,34 @@ def map_company_release_to_article_dict(release_row: Dict) -> Dict | None:
             # Convert date to datetime at midnight (naive, UTC by convention)
             filing_datetime = datetime.combine(filing_date, datetime.min.time())
 
+        # Get SEC.gov URL if available (8-K exhibits have URLs, FMP press releases don't)
+        sec_html_url = release_row.get("sec_html_url")
+        exhibit_number = release_row.get("exhibit_number")
+
+        # Defensive: Strip whitespace and handle empty strings
+        if exhibit_number:
+            exhibit_number = exhibit_number.strip()
+            if not exhibit_number:  # Empty after strip
+                exhibit_number = None
+
+        # Build descriptive domain label
+        if sec_html_url and exhibit_number:
+            # Special case: MAIN body fallback (when 8-K has no exhibits)
+            # Use case-insensitive comparison for robustness
+            if exhibit_number.upper() == 'MAIN':
+                domain_label = "8-K Filing"
+            else:
+                domain_label = f"8-K Exhibit {exhibit_number}"
+        elif sec_html_url:
+            domain_label = "SEC Filing"
+        else:
+            domain_label = "Company Release"
+
         return {
             # REQUIRED by Phase 1 executive summary
             "ai_summary": summary_markdown.strip(),  # Already formatted markdown
             "title": report_title.strip(),  # "Q3 2024 Earnings Release"
-            "domain": "Company Release",  # Generic label for all official filings
+            "domain": domain_label,  # "8-K Exhibit 99.1" or "Company Release"
             "published_at": filing_datetime,  # For chronological sorting
 
             # METADATA (useful for tracking and display)
@@ -2618,9 +2641,9 @@ def map_company_release_to_article_dict(release_row: Dict) -> Dict | None:
 
             # OPTIONAL (Phase 1 doesn't use, but won't break if present)
             "category": "company",  # Always company category
-            "resolved_url": None,  # No URL for most releases
+            "resolved_url": sec_html_url,  # SEC.gov link for 8-Ks, None for FMP
             "scraped_content": None,  # Summary already generated
-            "url": "#",  # Placeholder (no clickable link for FMP releases)
+            "url": sec_html_url or "#",  # SEC.gov link or placeholder
         }
 
     except KeyError as e:
@@ -14621,13 +14644,17 @@ def generate_email_html_core(
             LOG.info(f"[{ticker}] Email #3: Fetched {len(articles)} real articles")
 
         # Query company releases and map to article format
+        # LEFT JOIN with sec_8k_filings to get exhibit URLs for 8-K releases
         if company_release_ids:
             cur.execute("""
-                SELECT id, ticker, company_name, filing_date, report_title,
-                       summary_markdown, release_type, source_type
-                FROM company_releases
-                WHERE id = ANY(%s)
-                ORDER BY filing_date DESC
+                SELECT cr.id, cr.ticker, cr.company_name, cr.filing_date, cr.report_title,
+                       cr.summary_markdown, cr.release_type, cr.source_type,
+                       s8k.sec_html_url,
+                       cr.exhibit_number
+                FROM company_releases cr
+                LEFT JOIN sec_8k_filings s8k ON cr.source_id = s8k.id
+                WHERE cr.id = ANY(%s)
+                ORDER BY cr.filing_date DESC
             """, (company_release_ids,))
 
             releases_fetched = 0
@@ -28391,13 +28418,17 @@ async def regenerate_email_api(request: Request):
                 LOG.info(f"[{ticker}] Regenerate: Fetched {len(articles)} real articles")
 
             # Fetch company releases and map to article format
+            # LEFT JOIN with sec_8k_filings to get exhibit URLs for 8-K releases
             if company_release_ids:
                 cur.execute("""
-                    SELECT id, ticker, company_name, filing_date, report_title,
-                           summary_markdown, release_type, source_type
-                    FROM company_releases
-                    WHERE id = ANY(%s)
-                    ORDER BY filing_date DESC
+                    SELECT cr.id, cr.ticker, cr.company_name, cr.filing_date, cr.report_title,
+                           cr.summary_markdown, cr.release_type, cr.source_type,
+                           s8k.sec_html_url,
+                           cr.exhibit_number
+                    FROM company_releases cr
+                    LEFT JOIN sec_8k_filings s8k ON cr.source_id = s8k.id
+                    WHERE cr.id = ANY(%s)
+                    ORDER BY cr.filing_date DESC
                 """, (company_release_ids,))
 
                 releases_fetched = 0

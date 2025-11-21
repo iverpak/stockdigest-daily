@@ -1066,27 +1066,14 @@ Return empty array: []
 CAPITAL ALLOCATION & BALANCE SHEET (Always if discussed - 2-4 bullets)
 ═══════════════════════════════════════════════════════════════════════════════
 
-SCOPE: How cash is generated and deployed - the complete cash story
-Logic: Cash flow cycle from generation through deployment to balance sheet impact
+SCOPE: How capital deployed (buybacks, dividends, capex, M&A, debt)
+Logic: What management did with cash - the deployment story
 
-Include the COMPLETE cash flow story:
-
-GENERATION:
-- Operating cash flow
-- Free cash flow
-- Working capital changes
-
-DEPLOYMENT:
 - Share repurchases (executed, not just authorized)
 - Dividends (declared/paid)
 - M&A (capital allocated)
 - Debt activity (issuance/repayment)
 - Capex (actual vs guidance, growth vs maintenance split)
-
-BALANCE SHEET:
-- Cash position
-- Liquidity
-- Leverage ratios
 
 Format:
 {

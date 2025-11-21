@@ -1765,11 +1765,11 @@ def generate_company_profile_email(
 
     # Generate subject based on filing type
     if filing_type == "10-Q":
-        subject = f"10-Q Profile: {company_name} ({ticker}) - {fiscal_period}"
+        subject = f"{ticker} {fiscal_period} 10-Q Report"
     elif filing_type == "10-K":
-        subject = f"10-K Profile: {company_name} ({ticker}) - {fiscal_period}"
+        subject = f"{ticker} {fiscal_period} 10-K Report"
     else:
-        subject = f"📋 Company Profile: {company_name} ({ticker}) {fiscal_period}"
+        subject = f"{ticker} Company Profile {fiscal_period}"
 
     return {"html": html, "subject": subject}
 
@@ -2696,8 +2696,11 @@ def generate_company_release_email(
     # Build summary HTML
     summary_html = build_company_release_html(sections)
 
-    # Get report title from metadata
-    report_title = json_output.get('metadata', {}).get('report_title', 'Company Release')
+    # Get metadata for subject line construction
+    metadata = json_output.get('metadata', {})
+    report_title = metadata.get('report_title', 'Company Release')
+    fiscal_quarter = metadata.get('fiscal_quarter', '')
+    fiscal_year = metadata.get('fiscal_year', '')
 
     # Load template
     template_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'templates', 'email_research_report.html')
@@ -2731,7 +2734,12 @@ def generate_company_release_email(
         content_html=summary_html
     )
 
-    # Subject line with report title
-    subject = f"📄 {ticker} - {report_title} - {filing_date}"
+    # Subject line: Distinguish earnings releases from material events
+    if fiscal_quarter and fiscal_year:
+        # Earnings Release (Item 2.02) - has quarter and year
+        subject = f"{ticker} {fiscal_quarter} {fiscal_year} Earnings Release"
+    else:
+        # Material Event (other items) - use descriptive title
+        subject = f"{ticker} 8-K - {report_title}"
 
     return {"html": html, "subject": subject}

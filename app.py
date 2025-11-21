@@ -13020,7 +13020,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
         html_content = "".join(html)
         # NEW (Nov 2025): Add report_type label to subject
         report_label = "(WEEKLY)" if report_type == 'weekly' else "(DAILY)"
-        subject = f"🔍 Article Selection QA {report_label}: {ticker_list} - {total_flagged} flagged from {total_articles} articles"
+        subject = f"QA Article Selection {report_label}: {ticker_list} - {total_flagged} flagged from {total_articles} articles"
 
         # Save Email #1 snapshot to database (for admin dashboard preview)
         # Skip saving for test runs - only save production runs
@@ -13680,7 +13680,7 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
     ticker_list = ', '.join(ticker_display_list)
     # NEW (Nov 2025): Add report_type label to subject
     report_label = "(WEEKLY)" if report_type == 'weekly' else "(DAILY)"
-    subject = f"📝 Content QA {report_label}: {ticker_list} - {total_articles} articles analyzed"
+    subject = f"QA Content Review {report_label}: {ticker_list} - {total_articles} articles analyzed"
 
     # Save Email #2 snapshot to database (for admin dashboard preview)
     # Skip saving for test runs - only save production runs
@@ -14692,7 +14692,27 @@ def generate_email_html_core(
 
     # Current date and market status
     eastern = pytz.timezone('US/Eastern')
-    current_date = datetime.now(timezone.utc).astimezone(eastern).strftime("%b %d, %Y")
+    now_eastern = datetime.now(timezone.utc).astimezone(eastern)
+
+    # Calculate date strings for subject and header
+    if report_type == 'weekly':
+        # Weekly: Calculate last Monday through Sunday date range
+        days_since_monday = now_eastern.weekday()  # 0=Monday, 6=Sunday
+        if days_since_monday == 0:  # Today is Monday
+            last_monday = now_eastern - timedelta(days=7)
+        else:
+            last_monday = now_eastern - timedelta(days=days_since_monday + 7)
+        last_sunday = last_monday + timedelta(days=6)
+
+        # Subject: Full month name, date range
+        subject_date = f"{last_monday.strftime('%B %d')}-{last_sunday.strftime('%d, %Y')}"
+        # Header: Abbreviated month, UPPERCASE, date range
+        current_date = f"{last_monday.strftime('%b %d').upper()}-{last_sunday.strftime('%d, %Y').upper()}"
+    else:  # daily
+        # Subject: Full month name
+        subject_date = now_eastern.strftime("%B %d, %Y")
+        # Header: Abbreviated month, UPPERCASE
+        current_date = now_eastern.strftime("%b %d, %Y").upper()
 
     # Determine market status for dynamic labels
     market_is_open = is_market_open()
@@ -14711,15 +14731,13 @@ def generate_email_html_core(
 
     # NEW (Nov 2025): Dynamic branding based on report_type
     if report_type == 'weekly':
-        header_title = "WEAVARA WEEKLY INTELLIGENCE"
+        header_title = "WEAVARA WEEKLY WRAP-UP"
         footer_brand = "Weavara"
         footer_subtitle = "Intelligence Delivered Daily"
-        subject_prefix = "📊 Weekly Intelligence"
     else:  # daily
-        header_title = "WEAVARA DAILY BRIEF"
+        header_title = "WEAVARA DAILY MORNING BRIEF"
         footer_brand = "Weavara"
         footer_subtitle = "Intelligence Delivered Daily"
-        subject_prefix = "📊 Daily Brief"
 
     # Unsubscribe URL
     if recipient_email:
@@ -14856,7 +14874,10 @@ def generate_email_html_core(
 </html>'''
 
     # ========== Official user-facing email subject ==========
-    subject = f"{subject_prefix}: {company_name} ({ticker}) - {analyzed_count} articles analyzed"
+    if report_type == 'weekly':
+        subject = f"{ticker} Weekly Wrap-up - {subject_date}"
+    else:  # daily
+        subject = f"{ticker} Daily Morning Brief - {subject_date}"
 
     return {
         "html": html,
@@ -16165,14 +16186,14 @@ async def process_quality_review_phase(job: dict):
                     total_critical = p1_critical + p2_critical
 
                     if total_critical > 0:
-                        subject = f"🔍 Quality Review: {ticker} - ❌ FAIL ({p1_critical} Phase 1 + {p2_critical} Phase 2 critical errors)"
+                        subject = f"QA Quality Review: {ticker} - FAIL ({p1_critical} Phase 1 + {p2_critical} Phase 2 critical errors)"
                     else:
-                        subject = f"🔍 Quality Review: {ticker} - ✅ PASS"
+                        subject = f"QA Quality Review: {ticker} - PASS"
                 else:
                     if p1_critical > 0:
-                        subject = f"🔍 Quality Review: {ticker} - ❌ FAIL ({p1_critical} critical errors, Phase 2 skipped)"
+                        subject = f"QA Quality Review: {ticker} - FAIL ({p1_critical} critical errors, Phase 2 skipped)"
                     else:
-                        subject = f"🔍 Quality Review: {ticker} - ✅ PASS (Phase 2 skipped)"
+                        subject = f"QA Quality Review: {ticker} - PASS (Phase 2 skipped)"
 
                 # Send email
                 send_email(subject, report_html)
@@ -17120,8 +17141,8 @@ async def process_8k_summary_phase(job: dict):
                         raw_content_html=raw_content
                     )
 
-                    # Cleaner subject line with formatted date and type
-                    subject = f"📄 8-K: {ticker} - Exhibit {exhibit_num} ({type_display}) - {formatted_date}"
+                    # Raw 8-K subject line (pre-AI processing)
+                    subject = f"{ticker} 8-K Raw - Exhibit {exhibit_num} - {formatted_date}"
 
                     send_email(subject=subject, html_body=email_html, to=DIGEST_TO)
                     LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email sent for Exhibit {exhibit_num}")
@@ -25976,7 +25997,9 @@ async def email_research_api(request: Request):
                     return {"status": "error", "message": f"No presentation found for {ticker}"}
 
                 content = doc['profile_markdown']
-                subject = f"Investor Presentation: {doc['company_name']} ({ticker}) - {doc['presentation_date']}"
+                # Use presentation_title if available, otherwise fallback to date
+                pres_title = doc.get('presentation_title', f"Investor Presentation - {doc['presentation_date']}")
+                subject = f"{ticker} {pres_title}"
 
             elif research_type == 'transcript':
                 quarter = body.get('quarter')
@@ -26016,7 +26039,7 @@ async def email_research_api(request: Request):
                 content = doc['summary_text']
                 model_label = f" ({doc.get('ai_model', doc.get('ai_provider', 'AI'))})" if ai_provider else ""
                 # doc['quarter'] from database already has "Q" prefix (e.g., "Q2")
-                subject = f"Earnings Transcript: {ticker} {doc['quarter']} FY{year}{model_label}"
+                subject = f"{ticker} {doc['quarter']} {year} Earnings Call Transcript{model_label}"
 
             elif research_type == 'press_release':
                 return {"status": "error", "message": "Press release emailing not supported. Use Company Releases instead."}
@@ -28693,7 +28716,7 @@ async def regenerate_email_api(request: Request):
                 # Send Email #2 with "(Regenerated)" in subject
                 config = get_ticker_config(ticker)
                 company_name = config.get("company_name", ticker) if config else ticker
-                email2_subject = f"📝 Content QA (Regenerated): {company_name} ({ticker}) - {len(flagged_article_ids)} articles analyzed"
+                email2_subject = f"QA Content Review (Regenerated): {company_name} ({ticker}) - {len(flagged_article_ids)} articles analyzed"
 
                 send_email(email2_subject, email2_html)
                 LOG.info(f"✅ [{ticker}] Email #2 (Content QA) sent successfully")
@@ -31254,7 +31277,7 @@ def process_hourly_alerts():
                 }).body.decode('utf-8')
 
                 # Send email
-                subject = f"📰 Hourly Alerts: {tickers_str} ({len(article_data)} articles) - {hour_str}"
+                subject = f"Hourly Alerts: {tickers_str} ({len(article_data)} articles) - {hour_str} EST"
 
                 send_success = send_email(
                     subject=subject,

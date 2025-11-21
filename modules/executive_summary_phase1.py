@@ -115,17 +115,10 @@ def _build_phase1_user_content(
     unified_timeline = []
     if all_flagged_articles:
         # Sort all articles globally by published_at DESC (newest first)
-        # Handle both timezone-naive and timezone-aware datetimes
-        def get_sortable_datetime(article):
-            dt = article.get("published_at")
-            if dt is None:
-                return datetime.min.replace(tzinfo=timezone.utc)
-            # If datetime is naive (no timezone), assume UTC
-            if dt.tzinfo is None:
-                return dt.replace(tzinfo=timezone.utc)
-            return dt
-
-        all_flagged_articles.sort(key=get_sortable_datetime, reverse=True)
+        all_flagged_articles.sort(
+            key=lambda x: x.get("published_at") or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True
+        )
 
         for article in all_flagged_articles[:50]:  # Limit to 50 most recent
             title = article.get("title", "")

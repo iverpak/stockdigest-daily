@@ -2,7 +2,7 @@
 # Runs SQL migration to enforce ticker consistency across all tables
 
 # Configuration
-$DATABASE_URL = "postgresql://quantbrief_db_user:YOUR_PASSWORD_HERE@dpg-ctbjhvbtq21c73bvjr10-a.oregon-postgres.render.com/quantbrief_db"
+$DATABASE_URL = "postgresql://quantbrief_db_user:KimvgAbr56bvo1SPWgfYzAgaZKpRzxOY@dpg-d2t0t06uk2gs73cd99ig-a.oregon-postgres.render.com/quantbrief_db"
 
 Write-Host "=== STOCKDIGEST TICKER NORMALIZATION MIGRATION ===" -ForegroundColor Cyan
 Write-Host ""

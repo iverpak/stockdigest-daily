@@ -16108,8 +16108,13 @@ async def process_quality_review_phase(job: dict):
 async def process_10q_profile_phase(job: dict):
     """Process 10-Q quarterly profile generation (5-15 min, Gemini 2.5)"""
     job_id = job['job_id']
-    ticker = job['ticker']
+    ticker_raw = job['ticker']
     config = job['config'] if isinstance(job['config'], dict) else {}
+
+    # DEFENSE IN DEPTH: Normalize ticker even if job config should already have it normalized
+    ticker = normalize_ticker_format(ticker_raw)
+    if ticker != ticker_raw:
+        LOG.warning(f"[JOB {job_id}] Normalized ticker from '{ticker_raw}' to '{ticker}'")
 
     try:
         # Start heartbeat thread
@@ -16276,8 +16281,13 @@ async def process_10q_profile_phase(job: dict):
 async def process_transcript_phase(job: dict):
     """Process earnings transcript generation (30-60s, Claude)"""
     job_id = job['job_id']
-    ticker = job['ticker']
+    ticker_raw = job['ticker']
     config = job['config'] if isinstance(job['config'], dict) else {}
+
+    # DEFENSE IN DEPTH: Normalize ticker even if job config should already have it normalized
+    ticker = normalize_ticker_format(ticker_raw)
+    if ticker != ticker_raw:
+        LOG.warning(f"[JOB {job_id}] Normalized ticker from '{ticker_raw}' to '{ticker}'")
 
     try:
         # Start heartbeat thread
@@ -16497,8 +16507,13 @@ async def process_transcript_phase(job: dict):
 async def process_transcript_generation_phase(job: dict):
     """Process transcript generation (30-60s, Gemini/Claude)"""
     job_id = job['job_id']
-    ticker = job['ticker']
+    ticker_raw = job['ticker']
     config = job['config'] if isinstance(job['config'], dict) else {}
+
+    # DEFENSE IN DEPTH: Normalize ticker even if job config should already have it normalized
+    ticker = normalize_ticker_format(ticker_raw)
+    if ticker != ticker_raw:
+        LOG.warning(f"[JOB {job_id}] Normalized ticker from '{ticker_raw}' to '{ticker}'")
 
     try:
         # Start heartbeat thread
@@ -16684,8 +16699,13 @@ async def process_transcript_generation_phase(job: dict):
 async def process_press_release_phase(job: dict):
     """Process press release generation (30-60s, Claude)"""
     job_id = job['job_id']
-    ticker = job['ticker']
+    ticker_raw = job['ticker']
     config = job['config'] if isinstance(job['config'], dict) else {}
+
+    # DEFENSE IN DEPTH: Normalize ticker even if job config should already have it normalized
+    ticker = normalize_ticker_format(ticker_raw)
+    if ticker != ticker_raw:
+        LOG.warning(f"[JOB {job_id}] Normalized ticker from '{ticker_raw}' to '{ticker}'")
 
     try:
         # Start heartbeat thread
@@ -16923,8 +16943,13 @@ async def process_8k_summary_phase(job: dict):
     Fast (<1 min per exhibit).
     """
     job_id = job['job_id']
-    ticker = job['ticker']
+    ticker_raw = job['ticker']
     config = job['config'] if isinstance(job['config'], dict) else {}
+
+    # DEFENSE IN DEPTH: Normalize ticker even if job config should already have it normalized
+    ticker = normalize_ticker_format(ticker_raw)
+    if ticker != ticker_raw:
+        LOG.warning(f"[JOB {job_id}] Normalized ticker from '{ticker_raw}' to '{ticker}'")
 
     try:
         # Start heartbeat thread

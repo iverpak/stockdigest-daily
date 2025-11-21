@@ -98,6 +98,7 @@ from modules.company_profiles import (
     get_main_8k_url,          # NEW: Fallback to main 8-K body when no exhibits
     extract_8k_html_content,  # Simplified: Single exhibit HTML extraction
     classify_exhibit_type,    # NEW: Auto-classify exhibits (earnings_release, investor_presentation, etc.)
+    should_process_exhibit,   # NEW: Filter zero-value exhibits (auditor letters, consents, XBRL, etc.)
     # Parsed press releases (Nov 2025 - unified Gemini summaries for FMP PRs and 8-K exhibits)
     generate_parsed_press_release_with_gemini,
     generate_earnings_release_with_gemini,  # NEW: Comprehensive earnings release analysis
@@ -17059,6 +17060,11 @@ async def process_8k_summary_phase(job: dict):
             exhibit_url = exhibit['url']
 
             LOG.info(f"[{ticker}] 📥 [JOB {job_id}] Processing Exhibit {exhibit_num}: {exhibit_desc}")
+
+            # Filter: Skip zero-value exhibits (auditor letters, consents, certifications, XBRL)
+            if not should_process_exhibit(exhibit_num):
+                LOG.info(f"[{ticker}] ⏭️  [JOB {job_id}] Skipping Exhibit {exhibit_num} (zero info value)")
+                continue
 
             # Extract HTML content for this exhibit
             raw_content = extract_8k_html_content(exhibit_url)

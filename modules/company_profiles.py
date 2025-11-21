@@ -616,13 +616,36 @@ def get_all_8k_exhibits(documents_url: str) -> List[Dict[str, Any]]:
             cols = row.find_all('td')
 
             if len(cols) >= 4:
-                doc_type = cols[1].text.strip()  # Column 1: Type (EXHIBIT 1.1, EX-99.1, etc.)
-                filename = cols[2].text.strip()  # Column 2: Filename
-                size_text = cols[3].text.strip()  # Column 3: Size
+                # Handle 3 SEC table formats:
+                # Format 1 (PLD/TSLA): Col 1 = "EXHIBIT 10.1" | Col 2 = filename | Col 3 = "EX-10.1" | Col 4 = size
+                # Format 2 (LIN/TLN):  Col 1 = "EX-4.1"       | Col 2 = filename | Col 3 = "EX-4.1"  | Col 4 = size
+                # Format 3 (WMT):      Col 1 = "PRESS RELEASE"| Col 2 = filename | Col 3 = "EX-99.1" | Col 4 = size
 
-                # Match ANY exhibit (not just 99.*) that's HTML (skip images, XML, TXT)
+                doc_type = cols[1].text.strip()  # Try column 1 first (handles Formats 1 & 2)
+                filename = cols[2].text.strip()  # Filename is always column 2
+
+                # Detect 5-column format (most common) vs 4-column (rare/legacy)
+                if len(cols) >= 5:
+                    size_text = cols[4].text.strip()  # Size in column 4 for 5-column format
+                    description = cols[1].text.strip()  # Description from column 1 (for Format 3)
+                else:
+                    size_text = cols[3].text.strip()  # Size in column 3 for 4-column format
+                    description = cols[0].text.strip()  # Description from column 0 (sequence number)
+
+                # Check if column 1 has exhibit type (Formats 1 & 2)
                 doc_type_upper = doc_type.upper()
                 is_exhibit = doc_type_upper.startswith('EXHIBIT') or doc_type_upper.startswith('EX-')
+
+                # Fallback: Check column 3 if column 1 doesn't have exhibit type (Format 3 - WMT case)
+                if not is_exhibit and len(cols) >= 4:
+                    doc_type_col3 = cols[3].text.strip()
+                    doc_type_col3_upper = doc_type_col3.upper()
+                    if doc_type_col3_upper.startswith('EXHIBIT') or doc_type_col3_upper.startswith('EX-'):
+                        doc_type = doc_type_col3  # Use column 3 as doc_type
+                        doc_type_upper = doc_type_col3_upper
+                        is_exhibit = True
+                        LOG.info(f"📋 Format 3 detected (description in col 1): '{description}' → Exhibit type in col 3: '{doc_type}'")
+
                 is_html = '.htm' in filename.lower()
 
                 if is_exhibit and is_html:
@@ -654,13 +677,13 @@ def get_all_8k_exhibits(documents_url: str) -> List[Dict[str, Any]]:
                         except:
                             size_bytes = 0
 
-                        # Get description from column 0 or filename
-                        # Note: Column 0 is often just a sequence number, use filename as fallback
-                        desc_from_col = cols[0].text.strip()
-                        if desc_from_col and len(desc_from_col) > 5 and not desc_from_col.isdigit():
-                            description = desc_from_col
-                        else:
+                        # Clean up description (already set above based on format detection)
+                        # If description is generic or a sequence number, use filename instead
+                        if not description or description.isdigit() or len(description) <= 2:
                             # Use filename without extension as description
+                            description = filename.replace('.htm', '').replace('_', ' ').title()
+                        elif description.upper().startswith('EXHIBIT') or description.upper().startswith('EX-'):
+                            # If description is just the exhibit type (Format 1/2), use filename
                             description = filename.replace('.htm', '').replace('_', ' ').title()
 
                         exhibits.append({
@@ -805,6 +828,63 @@ def classify_exhibit_type(exhibit_num: str, description: str, char_count: int, i
 
     # All other 8-Ks = general press release
     return 'press_release'
+
+
+def should_process_exhibit(exhibit_num: str) -> bool:
+    """
+    Determine if exhibit has information value and should be processed.
+
+    Uses allowlist pattern: Only process exhibits in known high-value series.
+    This filters out zero-value boilerplate (auditor letters, consents, certifications, XBRL).
+
+    High-value exhibit series:
+    - 1.x through 11.x: Contracts, agreements, instruments (debt, equity, M&A)
+    - 99.x: Press releases, presentations, supplemental materials
+
+    Zero-value exhibit series (excluded):
+    - 16.x: Auditor acknowledgment letters (boilerplate)
+    - 23.x: Consents of experts (legal boilerplate)
+    - 24.x: Powers of attorney (legal documents)
+    - 32.x: Section 906 certifications (mandatory boilerplate)
+    - 101.x: XBRL files (machine-readable, not for AI)
+    - 104.x: Cover page data (metadata only)
+
+    Args:
+        exhibit_num: Exhibit number in format "99.1", "10.2", etc. (NOT "EX-99.1")
+
+    Returns:
+        True if exhibit should be processed, False if it should be skipped
+    """
+    try:
+        # Parse exhibit number - handles both "99.1" and "104" formats
+        if '.' in exhibit_num:
+            # Standard format: "99.1" → major=99, minor=1
+            parts = exhibit_num.split('.')
+            if len(parts) != 2:
+                # Invalid format, include by default (safe approach)
+                LOG.warning(f"⚠️  Unusual exhibit number format: '{exhibit_num}' - including by default")
+                return True
+            major_num = int(parts[0])
+        else:
+            # No decimal format: "104" → major=104
+            major_num = int(exhibit_num)
+
+        # Include: 1.x through 11.x (contracts, agreements, instruments)
+        if 1 <= major_num <= 11:
+            return True
+
+        # Include: 99.x (press releases, presentations, supplemental)
+        if major_num == 99:
+            return True
+
+        # Exclude: Everything else (16.x+, 23.x, 24.x, 32.x, 101.x, 104.x)
+        LOG.info(f"⏭️  Skipping Exhibit {exhibit_num} (zero info value - series {major_num}.x)")
+        return False
+
+    except (ValueError, IndexError) as e:
+        # Can't parse exhibit number, include by default (safe approach)
+        LOG.warning(f"⚠️  Failed to parse exhibit number '{exhibit_num}': {e} - including by default")
+        return True
 
 
 def quick_parse_8k_header(sec_html_url: str, rate_limit_delay: float = 0.15) -> Dict:

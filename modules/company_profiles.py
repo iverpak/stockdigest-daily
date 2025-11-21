@@ -2202,101 +2202,109 @@ def generate_earnings_release_with_gemini(
         # Gemini 2.5 Flash
         model = genai.GenerativeModel('gemini-2.5-flash')
 
+        # CHANGE #1: Increased token limit from 16K to 32K (2x buffer for complex filings)
         generation_config = {
             "temperature": 0.0,  # Maximum determinism
-            "max_output_tokens": 16000,  # Sufficient for comprehensive analysis
+            "max_output_tokens": 32000,  # Increased from 16000 to handle Transaction Details section
             "response_mime_type": "application/json"  # Request JSON output
         }
 
-        start_time = datetime.now(timezone.utc)
+        # CHANGE #3: Add retry logic for transient Gemini errors (copy from Phase 1 pattern)
+        max_retries = 1
+        response = None
+        generation_time = 0
 
-        if is_pdf and pdf_bytes:
-            # Multimodal PDF processing
-            LOG.info(f"Processing PDF ({len(pdf_bytes):,} bytes) with multimodal...")
+        for attempt in range(max_retries + 1):
+            try:
+                start_time = datetime.now(timezone.utc)
 
-            pdf_part = {
-                "inline_data": {
-                    "mime_type": "application/pdf",
-                    "data": base64.b64encode(pdf_bytes).decode('utf-8')
-                }
-            }
+                if is_pdf and pdf_bytes:
+                    # Multimodal PDF processing
+                    LOG.info(f"[{ticker}] Processing PDF ({len(pdf_bytes):,} bytes) with multimodal...")
 
-            user_content = f"""Company: {company_name} ({ticker})
+                    pdf_part = {
+                        "inline_data": {
+                            "mime_type": "application/pdf",
+                            "data": base64.b64encode(pdf_bytes).decode('utf-8')
+                        }
+                    }
+
+                    user_content = f"""Company: {company_name} ({ticker})
 Document Type: {source_context}
 Title: {document_title}
 
 Analyze this earnings release PDF and extract all material information."""
 
-            response = model.generate_content(
-                [prompt_template, user_content, pdf_part],
-                generation_config=generation_config
-            )
-        else:
-            # Text-based processing with multimodal image support
-            content_length = len(content) if content else 0
-            LOG.info(f"Content length: {content_length:,} chars")
+                    response = model.generate_content(
+                        [prompt_template, user_content, pdf_part],
+                        generation_config=generation_config
+                    )
+                else:
+                    # Text-based processing with multimodal image support
+                    content_length = len(content) if content else 0
+                    LOG.info(f"[{ticker}] Content length: {content_length:,} chars")
 
-            # Extract images from HTML content
-            from bs4 import BeautifulSoup
-            import requests
+                    # Extract images from HTML content
+                    from bs4 import BeautifulSoup
+                    import requests
 
-            soup = BeautifulSoup(content, 'html.parser')
-            img_tags = soup.find_all('img')
+                    soup = BeautifulSoup(content, 'html.parser')
+                    img_tags = soup.find_all('img')
 
-            # Download images and build multimodal parts
-            image_parts = []
-            if img_tags:
-                LOG.info(f"Found {len(img_tags)} images in HTML content")
+                    # Download images and build multimodal parts
+                    image_parts = []
+                    if img_tags:
+                        LOG.info(f"[{ticker}] Found {len(img_tags)} images in HTML content")
 
-                for idx, img in enumerate(img_tags, 1):
-                    img_url = img.get('src', '')
-                    if not img_url or not img_url.startswith('http'):
-                        continue
+                        for idx, img in enumerate(img_tags, 1):
+                            img_url = img.get('src', '')
+                            if not img_url or not img_url.startswith('http'):
+                                continue
 
-                    try:
-                        # Download image
-                        img_response = requests.get(
-                            img_url,
-                            headers={'User-Agent': 'StockDigest/1.0 (stockdigest.research@gmail.com)'},
-                            timeout=30
-                        )
-                        img_response.raise_for_status()
+                            try:
+                                # Download image
+                                img_response = requests.get(
+                                    img_url,
+                                    headers={'User-Agent': 'StockDigest/1.0 (stockdigest.research@gmail.com)'},
+                                    timeout=30
+                                )
+                                img_response.raise_for_status()
 
-                        img_bytes = img_response.content
-                        img_size = len(img_bytes)
+                                img_bytes = img_response.content
+                                img_size = len(img_bytes)
 
-                        # Detect MIME type from URL or content-type header
-                        content_type = img_response.headers.get('content-type', 'image/jpeg')
-                        if 'png' in img_url.lower() or 'png' in content_type:
-                            mime_type = 'image/png'
-                        elif 'gif' in img_url.lower() or 'gif' in content_type:
-                            mime_type = 'image/gif'
-                        else:
-                            mime_type = 'image/jpeg'
+                                # Detect MIME type from URL or content-type header
+                                content_type = img_response.headers.get('content-type', 'image/jpeg')
+                                if 'png' in img_url.lower() or 'png' in content_type:
+                                    mime_type = 'image/png'
+                                elif 'gif' in img_url.lower() or 'gif' in content_type:
+                                    mime_type = 'image/gif'
+                                else:
+                                    mime_type = 'image/jpeg'
 
-                        # Skip GIF images (Gemini doesn't support GIF format)
-                        if mime_type == 'image/gif':
-                            LOG.info(f"   ⏭️  Skipping image {idx}/{len(img_tags)}: {img_size:,} bytes (GIF not supported by Gemini)")
-                            continue
+                                # Skip GIF images (Gemini doesn't support GIF format)
+                                if mime_type == 'image/gif':
+                                    LOG.info(f"[{ticker}]    ⏭️  Skipping image {idx}/{len(img_tags)}: {img_size:,} bytes (GIF not supported by Gemini)")
+                                    continue
 
-                        # Create inline_data part for Gemini
-                        image_parts.append({
-                            "inline_data": {
-                                "mime_type": mime_type,
-                                "data": base64.b64encode(img_bytes).decode('utf-8')
-                            }
-                        })
+                                # Create inline_data part for Gemini
+                                image_parts.append({
+                                    "inline_data": {
+                                        "mime_type": mime_type,
+                                        "data": base64.b64encode(img_bytes).decode('utf-8')
+                                    }
+                                })
 
-                        LOG.info(f"   ✅ Downloaded image {idx}/{len(img_tags)}: {img_size:,} bytes ({mime_type})")
+                                LOG.info(f"[{ticker}]    ✅ Downloaded image {idx}/{len(img_tags)}: {img_size:,} bytes ({mime_type})")
 
-                    except Exception as img_error:
-                        LOG.warning(f"   ⚠️ Failed to download image {idx}: {img_error}")
-                        continue
+                            except Exception as img_error:
+                                LOG.warning(f"[{ticker}]    ⚠️ Failed to download image {idx}: {img_error}")
+                                continue
 
-                LOG.info(f"Successfully downloaded {len(image_parts)}/{len(img_tags)} images for multimodal processing")
+                        LOG.info(f"[{ticker}] Successfully downloaded {len(image_parts)}/{len(img_tags)} images for multimodal processing")
 
-            # Build user content (text part)
-            user_content = f"""Company: {company_name} ({ticker})
+                    # Build user content (text part)
+                    user_content = f"""Company: {company_name} ({ticker})
 Document Type: {source_context}
 Title: {document_title}
 
@@ -2306,51 +2314,91 @@ DOCUMENT CONTENT:
 {content[:400000]}
 """
 
-            # Build multimodal request
-            if image_parts:
-                # Multimodal: prompt + text + images
-                LOG.info(f"Sending multimodal request to Gemini ({len(image_parts)} images)")
-                parts = [prompt_template, user_content] + image_parts
-                response = model.generate_content(
-                    parts,
-                    generation_config=generation_config
+                    # Build multimodal request
+                    if image_parts:
+                        # Multimodal: prompt + text + images
+                        LOG.info(f"[{ticker}] Sending multimodal request to Gemini ({len(image_parts)} images)")
+                        parts = [prompt_template, user_content] + image_parts
+                        response = model.generate_content(
+                            parts,
+                            generation_config=generation_config
+                        )
+                    else:
+                        # Text only (no images found)
+                        full_prompt = f"{prompt_template}\n\n---\n\n{user_content}"
+                        response = model.generate_content(
+                            full_prompt,
+                            generation_config=generation_config
+                        )
+
+                end_time = datetime.now(timezone.utc)
+                generation_time = int((end_time - start_time).total_seconds())
+
+                # Success - break retry loop
+                break
+
+            except Exception as e:
+                error_str = str(e)
+
+                # Check for retryable errors (same as Phase 1 executive summary)
+                is_retryable = (
+                    'ResourceExhausted' in error_str or
+                    'quota' in error_str.lower() or
+                    '429' in error_str or
+                    'ServiceUnavailable' in error_str or
+                    '503' in error_str or
+                    'DeadlineExceeded' in error_str or
+                    'timeout' in error_str.lower()
                 )
+
+                if is_retryable and attempt < max_retries:
+                    wait_time = 2 ** attempt  # 1s
+                    LOG.warning(f"[{ticker}] ⚠️ Gemini error (attempt {attempt + 1}/{max_retries + 1}): {error_str[:200]}")
+                    LOG.warning(f"[{ticker}] 🔄 Retrying in {wait_time}s...")
+                    import time
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    # Non-retryable error or max retries reached
+                    LOG.error(f"[{ticker}] ❌ Gemini generation failed after {attempt + 1} attempts: {error_str}")
+                    return None
+
+        # Check if we got a response
+        if response is None:
+            LOG.error(f"[{ticker}] ❌ No response from Gemini after {max_retries + 1} attempts")
+            return None
+
+        # CHANGE #2: Add finish_reason logging (copy from 10-K generation pattern)
+        finish_reason_name = None
+        if hasattr(response, 'candidates') and response.candidates:
+            candidate = response.candidates[0]
+
+            # Log finish reason (critical for diagnosing truncation)
+            finish_reason = getattr(candidate, 'finish_reason', None)
+            if finish_reason:
+                finish_reason_name = str(finish_reason).split('.')[-1] if hasattr(finish_reason, 'name') else str(finish_reason)
+                LOG.info(f"[{ticker}] 🔍 Gemini finish_reason: {finish_reason_name}")
+
+                # Warn on abnormal finish reasons
+                if 'MAX_TOKENS' in finish_reason_name:
+                    LOG.error(f"[{ticker}] ❌ OUTPUT TRUNCATED - Hit max_output_tokens limit!")
+                    LOG.error(f"[{ticker}]   Configured max_output_tokens: {generation_config.get('max_output_tokens', 'unknown')}")
+                elif 'SAFETY' in finish_reason_name:
+                    LOG.error(f"[{ticker}] 🚨 SAFETY FILTER triggered - Output may be incomplete")
+                elif 'RECITATION' in finish_reason_name:
+                    LOG.error(f"[{ticker}] 📋 RECITATION detected - Gemini detected verbatim copying")
+                elif 'OTHER' in finish_reason_name:
+                    LOG.error(f"[{ticker}] ⚠️ Abnormal finish_reason: {finish_reason_name}")
             else:
-                # Text only (no images found)
-                full_prompt = f"{prompt_template}\n\n---\n\n{user_content}"
-                response = model.generate_content(
-                    full_prompt,
-                    generation_config=generation_config
-                )
+                LOG.warning(f"[{ticker}] ⚠️ No finish_reason available from Gemini response")
 
-        end_time = datetime.now(timezone.utc)
-        generation_time = int((end_time - start_time).total_seconds())
-
-        # Parse JSON response
+        # CHANGE #4: Replace custom JSON extraction with robust json_utils.py (4-tier fallback)
         response_text = response.text.strip()
+        from modules.json_utils import extract_json_from_claude_response
 
-        # Handle potential markdown code blocks
-        if response_text.startswith('```'):
-            # Extract JSON from code block
-            lines = response_text.split('\n')
-            json_lines = []
-            in_block = False
-            for line in lines:
-                if line.startswith('```json'):
-                    in_block = True
-                    continue
-                elif line.startswith('```'):
-                    in_block = False
-                    continue
-                elif in_block:
-                    json_lines.append(line)
-            response_text = '\n'.join(json_lines)
-
-        try:
-            json_data = json.loads(response_text)
-        except json.JSONDecodeError as e:
-            LOG.error(f"❌ Failed to parse JSON response: {e}")
-            LOG.error(f"Response preview: {response_text[:500]}...")
+        json_data = extract_json_from_claude_response(response_text, ticker)
+        if not json_data:
+            LOG.error(f"[{ticker}] ❌ JSON extraction failed - see detailed error above")
             return None
 
         # Convert JSON to markdown

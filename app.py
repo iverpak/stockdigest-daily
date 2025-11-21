@@ -12494,11 +12494,17 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
 
 def sort_articles_chronologically(articles: List[Dict]) -> List[Dict]:
     """Sort articles by published_at DESC (newest first), regardless of quality or flagged status"""
-    return sorted(
-        articles,
-        key=lambda x: x.get('published_at') or x.get('found_at') or datetime.min.replace(tzinfo=timezone.utc),
-        reverse=True
-    )
+    def get_sortable_datetime(article):
+        """Get timezone-aware datetime for sorting (handles both naive and aware datetimes)"""
+        dt = article.get('published_at') or article.get('found_at')
+        if dt is None:
+            return datetime.min.replace(tzinfo=timezone.utc)
+        # If datetime is naive (no timezone), assume UTC
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    return sorted(articles, key=get_sortable_datetime, reverse=True)
 
 
 def send_email(subject: str, html_body: str, to: str | None = None, bcc: str | None = None) -> bool:

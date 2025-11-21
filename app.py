@@ -30172,7 +30172,7 @@ async def send_ticker_api(request: Request):
                 return {"status": "error", "message": f"No ready email found for {ticker}"}
 
             recipients = email['recipients']
-            admin_email = os.getenv('ADMIN_EMAIL', 'stockdigest.research@gmail.com')
+            admin_email = os.getenv('ADMIN_EMAIL', 'weavara.research@gmail.com')
 
             # Send to each recipient with unique unsubscribe token
             for recipient in recipients:
@@ -30375,9 +30375,9 @@ def send_admin_notification(results: Dict):
     else:
         failed_list_html = "<p>None</p>"
 
-    admin_email = os.getenv('ADMIN_EMAIL', 'stockdigest.research@gmail.com')
+    admin_email = os.getenv('ADMIN_EMAIL', 'weavara.research@gmail.com')
     admin_token = os.getenv('ADMIN_TOKEN', '')
-    dashboard_url = f"https://stockdigest.app/admin/queue?token={admin_token}"
+    dashboard_url = f"https://weavara.io/admin/queue?token={admin_token}"
 
     html = f"""
     <!DOCTYPE html>
@@ -30438,7 +30438,7 @@ def send_email_with_dry_run(subject: str, html: str, to, bcc=None) -> bool:
     In DRY_RUN mode, all emails redirect to admin.
     """
     dry_run = os.getenv('DRY_RUN', 'false').lower() == 'true'
-    admin_email = os.getenv('ADMIN_EMAIL', 'stockdigest.research@gmail.com')
+    admin_email = os.getenv('ADMIN_EMAIL', 'weavara.research@gmail.com')
 
     if dry_run:
         LOG.warning(f"🧪 DRY_RUN: Redirecting email to {admin_email}")
@@ -30487,7 +30487,7 @@ def send_all_ready_emails_impl() -> Dict:
 
             sent_count = 0
             failed_tickers = []
-            admin_email = os.getenv('ADMIN_EMAIL', 'stockdigest.research@gmail.com')
+            admin_email = os.getenv('ADMIN_EMAIL', 'weavara.research@gmail.com')
 
             for email in emails:
                 ticker = email['ticker']
@@ -30500,7 +30500,7 @@ def send_all_ready_emails_impl() -> Dict:
                         token = get_or_create_unsubscribe_token(recipient)
 
                         # Replace placeholder with full unsubscribe URL
-                        unsubscribe_url = f"https://stockdigest.app/unsubscribe?token={token}" if token else "https://stockdigest.app/unsubscribe"
+                        unsubscribe_url = f"https://weavara.io/unsubscribe?token={token}" if token else "https://weavara.io/unsubscribe"
                         final_html = email['email_html'].replace(
                             '{{UNSUBSCRIBE_TOKEN}}',
                             unsubscribe_url
@@ -31213,7 +31213,7 @@ def process_hourly_alerts():
 
                 # Get or create unsubscribe token
                 unsubscribe_token = get_or_create_unsubscribe_token(user_email)
-                unsubscribe_url = f"https://stockdigest.app/unsubscribe?token={unsubscribe_token}"
+                unsubscribe_url = f"https://weavara.io/unsubscribe?token={unsubscribe_token}"
 
                 html = templates.TemplateResponse("email_hourly_alert.html", {
                     "request": {},  # Dummy request for Jinja2

@@ -1,18 +1,25 @@
 # StockDigest - Ticker Normalization Migration Script
 # Runs SQL migration to enforce ticker consistency across all tables
 
+# Configuration
+$DATABASE_URL = "postgresql://quantbrief_db_user:YOUR_PASSWORD_HERE@dpg-ctbjhvbtq21c73bvjr10-a.oregon-postgres.render.com/quantbrief_db"
+
 Write-Host "=== STOCKDIGEST TICKER NORMALIZATION MIGRATION ===" -ForegroundColor Cyan
 Write-Host ""
 
+# Set environment variable from config
+$env:DATABASE_URL = $DATABASE_URL
+
 # Check if DATABASE_URL is set
-if (-not $env:DATABASE_URL) {
-    Write-Host "❌ ERROR: DATABASE_URL environment variable not set!" -ForegroundColor Red
+if (-not $env:DATABASE_URL -or $env:DATABASE_URL -like "*YOUR_PASSWORD_HERE*") {
+    Write-Host "❌ ERROR: DATABASE_URL not configured in script!" -ForegroundColor Red
     Write-Host ""
-    Write-Host "Please set it first:" -ForegroundColor Yellow
-    Write-Host '  $env:DATABASE_URL = "postgresql://user:pass@host:5432/database"' -ForegroundColor Gray
+    Write-Host "Please update line 5 in this script:" -ForegroundColor Yellow
+    Write-Host '  $DATABASE_URL = "postgresql://quantbrief_db_user:ACTUAL_PASSWORD@dpg-..."' -ForegroundColor Gray
     Write-Host ""
-    Write-Host "Or get it from Render dashboard:" -ForegroundColor Yellow
+    Write-Host "Get the full URL from Render dashboard:" -ForegroundColor Yellow
     Write-Host "  Render → Your Database → Connection → External Database URL" -ForegroundColor Gray
+    Write-Host "  Copy the entire URL and replace line 5" -ForegroundColor Gray
     Write-Host ""
     Write-Host "Press any key to exit..." -ForegroundColor White
     $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
@@ -42,7 +49,7 @@ try {
 }
 
 # Get migration file path
-$migrationFile = "$PSScriptRoot\..\migrations\add_ticker_normalization_constraints.sql"
+$migrationFile = "$PSScriptRoot\..\migrations\add_ticker_reference_constraints.sql"
 
 # Check if migration file exists
 if (-not (Test-Path $migrationFile)) {

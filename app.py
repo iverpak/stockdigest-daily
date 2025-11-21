@@ -17561,8 +17561,8 @@ Generate the complete page-by-page deck analysis now.
                 filing_type='PRESENTATION'
             )
 
-            # Modify subject for presentation
-            email_data['subject'] = f"Investor Presentation Analysis: {ticker_config['company_name']} ({ticker}) - {presentation_title}"
+            # Subject already set correctly by generate_company_profile_email()
+            # (format: "{ticker} {presentation_title}")
 
             send_email(
                 subject=email_data['subject'],
@@ -26067,18 +26067,31 @@ async def email_research_api(request: Request):
                     return {"status": "error", "message": f"No 8-K exhibit found for {ticker}"}
 
                 content = doc['raw_content'] or doc['summary_text']
-                subject = f"📄 8-K Filing: {ticker} - Exhibit {doc['exhibit_number']}: {doc['exhibit_description']} ({doc['filing_date']})"
+
+                # Format filing date to match automated path (e.g., "Nov 19, 2024")
+                try:
+                    from datetime import datetime
+                    filing_date = doc['filing_date']
+                    if isinstance(filing_date, str):
+                        date_obj = datetime.strptime(filing_date[:10], '%Y-%m-%d')
+                    else:
+                        date_obj = filing_date
+                    formatted_date = date_obj.strftime('%b %d, %Y')
+                except:
+                    formatted_date = str(doc['filing_date'])
+
+                # Subject matches automated format (line 17145)
+                subject = f"{ticker} 8-K Raw - Exhibit {doc['exhibit_number']} - {formatted_date}"
 
             elif research_type == 'parsed_pr':
-                # Fetch from company_releases table by ID (NEW: migrated from parsed_press_releases)
+                # Fetch from company_releases table by ID (NEW: uses same email function as automated generation)
                 doc_id = body.get('id')
                 if not doc_id:
                     return {"status": "error", "message": "Document ID required for company release"}
 
                 cur.execute("""
-                    SELECT id, ticker, company_name, source_type, filing_date as document_date,
-                           report_title as document_title, summary_markdown as parsed_summary,
-                           exhibit_number, ai_model, processing_duration_seconds
+                    SELECT id, ticker, company_name, source_type, filing_date,
+                           report_title, summary_json, fiscal_quarter, fiscal_year
                     FROM company_releases
                     WHERE id = %s AND ticker = %s
                     LIMIT 1
@@ -26088,13 +26101,16 @@ async def email_research_api(request: Request):
                 if not doc:
                     return {"status": "error", "message": f"No company release found for {ticker} with ID {doc_id}"}
 
-                content = doc['parsed_summary'] if isinstance(doc, dict) else doc[6]
-                # Extract quarter/year from title if possible (e.g., "TLN - Q2 2025 Earnings Release")
-                title = (doc['document_title'] if isinstance(doc, dict) else doc[5]) or ''
-                subject = f"📊 Company Release: {ticker} - {title}"
+                # Reconstruct json_output for generate_company_release_email()
+                json_output = doc['summary_json'] if isinstance(doc['summary_json'], dict) else json.loads(doc['summary_json'])
 
-        if not content:
-            return {"status": "error", "message": "No content found"}
+                # Note: content variable not used for this research type (email function uses json_output directly)
+                content = "N/A"  # Set placeholder to pass content check below
+
+        if not content or content == "N/A":
+            # Skip check for parsed_pr type (uses json_output instead)
+            if research_type != 'parsed_pr':
+                return {"status": "error", "message": "No content found"}
 
         # Get real-time stock data using unified helper (yfinance → Polygon → database → None)
         config = get_ticker_config(ticker)
@@ -26189,31 +26205,36 @@ async def email_research_api(request: Request):
             # subject already set above
 
         elif research_type == 'parsed_pr':
-            # Use transcript email template for parsed press releases
-            # Try to extract quarter/year from title (e.g., "Q2 2025")
-            import re
-            title = doc.get('document_title', '')
-            quarter_match = re.search(r'(Q[1-4])\s*(\d{4})', title)
-            quarter = quarter_match.group(1) if quarter_match else ''
-            year = quarter_match.group(2) if quarter_match else ''
+            # Use company release email template (SAME as automated generation)
+            # Format filing date nicely
+            try:
+                from datetime import datetime
+                filing_date = doc['filing_date']
+                if isinstance(filing_date, str):
+                    date_obj = datetime.strptime(filing_date[:10], '%Y-%m-%d')
+                else:
+                    date_obj = filing_date
+                formatted_date = date_obj.strftime('%b %d, %Y')
+            except:
+                formatted_date = str(doc['filing_date'])
 
-            email_data = generate_transcript_email(
+            # Call SAME email generation function as automated path (line 16910)
+            email_data = generate_company_release_email(
                 ticker=ticker,
-                company_name=doc.get('company_name') or company_name,
-                report_type='transcript',  # Use transcript type for earnings releases
-                quarter=quarter,
-                year=year,
-                summary_text=content,
-                stock_price=stock_data.get('stock_price'),
-                price_change_pct=stock_data.get('price_change_pct'),
-                price_change_color=stock_data.get('price_change_color', '#666'),
-                ytd_return_pct=stock_data.get('ytd_return_pct'),
-                ytd_return_color=stock_data.get('ytd_return_color', '#666'),
-                market_status=stock_data.get('market_status', 'LAST CLOSE'),
-                return_label=stock_data.get('return_label', '1D')
+                company_name=doc.get('company_name', company_name),
+                release_type=doc.get('source_type', 'fmp_press_release'),
+                filing_date=formatted_date,
+                json_output=json_output,
+                stock_price=stock_data['stock_price'],
+                price_change_pct=stock_data['price_change_pct'],
+                price_change_color=stock_data['price_change_color'],
+                ytd_return_pct=stock_data['ytd_return_pct'],
+                ytd_return_color=stock_data['ytd_return_color'],
+                market_status=stock_data['market_status'],
+                return_label=stock_data['return_label']
             )
-            html_body = email_data.get('html', '')
-            # Keep subject from data fetch (includes clean title)
+            html_body = email_data['html']
+            subject = email_data['subject']  # Subject automatically distinguishes earnings vs material events
 
         send_email(subject=subject, html_body=html_body, to=DIGEST_TO)
 

@@ -13052,7 +13052,8 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
 
 async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int,
                               show_ai_analysis: bool = True, show_descriptions: bool = True,
-                              flagged_article_ids: List[int] = None) -> str:
+                              flagged_article_ids: List[int] = None,
+                              existing_summaries: Dict[str, Dict[str, str]] = None) -> str:
     """Enhanced digest with metadata display removed but keeping all badges/emojis
 
     Args:
@@ -13061,6 +13062,9 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
         show_ai_analysis: If True, show AI analysis boxes under articles (default True)
         show_descriptions: If True, show article descriptions (default True)
         flagged_article_ids: Optional list of flagged article IDs for sorting priority
+        existing_summaries: Optional pre-generated summaries (for regenerate workflow).
+                           If provided, skips summary generation and uses these instead.
+                           Format: {ticker: {"ai_analysis_summary": "...", "model_used": "..."}}
     """
 
     # CRITICAL FIX: Split value_chain into upstream/downstream BEFORE executive summary generation
@@ -13074,8 +13078,13 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
             categories["downstream"] = downstream_articles
             LOG.debug(f"[{ticker}] Split value_chain for executive summary: upstream={len(upstream_articles)}, downstream={len(downstream_articles)}")
 
-    # Generate summaries using Claude (primary) with OpenAI fallback
-    openai_summaries = await generate_ai_final_summaries(articles_by_ticker)  # Legacy variable name, actually uses Claude→OpenAI fallback
+    # Generate summaries OR use existing (for regenerate workflow)
+    if existing_summaries is not None:
+        # Use pre-generated summaries (regenerate workflow - skips redundant generation)
+        openai_summaries = existing_summaries
+    else:
+        # Generate summaries using Gemini (primary) with Claude fallback (production workflow)
+        openai_summaries = await generate_ai_final_summaries(articles_by_ticker)  # Legacy variable name
 
     # Format ticker list with company names
     ticker_display_list = []
@@ -28645,41 +28654,51 @@ async def regenerate_email_api(request: Request):
         hours = 168  # Always use 7 days for regeneration
         LOG.info(f"[{ticker}] Using fixed hours={hours} for regeneration (matches production)")
 
-        # Step 7.5: Generate and send Email #2 (Content QA) - NEW
+        # Step 7.5: Generate and send Email #2 (Content QA) using pre-generated executive summary
         LOG.info(f"[{ticker}] 📧 Generating Email #2 (Content QA) with regenerated executive summary")
         try:
-            # Fetch articles with enhanced content (same function used in production)
-            # Uses existing flagged articles and AI summaries - only executive summary is new
-            articles_by_ticker_dict = await fetch_digest_articles_with_enhanced_content(
-                hours=hours,
-                tickers=[ticker],
-                show_ai_analysis=True,
-                show_descriptions=True,
-                flagged_article_ids=flagged_article_ids,
-                mode='test'  # Don't save to database (already in email_queue)
-            )
+            # Fetch executive summary from database (just saved in step 6)
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    SELECT summary_text, ai_provider
+                    FROM executive_summaries
+                    WHERE ticker = %s AND summary_date = CURRENT_DATE
+                    ORDER BY generated_at DESC LIMIT 1
+                """, (ticker,))
+                exec_summary_row = cur.fetchone()
 
-            # Check if function returned articles
-            if articles_by_ticker_dict and ticker in articles_by_ticker_dict:
-                # Build HTML (same function used in production)
+            if exec_summary_row and exec_summary_row['summary_text']:
+                # Prepare summaries in format expected by HTML builder
+                existing_summaries = {
+                    ticker: {
+                        "ai_analysis_summary": exec_summary_row['summary_text'],
+                        "model_used": exec_summary_row['ai_provider']
+                    }
+                }
+
+                # Build Email #2 HTML with pre-generated summary (no redundant generation)
                 days = int(hours / 24) if hours >= 24 else 1
+                articles_by_ticker = {ticker: categories}  # From step 4 (line 28451-28463)
+
                 email2_html = await build_enhanced_digest_html(
-                    articles_by_ticker_dict,
-                    days,
+                    articles_by_ticker=articles_by_ticker,
+                    period_days=days,
                     show_ai_analysis=True,
                     show_descriptions=True,
-                    flagged_article_ids=flagged_article_ids
+                    flagged_article_ids=flagged_article_ids,
+                    existing_summaries=existing_summaries  # Use pre-generated summary (skips generation)
                 )
 
-                # Send Email #2 with "(Regenerated)" in subject
+                # Send Email #2 with "(Regenerated)" and report type in subject
                 config = get_ticker_config(ticker)
                 company_name = config.get("company_name", ticker) if config else ticker
-                email2_subject = f"QA Content Review (Regenerated): {company_name} ({ticker}) - {len(flagged_article_ids)} articles analyzed"
+                report_label = "(WEEKLY)" if report_type == 'weekly' else "(DAILY)"
+                email2_subject = f"QA Content Review (Regenerated) {report_label}: {company_name} ({ticker}) - {len(flagged_article_ids)} articles analyzed"
 
                 send_email(email2_subject, email2_html)
                 LOG.info(f"✅ [{ticker}] Email #2 (Content QA) sent successfully")
             else:
-                LOG.warning(f"[{ticker}] No articles returned from fetch_digest_articles_with_enhanced_content (articles may be outside lookback window - this is expected for old emails, Email #2 skipped but Email #3 will generate normally)")
+                LOG.warning(f"[{ticker}] No executive summary found in database, skipping Email #2")
 
         except Exception as e:
             LOG.error(f"[{ticker}] ❌ Failed to generate/send Email #2: {e}")

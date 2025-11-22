@@ -4830,8 +4830,16 @@ def export_ticker_references_to_csv():
         }
 
 # 3. COMMIT CSV TO GITHUB - Push updated CSV back to repository
-def commit_csv_to_github(csv_content: str, commit_message: str = None):
-    """Push updated CSV content back to GitHub repository"""
+def commit_csv_to_github(csv_content: str, commit_message: str = None, file_path: str = None):
+    """
+    Push updated CSV content back to GitHub repository.
+
+    Args:
+        csv_content: The CSV file content as a string
+        commit_message: Optional commit message
+        file_path: Optional file path in repo (e.g., "data/users/user_tickers.csv")
+                   If not provided, uses GITHUB_CSV_PATH environment variable
+    """
     if not GITHUB_TOKEN or not GITHUB_REPO:
         return {
             "status": "error",
@@ -4845,8 +4853,11 @@ def commit_csv_to_github(csv_content: str, commit_message: str = None):
         }
     
     try:
+        # Determine which file path to use
+        target_path = file_path or GITHUB_CSV_PATH
+
         # First, get the current file to obtain its SHA (required for updates)
-        api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_CSV_PATH}"
+        api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{target_path}"
         
         headers = {
             "Authorization": f"Bearer {GITHUB_TOKEN}",
@@ -4855,7 +4866,7 @@ def commit_csv_to_github(csv_content: str, commit_message: str = None):
         }
         
         # Get current file info
-        LOG.info(f"Getting current file info from GitHub: {GITHUB_REPO}/{GITHUB_CSV_PATH}")
+        LOG.info(f"Getting current file info from GitHub: {GITHUB_REPO}/{target_path}")
         response = requests.get(api_url, headers=headers, timeout=30)
         
         file_sha = None
@@ -4963,7 +4974,7 @@ def commit_csv_to_github(csv_content: str, commit_message: str = None):
                 "commit_sha": commit_result['commit']['sha'],
                 "file_sha": commit_result['content']['sha'],
                 "commit_url": commit_result['commit']['html_url'],
-                "message": f"Successfully updated {GITHUB_CSV_PATH} in {GITHUB_REPO}",
+                "message": f"Successfully updated {target_path} in {GITHUB_REPO}",
                 "csv_size": len(csv_content),
                 "sha_retries": sha_retry_count
             }
@@ -30743,7 +30754,6 @@ def export_beta_users_csv():
     try:
         import csv
         from datetime import datetime
-        import subprocess
 
         timestamp = datetime.now().strftime('%Y%m%d')
 
@@ -30809,57 +30819,54 @@ def export_beta_users_csv():
 
         LOG.info(f"✅ Backup CSV: {len(all_users)} users → {backup_path}")
 
-        # Commit both files to GitHub (legal audit trail)
-        LOG.info("📤 Committing user CSVs to GitHub...")
+        # Commit both files to GitHub via API (legal audit trail)
+        LOG.info("📤 Committing user CSVs to GitHub via API...")
         try:
-            # Git add both files
-            subprocess.run(
-                ['git', 'add', active_users_path, backup_path],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=30
+            # Read CSV files back from disk (they're small, ~10KB each)
+            with open(active_users_path, 'r', encoding='utf-8') as f:
+                active_csv_content = f.read()
+
+            with open(backup_path, 'r', encoding='utf-8') as f:
+                backup_csv_content = f.read()
+
+            # Commit file 1: user_tickers.csv (active users only)
+            LOG.info("📤 Committing file 1/2: user_tickers.csv")
+            result1 = commit_csv_to_github(
+                csv_content=active_csv_content,
+                commit_message=f"Daily user export - {timestamp}\n\nActive users: {len(active_users)}\nFile: user_tickers.csv",
+                file_path="data/users/user_tickers.csv"
             )
 
-            # Git commit with descriptive message
-            commit_message = f"Daily user export - {timestamp}\n\nActive users: {len(active_users)}\nTotal users: {len(all_users)}\nBackup file: beta_users_{timestamp}.csv\n\nLegal audit trail for CASL/PIPEDA compliance."
-
-            commit_result = subprocess.run(
-                ['git', 'commit', '-m', commit_message],
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-
-            # Check if commit succeeded or if there were no changes
-            if commit_result.returncode == 0:
-                LOG.info(f"✅ Git commit successful")
-
-                # Git push
-                push_result = subprocess.run(
-                    ['git', 'push', 'origin', 'main'],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=60
-                )
-                LOG.info(f"✅ Git push successful")
-                LOG.info(f"📦 Committed to GitHub: {active_users_path}, {backup_path}")
-
-            elif "nothing to commit" in commit_result.stdout or "nothing to commit" in commit_result.stderr:
-                LOG.info(f"ℹ️ No changes to commit (user data unchanged)")
+            if result1['status'] == 'success':
+                LOG.info(f"✅ Committed user_tickers.csv to GitHub (SHA: {result1['commit_sha'][:8]})")
             else:
-                LOG.warning(f"⚠️ Git commit returned code {commit_result.returncode}")
-                LOG.warning(f"   stdout: {commit_result.stdout}")
-                LOG.warning(f"   stderr: {commit_result.stderr}")
+                LOG.warning(f"⚠️ Failed to commit user_tickers.csv: {result1['message']}")
 
-        except subprocess.TimeoutExpired:
-            LOG.warning(f"⚠️ Git operations timed out - files saved locally but not pushed to GitHub")
-        except subprocess.CalledProcessError as e:
-            LOG.warning(f"⚠️ Git operations failed: {e}")
-            LOG.warning(f"   Files saved locally: {active_users_path}, {backup_path}")
+            # Commit file 2: beta_users_YYYYMMDD.csv (all users, legal audit trail)
+            LOG.info(f"📤 Committing file 2/2: beta_users_{timestamp}.csv")
+            result2 = commit_csv_to_github(
+                csv_content=backup_csv_content,
+                commit_message=f"Daily user export - {timestamp}\n\nTotal users: {len(all_users)}\nBackup file: beta_users_{timestamp}.csv\n\nLegal audit trail for CASL/PIPEDA compliance.",
+                file_path=f"data/users/beta_users_{timestamp}.csv"
+            )
+
+            if result2['status'] == 'success':
+                LOG.info(f"✅ Committed beta_users_{timestamp}.csv to GitHub (SHA: {result2['commit_sha'][:8]})")
+                LOG.info(f"📦 Legal audit trail complete: {backup_path}")
+            else:
+                LOG.warning(f"⚠️ Failed to commit backup file: {result2['message']}")
+
+            # Summary
+            if result1['status'] == 'success' and result2['status'] == 'success':
+                LOG.info(f"✅ Both files committed to GitHub successfully")
+            elif result1['status'] == 'success' or result2['status'] == 'success':
+                LOG.warning(f"⚠️ Partial success: One file committed, one failed")
+            else:
+                LOG.warning(f"⚠️ Both GitHub commits failed")
+
         except Exception as e:
-            LOG.warning(f"⚠️ Unexpected error during git operations: {e}")
+            LOG.warning(f"⚠️ GitHub API operations failed: {e}")
+            LOG.warning(f"   Files saved locally: {active_users_path}, {backup_path}")
 
         return {
             "active_users_path": active_users_path,

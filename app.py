@@ -1802,6 +1802,13 @@ def ensure_schema():
                     WHEN duplicate_column THEN NULL;  -- Column already exists, ignore
                 END $$;
 
+                -- Migration: Add summary_json column if it doesn't exist (Nov 2025)
+                DO $$ BEGIN
+                    ALTER TABLE transcript_summaries ADD COLUMN summary_json JSONB;
+                EXCEPTION
+                    WHEN duplicate_column THEN NULL;  -- Column already exists, ignore
+                END $$;
+
                 CREATE INDEX IF NOT EXISTS idx_transcript_summaries_ticker ON transcript_summaries(ticker);
                 CREATE INDEX IF NOT EXISTS idx_transcript_summaries_quarter ON transcript_summaries(quarter, year);
                 CREATE INDEX IF NOT EXISTS idx_transcript_summaries_type ON transcript_summaries(report_type);
@@ -27122,10 +27129,10 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                     if not latest_year_db or latest_year_fmp > latest_year_db:
                         # Determine email flag based on initialization status
                         if is_first_check:
-                            LOG.info(f"[{ticker}] 💾 Initializing DB with 10-K FY{latest_year_fmp} (no email)")
-                            send_email_flag = False
+                            LOG.info(f"[{ticker}] 💾 [INTERNAL] Initializing DB with 10-K FY{latest_year_fmp}")
+                            send_email_flag = True  # Send to admin with [INTERNAL] tag
                         else:
-                            LOG.info(f"[{ticker}] 🆕 NEW 10-K: FY{latest_year_fmp}")
+                            LOG.info(f"[{ticker}] 🆕 [INTERNAL] NEW 10-K: FY{latest_year_fmp}")
                             send_email_flag = True
 
                         # Queue job for generation
@@ -27192,10 +27199,10 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                             if needs_update:
                                 # Determine email flag based on initialization status
                                 if is_first_check:
-                                    LOG.info(f"[{ticker}] 💾 Initializing DB with 10-Q Q{quarter_fmp} {year_fmp} (no email)")
-                                    send_email_flag = False
+                                    LOG.info(f"[{ticker}] 💾 [INTERNAL] Initializing DB with 10-Q Q{quarter_fmp} {year_fmp}")
+                                    send_email_flag = True  # Send to admin with [INTERNAL] tag
                                 else:
-                                    LOG.info(f"[{ticker}] 🆕 NEW 10-Q: Q{quarter_fmp} {year_fmp}")
+                                    LOG.info(f"[{ticker}] 🆕 [INTERNAL] NEW 10-Q: Q{quarter_fmp} {year_fmp}")
                                     send_email_flag = True
 
                                 # Queue job for generation
@@ -27271,10 +27278,10 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                         if needs_update:
                             # Determine email flag based on initialization status
                             if is_first_check:
-                                LOG.info(f"[{ticker}] 💾 Initializing DB with transcript Q{quarter_fmp} FY{year_fmp} (no email)")
-                                send_email_flag = False
+                                LOG.info(f"[{ticker}] 💾 [INTERNAL] Initializing DB with transcript Q{quarter_fmp} FY{year_fmp}")
+                                send_email_flag = True  # Send to admin with [INTERNAL] tag
                             else:
-                                LOG.info(f"[{ticker}] 🆕 NEW Transcript: Q{quarter_fmp} FY{year_fmp}")
+                                LOG.info(f"[{ticker}] 🆕 [INTERNAL] NEW Transcript: Q{quarter_fmp} FY{year_fmp}")
                                 send_email_flag = True
 
                             # Queue job for generation
@@ -27333,16 +27340,16 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                             # Check if already exists (safety check)
                             exists = db_check_fmp_release_exists(ticker, pr_datetime, pr_title)
                             if not exists:
-                                LOG.info(f"[{ticker}] 💾 Initializing DB with latest PR from {pr_datetime} (no email): {pr_title[:60]}...")
+                                LOG.info(f"[{ticker}] 💾 [INTERNAL] Initializing DB with latest PR from {pr_datetime}: {pr_title[:60]}...")
 
-                                # Queue job for generation (silent)
+                                # Queue job for generation
                                 batch_id = str(uuid.uuid4())
                                 job_config = {
                                     "ticker": ticker,
                                     "report_type": "press_release",
                                     "pr_date": pr_datetime,  # Store full datetime
                                     "pr_title": pr_title,
-                                    "send_email": False  # Silent initialization
+                                    "send_email": True  # Send to admin with [INTERNAL] tag
                                 }
 
                                 with db() as conn, conn.cursor() as cur:
@@ -27518,9 +27525,9 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                             # Check if already exists (safety check)
                             exists = db_check_8k_filing_exists(ticker, filing_date, accession_number)
                             if not exists:
-                                LOG.info(f"[{ticker}] 💾 Initializing DB with latest 8-K from {filing_date} (no email) - Items: {item_codes}")
+                                LOG.info(f"[{ticker}] 💾 [INTERNAL] Initializing DB with latest 8-K from {filing_date} - Items: {item_codes}")
 
-                                # Queue job for generation (silent)
+                                # Queue job for generation
                                 batch_id = str(uuid.uuid4())
                                 job_config = {
                                     "ticker": ticker,
@@ -27529,7 +27536,7 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                                     "filing_date": filing_date,
                                     "item_codes": item_codes,
                                     "documents_url": documents_url,
-                                    "send_email": False  # Silent initialization
+                                    "send_email": True  # Send to admin with [INTERNAL] tag
                                 }
 
                                 with db() as conn, conn.cursor() as cur:

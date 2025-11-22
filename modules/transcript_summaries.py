@@ -725,24 +725,18 @@ def generate_transcript_email_v2(
         company_name = config.get("name", ticker)
         industry = config.get("industry", "")
 
-        # Configure based on report type (matching old v1 function)
-        if content_type == 'transcript':
-            report_type_label = "EARNINGS CALL TRANSCRIPT"
-            quarter_str = f"Q{quarter}" if quarter else ""
-            fiscal_period = f"{quarter_str} {year}" if quarter and year else ""
-            date_label = f"Call Date: {report_date}" if report_date else ""
-            filing_date_display = f"Call Date: {report_date}" if report_date else ""
-            transition_text = f"Summary generated from {company_name} {quarter_str} {year} earnings call transcript."
-            fmp_link_text = "View full transcript on FMP"
-            subject = f"📊 Earnings Call Summary: {company_name} ({ticker}) {quarter_str} {year}"
-        else:  # press_release
-            report_type_label = "PRESS RELEASE"
-            fiscal_period = report_date if report_date else ""
-            date_label = f"Release Date: {report_date}" if report_date else ""
-            filing_date_display = f"Release Date: {report_date}" if report_date else ""
-            transition_text = f"Summary generated from {company_name} press release dated {report_date}."
-            fmp_link_text = "View original release on FMP"
-            subject = f"📰 Press Release: {ticker} - {report_date}"
+        # Configure for transcript (press releases now use generate_company_release_email instead)
+        if content_type != 'transcript':
+            raise ValueError(f"Unsupported content_type: {content_type}. Press releases should use generate_company_release_email()")
+
+        report_type_label = "EARNINGS CALL TRANSCRIPT"
+        quarter_str = f"Q{quarter}" if quarter else ""
+        fiscal_period = f"{quarter_str} {year}" if quarter and year else ""
+        date_label = f"Call Date: {report_date}" if report_date else ""
+        filing_date_display = f"Call Date: {report_date}" if report_date else ""
+        transition_text = f"Summary generated from {company_name} {quarter_str} {year} earnings call transcript."
+        fmp_link_text = "View full transcript on FMP"
+        subject = f"[INTERNAL] {ticker} {quarter_str} {year} Earnings Call Transcript"
 
         # Build FMP link box HTML (append to content like old function)
         fmp_link_html = f'''

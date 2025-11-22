@@ -1716,11 +1716,11 @@ def generate_company_profile_email(
 
     # Generate subject based on filing type
     if filing_type == "10-Q":
-        subject = f"{ticker} {fiscal_period} 10-Q Report"
+        subject = f"[INTERNAL] {ticker} {fiscal_period} 10-Q Report"
     elif filing_type == "10-K":
-        subject = f"{ticker} {fiscal_period} 10-K Report"
+        subject = f"[INTERNAL] {ticker} {fiscal_period} 10-K Report"
     else:
-        subject = f"{ticker} Company Profile {fiscal_period}"
+        subject = f"[INTERNAL] {ticker} Company Profile {fiscal_period}"
 
     return {"html": html, "subject": subject}
 
@@ -2567,12 +2567,16 @@ def generate_company_release_email(
         content_html=summary_html
     )
 
-    # Subject line: Distinguish earnings releases from material events
-    if fiscal_quarter and fiscal_year:
-        # Earnings Release (Item 2.02) - has quarter and year
-        subject = f"{ticker} {fiscal_quarter} {fiscal_year} Earnings Release"
-    else:
-        # Material Event (other items) - use descriptive title
-        subject = f"{ticker} 8-K - {report_title}"
+    # Subject line: Distinguish FMP press releases from 8-K releases
+    if release_type == 'fmp_press_release':
+        if fiscal_quarter and fiscal_year:
+            # Earnings Release (has quarter and year)
+            subject = f"[INTERNAL] {ticker} {fiscal_quarter} {fiscal_year} Earnings Release"
+        else:
+            # Regular press release (no quarter/year)
+            subject = f"[INTERNAL] {ticker} Press Release - {report_title}"
+    else:  # release_type == '8k'
+        # 8-K Material Event
+        subject = f"[INTERNAL] {ticker} 8-K - {report_title}"
 
     return {"html": html, "subject": subject}

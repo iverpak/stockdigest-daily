@@ -31128,28 +31128,48 @@ def process_hourly_alerts():
         resolution_time = time.time() - resolution_start
         LOG.info(f"✅ Phase 1.5 complete in {resolution_time:.1f}s")
 
+        # Calculate time window for incremental hourly queries
+        # Recalculate current time after feed processing completes (to catch just-ingested articles)
+        end_time_est = datetime.now(timezone.utc).astimezone(eastern)
+        end_time_utc = end_time_est.astimezone(timezone.utc)
+        end_hour = end_time_est.hour
+
+        # Calculate start time using hour boundaries
+        if end_hour == 9:
+            # First run of day: catch all overnight articles from midnight
+            start_time_est = midnight_est
+            operator = ">="  # Include midnight boundary
+        else:
+            # Subsequent runs: use previous hour boundary
+            previous_hour = end_hour - 1
+            start_time_est = end_time_est.replace(hour=previous_hour, minute=0, second=0, microsecond=0)
+            operator = ">"  # Exclude start boundary (already in previous email)
+
+        start_time_utc = start_time_est.astimezone(timezone.utc)
+
+        LOG.info(f"📅 Time window: {start_time_est.strftime('%I:%M %p')} to {end_time_est.strftime('%I:%M %p')} EST (operator: {operator})")
+
         # Step 4: For each user, query cumulative articles and send email
         for user_email, tickers in user_tickers.items():
             try:
                 LOG.info(f"[{user_email}] Generating hourly alert for tickers: {', '.join(tickers)}")
 
-                # Query all articles from midnight to now for user's tickers
-                midnight_utc = midnight_est.astimezone(timezone.utc)
-                now_utc = now_est.astimezone(timezone.utc)
-
+                # Query articles ingested in the current time window (incremental, not cumulative)
                 with db() as conn, conn.cursor() as cur:
-                    cur.execute("""
+                    # Build query with dynamic operator (">=" for first run, ">" for subsequent)
+                    query = f"""
                         SELECT DISTINCT ON (a.id)
                             a.id, a.title, a.url, a.resolved_url, a.domain, a.published_at,
                             ta.ticker, ta.category, ta.search_keyword, ta.competitor_ticker, ta.value_chain_type
                         FROM articles a
                         JOIN ticker_articles ta ON a.id = ta.article_id
                         WHERE ta.ticker = ANY(%s)
-                        AND a.published_at >= %s
-                        AND a.published_at <= %s
+                        AND a.created_at {operator} %s
+                        AND a.created_at <= %s
                         AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
                         ORDER BY a.id, a.published_at DESC
-                    """, (tickers, midnight_utc, now_utc))
+                    """
+                    cur.execute(query, (tickers, start_time_utc, end_time_utc))
 
                     articles = cur.fetchall()
 

@@ -1531,17 +1531,43 @@ DECISION FRAMEWORK:
 
 Apply tests in this order. First match wins.
 
-REDUNDANCY PREVENTION:
+═══════════════════════════════════════════════════════════════════════════════
+REDUNDANCY PREVENTION & THEME DEDUPLICATION:
+═══════════════════════════════════════════════════════════════════════════════
 
-If single article provides facts satisfying MULTIPLE section tests:
-→ Place in section that captures PRIMARY substance
-→ One bullet only - choose section where fact provides most value
+CRITICAL: Each theme appears in MAX 2 sections from this list:
+- Major Developments
+- Financial/Operational Performance  
+- Risk Factors
+- Wall Street Sentiment
+- Competitive/Industry Dynamics
+- Upcoming Catalysts
 
-Test: "Do both bullets add NEW information, or just reframe same fact?"
-- Same underlying fact with different framing → One section only
-- Different dimensions of same event → Keep separate
+(Bottom Line, Upside/Downside have separate rules - not counted in this limit)
 
-This applies universally: earnings data, partnerships, capacity changes, any theme.
+STRICT PLACEMENT RULES:
+
+1. DEFAULT: Place theme in ONE section only based on primary focus:
+   - Major Developments - company actions/announcements, backward-looking facts
+   - Financial/Operational Performance – point-in-time metrics/results
+   - Risk Factors – forward-looking threats/concerns
+   - Wall Street Sentiment - analyst opinions/external valuation view
+   - Competitive/Industry Dynamics - external environment
+   - Upcoming Catalysts - scheduled future events with specific dates
+
+2. EXCEPTION: Use 2 sections ONLY if:
+   - Different temporal focus (explicitly different time periods discussed)
+   - 100% unique facts (no overlap in specific data points)
+
+3. LIMITED INFORMATION RULE:
+   When you have <10 unique facts about a theme (regardless of article count):
+   - Consolidate into ONE comprehensive bullet
+   - Better one substantive bullet than multiple thin fragments
+
+Example: Acquisition theme with 6 facts total → ONE section
+Example: Acquisition theme with 20+ unique facts → Can split if temporal focus differs
+
+DEFAULT: When uncertain, use FEWER sections. Sophisticated readers prefer consolidated insight.
 
 CRITICAL OVERRIDE - ANALYST ACTIONS (CHECK THIS FIRST):
 

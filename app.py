@@ -31013,6 +31013,7 @@ def process_hourly_alerts():
     """
     eastern = pytz.timezone('America/Toronto')
     now_est = datetime.now(timezone.utc).astimezone(eastern)
+    current_hour = now_est.hour  # Extract hour for next_alert_time calculation
 
     LOG.info(f"📰 Starting hourly alerts processing at {now_est.strftime('%I:%M %p')} EST")
 

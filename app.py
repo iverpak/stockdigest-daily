@@ -1479,6 +1479,9 @@ def ensure_schema():
                 -- Add quality score column to articles (Oct 2025)
                 ALTER TABLE articles ADD COLUMN IF NOT EXISTS quality_score NUMERIC(3,1);
 
+                -- Add ingestion source tracking (Jan 2025)
+                ALTER TABLE articles ADD COLUMN IF NOT EXISTS ingestion_source VARCHAR(50);
+
                 -- Add financial data columns to ticker_reference if they don't exist
                 ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_last_price NUMERIC(15, 2);
                 ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_price_change_pct NUMERIC(10, 4);
@@ -1643,6 +1646,7 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_articles_url_hash ON articles(url_hash);
                 CREATE INDEX IF NOT EXISTS idx_articles_domain ON articles(domain);
                 CREATE INDEX IF NOT EXISTS idx_articles_published_at ON articles(published_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_articles_ingestion_source ON articles(ingestion_source);
 
                 CREATE INDEX IF NOT EXISTS idx_feeds_url ON feeds(url);
                 CREATE INDEX IF NOT EXISTS idx_feeds_active ON feeds(active);
@@ -2281,15 +2285,21 @@ def ensure_schema():
 
 # Helper Functions for New Schema
 def insert_article_if_new(url_hash: str, url: str, title: str, description: str,
-                          domain: str, published_at: datetime, resolved_url: str = None) -> Optional[int]:
-    """Insert article if it doesn't exist, return article_id"""
+                          domain: str, published_at: datetime, resolved_url: str = None,
+                          ingestion_source: str = None) -> Optional[int]:
+    """Insert article if it doesn't exist, return article_id
+
+    Args:
+        ingestion_source: Source of ingestion ('daily_workflow', 'hourly_alert', 'test_run', etc.)
+                         Only set on first insertion, never overwritten on duplicates.
+    """
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
-            INSERT INTO articles (url_hash, url, resolved_url, title, description, domain, published_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO articles (url_hash, url, resolved_url, title, description, domain, published_at, ingestion_source)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (url_hash) DO UPDATE SET updated_at = NOW()
             RETURNING id
-        """, (url_hash, url, resolved_url, title, description, domain, published_at))
+        """, (url_hash, url, resolved_url, title, description, domain, published_at, ingestion_source))
         result = cur.fetchone()
 
         if result:
@@ -6769,13 +6779,14 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
         "blocked_insider_trading": stats["blocked_insider_trading"]  # ADD THIS LINE
     }
 
-def ingest_feed_basic_only(feed: Dict, mode: str = 'production', quota: int = None) -> Dict[str, int]:
+def ingest_feed_basic_only(feed: Dict, mode: str = 'production', quota: int = None, ingestion_source: str = None) -> Dict[str, int]:
     """Basic feed ingestion with FIXED deduplication count tracking
 
     Args:
         feed: Feed configuration dict
         mode: 'production' or 'hourly' - controls Google title filtering
         quota: Max articles to insert from this feed (after spam filtering). None = unlimited.
+        ingestion_source: Source of ingestion ('daily_workflow', 'hourly_alert', etc.)
 
     Returns:
         Stats dict with processed, inserted, duplicates, blocked counts
@@ -7049,7 +7060,8 @@ def ingest_feed_basic_only(feed: Dict, mode: str = 'production', quota: int = No
                         # Insert article if new, then link to ticker
                         article_id = insert_article_if_new(
                             url_hash, clean_url, clean_title, clean_description,
-                            final_domain, published_at, clean_resolved_url
+                            final_domain, published_at, clean_resolved_url,
+                            ingestion_source
                         )
 
                         if article_id:
@@ -20477,7 +20489,7 @@ async def admin_init(request: Request, body: InitRequest):
             "successful": len([r for r in results if r["feeds_created"] > 0])
         }
 
-def process_feeds_sequentially(feeds: List[Dict], mode: str = 'production', yahoo_quota: int = None, google_quota: int = None) -> Dict[str, int]:
+def process_feeds_sequentially(feeds: List[Dict], mode: str = 'production', yahoo_quota: int = None, google_quota: int = None, ingestion_source: str = None) -> Dict[str, int]:
     """
     Process a list of feeds sequentially (used for Yahoo→Google pairs).
     Returns aggregated stats from all feeds.
@@ -20487,6 +20499,7 @@ def process_feeds_sequentially(feeds: List[Dict], mode: str = 'production', yaho
         mode: 'production' or 'hourly' - controls Google title filtering
         yahoo_quota: Max articles for Yahoo feeds. None = unlimited.
         google_quota: Max articles for Google feeds. None = unlimited.
+        ingestion_source: Source of ingestion ('daily_workflow', 'hourly_alert', etc.)
 
     Returns:
         Aggregated stats dict
@@ -20513,7 +20526,7 @@ def process_feeds_sequentially(feeds: List[Dict], mode: str = 'production', yaho
             elif is_google and google_quota is not None:
                 quota = google_quota
 
-            stats = ingest_feed_basic_only(feed, mode=mode, quota=quota)
+            stats = ingest_feed_basic_only(feed, mode=mode, quota=quota, ingestion_source=ingestion_source)
             aggregated_stats["processed"] += stats["processed"]
             aggregated_stats["inserted"] += stats["inserted"]
             aggregated_stats["duplicates"] += stats["duplicates"]
@@ -20723,25 +20736,25 @@ async def cron_ingest(
 
             # Submit company feed groups (sequential Yahoo→Google within each ticker)
             for ticker, ticker_feeds in company_by_ticker.items():
-                future = executor.submit(process_feeds_sequentially, ticker_feeds, mode='production', yahoo_quota=None, google_quota=20)
+                future = executor.submit(process_feeds_sequentially, ticker_feeds, mode='production', yahoo_quota=None, google_quota=20, ingestion_source='daily_workflow')
                 futures.append(("company", ticker, future))
                 LOG.info(f"Submitted company feeds for {ticker}: {len(ticker_feeds)} feeds (Yahoo→Google sequential, Google quota=20)")
 
             # Submit industry feeds (all parallel, Google only, no quotas)
             for feed in industry_feeds:
-                future = executor.submit(ingest_feed_basic_only, feed, mode='production', quota=None)
+                future = executor.submit(ingest_feed_basic_only, feed, mode='production', quota=None, ingestion_source='daily_workflow')
                 futures.append(("industry", feed.get('search_keyword', 'unknown'), future))
             LOG.info(f"Submitted {len(industry_feeds)} industry feeds (all parallel, production mode)")
 
             # Submit competitor feed groups (sequential Yahoo→Google within each competitor)
             for (ticker, comp_ticker), comp_feeds in competitor_by_key.items():
-                future = executor.submit(process_feeds_sequentially, comp_feeds, mode='production', yahoo_quota=None, google_quota=10)
+                future = executor.submit(process_feeds_sequentially, comp_feeds, mode='production', yahoo_quota=None, google_quota=10, ingestion_source='daily_workflow')
                 futures.append(("competitor", f"{ticker}/{comp_ticker}", future))
                 LOG.info(f"Submitted competitor feeds for {ticker}/{comp_ticker}: {len(comp_feeds)} feeds (Yahoo→Google sequential, Google quota=10)")
 
             # Submit value chain feed groups (sequential Yahoo→Google within each value chain company)
             for (ticker, vc_ticker, vc_type), vc_feeds in value_chain_by_key.items():
-                future = executor.submit(process_feeds_sequentially, vc_feeds, mode='production', yahoo_quota=None, google_quota=10)
+                future = executor.submit(process_feeds_sequentially, vc_feeds, mode='production', yahoo_quota=None, google_quota=10, ingestion_source='daily_workflow')
                 futures.append(("value_chain", f"{ticker}/{vc_ticker}/{vc_type}", future))
                 LOG.info(f"Submitted value chain feeds for {ticker}/{vc_ticker} ({vc_type}): {len(vc_feeds)} feeds (Yahoo→Google sequential, Google quota=10)")
 
@@ -30950,20 +30963,20 @@ def process_ticker_feeds_hourly(ticker: str) -> Dict[str, int]:
 
             # Submit company feeds (Yahoo→Google sequential, with hourly Google title filter)
             if company_feeds:
-                future = executor.submit(process_feeds_sequentially, company_feeds, mode='hourly', yahoo_quota=None, google_quota=None)
+                future = executor.submit(process_feeds_sequentially, company_feeds, mode='hourly', yahoo_quota=None, google_quota=None, ingestion_source='hourly_alert')
                 futures.append(("company", future))
                 LOG.info(f"[{ticker}]   → Submitted company feeds: {len(company_feeds)} feeds (Yahoo→Google sequential, hourly mode with Google filter)")
 
             # Submit industry feeds (all parallel, hourly mode, no filter for industry)
             for feed in industry_feeds:
-                future = executor.submit(ingest_feed_basic_only, feed, mode='hourly', quota=None)
+                future = executor.submit(ingest_feed_basic_only, feed, mode='hourly', quota=None, ingestion_source='hourly_alert')
                 futures.append(("industry", future))
             if industry_feeds:
                 LOG.info(f"[{ticker}]   → Submitted {len(industry_feeds)} industry feeds (all parallel, hourly mode)")
 
             # Submit competitor feeds (Yahoo→Google sequential per competitor, with hourly Google title filter)
             for comp_ticker, comp_feeds in competitor_by_key.items():
-                future = executor.submit(process_feeds_sequentially, comp_feeds, mode='hourly', yahoo_quota=None, google_quota=None)
+                future = executor.submit(process_feeds_sequentially, comp_feeds, mode='hourly', yahoo_quota=None, google_quota=None, ingestion_source='hourly_alert')
                 futures.append(("competitor", future))
                 LOG.info(f"[{ticker}]   → Submitted competitor {comp_ticker}: {len(comp_feeds)} feeds (Yahoo→Google sequential, hourly mode with Google filter)")
 

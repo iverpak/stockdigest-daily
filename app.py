@@ -2545,6 +2545,7 @@ def fetch_company_releases_for_digest(tickers: List[str], hours: int) -> List[Di
             FROM company_releases
             WHERE ticker = ANY(%s)
               AND filing_date >= %s
+              AND source_type = '8k_exhibit'
             ORDER BY filing_date DESC
         """, (tickers, cutoff_date))
 

@@ -31042,13 +31042,21 @@ def process_hourly_alerts():
             email = user['email']
             tickers = [user['ticker1'], user['ticker2'], user['ticker3']]
             tickers = [t for t in tickers if t]  # Remove None values
-            user_tickers[email] = tickers
+
+            # Merge tickers for duplicate emails (instead of overwriting)
+            if email not in user_tickers:
+                user_tickers[email] = []
+            user_tickers[email].extend(tickers)
 
             for ticker in tickers:
                 if ticker not in ticker_to_users:
                     ticker_to_users[ticker] = []
                 if email not in ticker_to_users[ticker]:
                     ticker_to_users[ticker].append(email)
+
+        # Deduplicate tickers for each email (in case same ticker appears in multiple user rows)
+        for email in user_tickers:
+            user_tickers[email] = list(set(user_tickers[email]))
 
         unique_tickers = list(ticker_to_users.keys())
         LOG.info(f"Processing {len(unique_tickers)} unique tickers: {', '.join(unique_tickers)}")

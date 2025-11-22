@@ -877,7 +877,6 @@
                         cik: cik || '',
                         accession_number: item.accession_number,
                         filing_date: item.filing_date,
-                        filing_title: item.title || '',
                         documents_url: item.documents_url || '',
                         item_codes: item.item_codes || ''
                     }).replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -896,7 +895,7 @@
         }
 
         // 8-K generation function
-        async function generate8K(ticker, cik, accessionNumber, filingDate, filingTitle, documentsUrl, itemCodes) {
+        async function generate8K(ticker, cik, accessionNumber, filingDate, documentsUrl, itemCodes) {
             alert(`Starting 8-K exhibit processing for ${ticker} (${filingDate}). Processing all EX-99.* exhibits...`);
 
             try {
@@ -909,7 +908,6 @@
                         cik: cik,
                         accession_number: accessionNumber,
                         filing_date: filingDate,
-                        filing_title: filingTitle,
                         documents_url: documentsUrl,
                         item_codes: itemCodes
                     })
@@ -934,7 +932,6 @@
                 params.cik,
                 params.accession_number,
                 params.filing_date,
-                params.filing_title,
                 params.documents_url,
                 params.item_codes
             );

@@ -887,23 +887,16 @@ def should_process_exhibit(exhibit_num: str) -> bool:
         return True
 
 
-def quick_parse_8k_header(sec_html_url: str, rate_limit_delay: float = 0.15) -> Dict:
+def extract_8k_item_codes(sec_html_url: str, rate_limit_delay: float = 0.15) -> str:
     """
-    Quick parse 8-K header (first 3KB) to extract title and item codes.
-
-    Only fetches first 3KB of file for speed. Use for display in UI before
-    user decides to generate full summary.
+    Extract item codes from 8-K filing header (lightweight, first 15KB only).
 
     Args:
         sec_html_url: Full URL to 8-K HTML on SEC.gov
         rate_limit_delay: Delay in seconds before request (default 0.15s = 6.67 req/sec)
 
     Returns:
-        {
-            'title': "Results of Operations | Apple announces Q1 2024 results",
-            'item_codes': "2.02, 9.01",
-            'item_description': "Results of Operations and Financial Condition"
-        }
+        String like "2.02, 9.01" or "Unknown" if extraction fails
     """
     import re
     import time
@@ -911,8 +904,6 @@ def quick_parse_8k_header(sec_html_url: str, rate_limit_delay: float = 0.15) -> 
 
     # Rate limit protection
     time.sleep(rate_limit_delay)
-
-    LOG.info(f"Quick parsing 8-K header: {sec_html_url}")
 
     try:
         headers = {
@@ -928,51 +919,11 @@ def quick_parse_8k_header(sec_html_url: str, rate_limit_delay: float = 0.15) -> 
         items = re.findall(r'Item\s+(\d+\.\d+)', text, re.IGNORECASE)
         item_codes = ', '.join(sorted(set(items[:3])))  # Dedupe and limit to first 3
 
-        # Get item description for primary item
-        item_description = "Other Events"  # Default
-        if items:
-            primary_item = items[0]
-            item_description = ITEM_CODE_MAP.get(primary_item, "Other Events")
-
-        # Strip HTML tags before extracting title to avoid capturing HTML fragments
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(text, 'html.parser')
-        clean_text = soup.get_text(separator=' ')
-
-        # Extract title from clean text content
-        # Look for patterns like "announces", "reports", "completes", etc.
-        title_match = re.search(
-            r'(announces?|reports?|completes?|enters?|acquires?|appoints?)[^\.]{10,200}',
-            clean_text,
-            re.IGNORECASE
-        )
-        parsed_title = title_match.group(0).strip() if title_match else ""
-
-        # Option C: Both item description AND parsed title
-        if parsed_title:
-            full_title = f"{item_description} | {parsed_title}"
-        else:
-            full_title = item_description
-
-        # Truncate to fit VARCHAR(200)
-        full_title = full_title[:200]
-
-        LOG.info(f"✅ Parsed: Items={item_codes}, Title={full_title[:50]}...")
-
-        return {
-            'title': full_title,
-            'item_codes': item_codes if item_codes else "Unknown",
-            'item_description': item_description
-        }
+        return item_codes if item_codes else "Unknown"
 
     except Exception as e:
-        LOG.error(f"Failed to quick parse 8-K header: {e}")
-        # Return defaults on error
-        return {
-            'title': "8-K Filing",
-            'item_codes': "Unknown",
-            'item_description': "Other Events"
-        }
+        LOG.error(f"Failed to extract 8-K item codes: {e}")
+        return "Unknown"
 
 
 def extract_8k_content(sec_html_url: str, exhibit_99_1_url: str = None) -> str:
@@ -2542,6 +2493,7 @@ def generate_company_release_email(
     release_type: str,  # '8k' or 'fmp_press_release'
     filing_date: str,   # 'Nov 19, 2024'
     json_output: dict,  # Raw Gemini JSON
+    exhibit_number: str = None,  # '99.1', '99.2', etc. (8-K only)
     stock_price: str = None,
     price_change_pct: str = None,
     price_change_color: str = "#4ade80",
@@ -2604,6 +2556,7 @@ def generate_company_release_email(
         fiscal_period=filing_date,
         date_label=date_label,
         filing_date=filing_date_display,
+        exhibit_number=exhibit_number,
         stock_price=stock_price,
         price_change_pct=price_change_pct,
         price_change_color=price_change_color,

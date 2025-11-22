@@ -35,8 +35,8 @@
                                     <td style="width: 58%; vertical-align: top; border: 0;">
                                         <h1 class="company-name" style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; line-height: 1; color: #ffffff;">{{ company_name }}</h1>
                                         <div style="font-size: 13px; margin-top: 2px; opacity: 0.9; color: #ffffff;">{{ ticker }}{% if industry %} | {{ industry }}{% endif %}</div>
-                                        {% if filing_date %}
-                                        <div style="font-size: 11px; margin-top: 4px; opacity: 0.8; color: #ffffff;">{{ filing_date }}</div>
+                                        {% if exhibit_number %}
+                                        <div style="font-size: 11px; margin-top: 4px; opacity: 0.8; color: #ffffff;">Exhibit {{ exhibit_number }}</div>
                                         {% endif %}
                                     </td>
                                     <td align="right" style="width: 42%; vertical-align: top; border: 0;">

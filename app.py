@@ -92,7 +92,7 @@ from modules.company_profiles import (
     get_cik_for_ticker,
     parse_sec_8k_filing_list,
     get_8k_html_url,
-    quick_parse_8k_header,
+    extract_8k_item_codes,    # NEW: Lightweight item code extraction
     get_all_8k_exhibits,      # NEW: Parse all EX-99.* files from documents page
     get_main_8k_url,          # NEW: Fallback to main 8-K body when no exhibits
     extract_8k_html_content,  # Simplified: Single exhibit HTML extraction
@@ -16983,7 +16983,6 @@ async def process_8k_summary_phase(job: dict):
         cik = config.get('cik')
         accession_number = config.get('accession_number')
         filing_date = config.get('filing_date')
-        filing_title = config.get('filing_title')
         documents_url = config.get('documents_url')  # NEW: Use documents page URL
         item_codes = config.get('item_codes')
         ticker_config = get_ticker_config(ticker)
@@ -17123,7 +17122,7 @@ async def process_8k_summary_phase(job: dict):
                     cik,
                     accession_number,
                     filing_date,
-                    filing_title,
+                    '8-K Filing',  # Generic placeholder (Gemini will extract actual title)
                     item_codes,
                     exhibit_url,
                     exhibit_num,
@@ -17157,7 +17156,7 @@ async def process_8k_summary_phase(job: dict):
                         ticker=ticker,
                         company_name=ticker_config.get('company_name', ticker),
                         content=raw_content,
-                        document_title=f"{filing_title} - Exhibit {exhibit_num}",
+                        document_title=f"8-K Exhibit {exhibit_num}",
                         item_codes=item_codes,
                         gemini_api_key=GEMINI_API_KEY
                     )
@@ -17208,6 +17207,7 @@ async def process_8k_summary_phase(job: dict):
                                 release_type='8k',
                                 filing_date=formatted_filing_date,
                                 json_output=json_output,
+                                exhibit_number=exhibit_num,
                                 stock_price=stock_data.get('stock_price'),
                                 price_change_pct=stock_data.get('price_change_pct'),
                                 price_change_color=stock_data.get('price_change_color', '#4ade80'),
@@ -19463,8 +19463,8 @@ async def validate_ticker_for_8k(ticker: str):
                 urls = get_8k_html_url(filing['documents_url'])
                 sec_html_url = urls['main_8k_url']
 
-                # Quick parse header (title + item codes) with rate limiting
-                parsed = quick_parse_8k_header(sec_html_url, rate_limit_delay=0.15)
+                # Extract item codes with rate limiting
+                item_codes = extract_8k_item_codes(sec_html_url, rate_limit_delay=0.15)
 
                 # Check if summary already exists in database
                 with db() as conn, conn.cursor() as cur:
@@ -19481,12 +19481,11 @@ async def validate_ticker_for_8k(ticker: str):
                     'documents_url': filing['documents_url'],  # For exhibit parsing
                     'sec_html_url': sec_html_url,
                     'exhibit_99_1_url': exhibit_url,
-                    'title': parsed['title'],
-                    'item_codes': parsed['item_codes'],
+                    'item_codes': item_codes,
                     'has_summary': has_summary
                 })
 
-                LOG.info(f"[{ticker}] [{i+1}/{len(filings)}] Parsed: {parsed['title'][:50]}...")
+                LOG.info(f"[{ticker}] [{i+1}/{len(filings)}] Item codes: {item_codes}")
                 LOG.info(f"[8K_VALIDATION_DEBUG] Returning exhibit_99_1_url in response: {exhibit_url}")
 
             except Exception as e:
@@ -24370,7 +24369,6 @@ async def generate_8k_summary_api(request: Request):
     cik = body.get('cik')
     accession_number = body.get('accession_number')
     filing_date = body.get('filing_date')
-    filing_title = body.get('filing_title')
     documents_url = body.get('documents_url')  # SEC documents index page
     item_codes = body.get('item_codes')
 
@@ -24390,7 +24388,6 @@ async def generate_8k_summary_api(request: Request):
             "cik": cik,
             "accession_number": accession_number,
             "filing_date": filing_date,
-            "filing_title": filing_title,
             "documents_url": documents_url,  # NEW: Parse all exhibits from documents page
             "item_codes": item_codes,
             "send_email": True
@@ -24894,6 +24891,7 @@ async def generate_parsed_pr_api(request: Request):
                 release_type='fmp_press_release' if source_type == 'fmp' else '8k_exhibit',
                 filing_date=formatted_date,
                 json_output=json_output,
+                exhibit_number=exhibit_number if source_type == '8k' else None,
                 stock_price=stock_data.get('stock_price'),
                 price_change_pct=stock_data.get('price_change_pct'),
                 price_change_color=stock_data.get('price_change_color', '#4ade80'),
@@ -26039,7 +26037,8 @@ async def email_research_api(request: Request):
 
                 cur.execute("""
                     SELECT id, ticker, company_name, source_type, filing_date,
-                           report_title, summary_json, fiscal_quarter, fiscal_year
+                           report_title, summary_json, fiscal_quarter, fiscal_year,
+                           exhibit_number
                     FROM company_releases
                     WHERE id = %s AND ticker = %s
                     LIMIT 1
@@ -26154,6 +26153,7 @@ async def email_research_api(request: Request):
                 release_type=doc.get('source_type', 'fmp_press_release'),
                 filing_date=formatted_date,
                 json_output=json_output,
+                exhibit_number=doc.get('exhibit_number'),
                 stock_price=stock_data['stock_price'],
                 price_change_pct=stock_data['price_change_pct'],
                 price_change_color=stock_data['price_change_color'],
@@ -27410,14 +27410,14 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                 get_cik_for_ticker,
                 parse_sec_8k_filing_list,
                 get_8k_html_url,
-                quick_parse_8k_header
+                extract_8k_item_codes
             )
 
             try:
                 cik = get_cik_for_ticker(ticker)
                 filings = parse_sec_8k_filing_list(cik, count=3)
 
-                # ENRICHMENT STEP: Add filing_title and item_codes (matches manual workflow)
+                # ENRICHMENT STEP: Add item_codes (matches manual workflow)
                 # This is what /api/sec-validate-ticker does at lines 19097-19140
                 enriched_filings = []
                 for i, filing in enumerate(filings):
@@ -27426,19 +27426,18 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                         urls = get_8k_html_url(filing['documents_url'])
                         sec_html_url = urls['main_8k_url']
 
-                        # Quick parse header (title + item codes) with rate limiting
-                        parsed = quick_parse_8k_header(sec_html_url, rate_limit_delay=0.15)
+                        # Extract item codes with rate limiting
+                        item_codes = extract_8k_item_codes(sec_html_url, rate_limit_delay=0.15)
 
                         # Build enriched filing dict
                         enriched_filings.append({
                             'filing_date': filing['filing_date'],
                             'accession_number': filing['accession_number'],
                             'documents_url': filing['documents_url'],
-                            'filing_title': parsed['title'],
-                            'item_codes': parsed['item_codes']
+                            'item_codes': item_codes
                         })
 
-                        LOG.info(f"[{ticker}] [{i+1}/{len(filings)}] Enriched 8-K: {parsed['title'][:60]}...")
+                        LOG.info(f"[{ticker}] [{i+1}/{len(filings)}] Item codes: {item_codes}")
 
                     except Exception as e:
                         LOG.warning(f"[{ticker}] Failed to enrich filing {filing['accession_number']}: {e}")
@@ -27447,7 +27446,6 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                             'filing_date': filing['filing_date'],
                             'accession_number': filing['accession_number'],
                             'documents_url': filing['documents_url'],
-                            'filing_title': '8-K Filing',
                             'item_codes': 'Unknown'
                         })
 
@@ -27479,7 +27477,6 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                         latest_8k = available_8ks[0]
                         accession_number = latest_8k.get('accession_number')
                         filing_date = latest_8k.get('filing_date')
-                        filing_title = latest_8k.get('filing_title')
                         item_codes = latest_8k.get('item_codes')
                         documents_url = latest_8k.get('documents_url')
 
@@ -27487,7 +27484,7 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                             # Check if already exists (safety check)
                             exists = db_check_8k_filing_exists(ticker, filing_date, accession_number)
                             if not exists:
-                                LOG.info(f"[{ticker}] 💾 Initializing DB with latest 8-K from {filing_date} (no email): {filing_title[:60]}...")
+                                LOG.info(f"[{ticker}] 💾 Initializing DB with latest 8-K from {filing_date} (no email) - Items: {item_codes}")
 
                                 # Queue job for generation (silent)
                                 batch_id = str(uuid.uuid4())
@@ -27496,7 +27493,6 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                                     "cik": sec_8k_response.get("cik"),
                                     "accession_number": accession_number,
                                     "filing_date": filing_date,
-                                    "filing_title": filing_title,
                                     "item_codes": item_codes,
                                     "documents_url": documents_url,
                                     "send_email": False  # Silent initialization
@@ -27543,7 +27539,6 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                             for filing in available_8ks:
                                 accession_number = filing.get('accession_number')
                                 filing_date_str = filing.get('filing_date')
-                                filing_title = filing.get('filing_title')
                                 item_codes = filing.get('item_codes')
                                 documents_url = filing.get('documents_url')
 
@@ -27574,7 +27569,7 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                                     # Check if this specific 8-K already processed (handles same-day via accession)
                                     exists = db_check_8k_filing_exists(ticker, filing_date_str, accession_number)
                                     if not exists:
-                                        LOG.info(f"[{ticker}] 🆕 NEW 8-K: {filing_title[:60]}... ({filing_date_str})")
+                                        LOG.info(f"[{ticker}] 🆕 NEW 8-K from {filing_date_str} - Items: {item_codes}")
 
                                         # Queue job for generation (with email)
                                         batch_id = str(uuid.uuid4())
@@ -27583,7 +27578,6 @@ async def check_filings_for_ticker(ticker: str) -> Dict:
                                             "cik": sec_8k_response.get("cik"),
                                             "accession_number": accession_number,
                                             "filing_date": filing_date_str,
-                                            "filing_title": filing_title,
                                             "item_codes": item_codes,
                                             "documents_url": documents_url,
                                             "send_email": True  # Send email for new 8-Ks

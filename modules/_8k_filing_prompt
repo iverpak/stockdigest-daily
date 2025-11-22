@@ -155,7 +155,7 @@ You MUST output valid JSON with this EXACT structure:
 
 {
   "metadata": {
-    "report_title": "string - Extract from document header/first page, or generate from content",
+    "report_title": "string - Title extracted from document (see TITLE EXTRACTION)",
     "fiscal_quarter": "string - 'Q1', 'Q2', 'Q3', 'Q4', or 'FY' for annual. Empty string if not an earnings release.",
     "fiscal_year": "number - 2024, 2025, etc. as integer. Empty string if not an earnings release."
   },
@@ -215,6 +215,36 @@ METADATA GUIDELINES:
 - report_title: Clean, readable title like "Q2 2025 Earnings Release" or "Second Quarter 2025 Results"
 - fiscal_quarter: "Q1", "Q2", "Q3", "Q4", or "FY" for full year results
 - fiscal_year: Four-digit year (e.g., "2025")
+
+TITLE EXTRACTION - Report Title Field:
+
+Extract the document title using this two-step priority:
+
+STEP 1 - Extract from Document (Primary Method):
+Look for the official title on the first page or document header:
+  - Main heading or title text at top of document
+  - Section headers in the document introduction
+  - For visual/image-based documents: Extract visible title text
+  - Apply standard title case: Capitalize major words, lowercase articles (a, an, the), conjunctions (and, but, or), prepositions (of, in, on)
+  - Examples: "Third Quarter 2024 Results", "Acquisition of ABC Corporation"
+
+STEP 2 - Generate from Content (Fallback Only):
+If no clear title exists in document (rare), create descriptive title from content:
+  - For earnings releases: Use format "[Quarter] [Year] Earnings Results"
+    Example: "Third Quarter 2024 Earnings Results"
+  - For material events: Describe the specific event
+    Examples:
+    ✅ "CEO Transition - John Smith Appointed"
+    ✅ "Strategic Acquisition of XYZ Corporation"
+    ✅ "Quarterly Cash Dividend Declared"
+    ❌ "8-K Filing" (too generic)
+    ❌ "Material Event" (not specific)
+
+Rules:
+- ALWAYS use standard title case (capitalize major words, lowercase articles/conjunctions/prepositions)
+- Keep concise (under 100 characters)
+- Be specific and descriptive
+- No generic labels
 
 SECTION ORDER (must appear in this exact order):
 1. bottom_line

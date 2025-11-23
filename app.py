@@ -1809,6 +1809,13 @@ def ensure_schema():
                     WHEN duplicate_column THEN NULL;  -- Column already exists, ignore
                 END $$;
 
+                -- Migration: Add prompt_version column if it doesn't exist (Nov 2025)
+                DO $$ BEGIN
+                    ALTER TABLE transcript_summaries ADD COLUMN prompt_version TEXT;
+                EXCEPTION
+                    WHEN duplicate_column THEN NULL;  -- Column already exists, ignore
+                END $$;
+
                 CREATE INDEX IF NOT EXISTS idx_transcript_summaries_ticker ON transcript_summaries(ticker);
                 CREATE INDEX IF NOT EXISTS idx_transcript_summaries_quarter ON transcript_summaries(quarter, year);
                 CREATE INDEX IF NOT EXISTS idx_transcript_summaries_type ON transcript_summaries(report_type);

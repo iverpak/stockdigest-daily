@@ -13607,6 +13607,22 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
             else:
                 LOG.debug(f"DIGEST QUERY: No AI summary for {target_ticker} article: {article_dict.get('title', 'No title')[:50]}")
 
+        # FIX #2: Ensure ticker in dict even with 0 articles + add diagnostic logging
+        if tickers:
+            for ticker in tickers:
+                if ticker not in articles_by_ticker:
+                    # Query returned 0 rows for this ticker
+                    articles_by_ticker[ticker] = {}
+                    LOG.info(f"[{ticker}] 0 articles with AI summaries (flagged: {len(flagged_article_ids or [])})")
+                else:
+                    # Count articles with ai_summary across all categories
+                    articles_with_summaries = sum(
+                        1 for arts in articles_by_ticker[ticker].values()
+                        for a in arts if a.get('ai_summary')
+                    )
+                    total_flagged = len(flagged_article_ids) if flagged_article_ids else 0
+                    LOG.info(f"[{ticker}] {articles_with_summaries} articles with AI summaries (flagged: {total_flagged})")
+
         # NEW (Nov 2025): Inject company releases (8-K and FMP press releases) into articles
         if tickers:
             LOG.info(f"Fetching company releases for {len(tickers)} tickers (lookback: {hours}h)...")
@@ -13694,12 +13710,9 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
         for categories in articles_by_ticker.values()
     )
 
+    # FIX #3: Don't exit early - let Phase 1 generate quiet day summary
     if total_articles == 0:
-        return {
-            "status": "no_articles",
-            "message": f"No quality articles found in the last {period_label}",
-            "tickers": tickers or "all"
-        }
+        LOG.info(f"ℹ️ 0 articles found - Phase 1 will generate quiet day summary")
 
     # Use the enhanced digest function with flagged article IDs for sorting
     html = await build_enhanced_digest_html(articles_by_ticker, days if days > 0 else 1,

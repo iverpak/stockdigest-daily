@@ -2467,11 +2467,66 @@ class EmailOrchestrator:
 
 **Effort:** Medium (4-5 hours)
 
+#### 9. Unify Authentication Patterns (Long-Term)
+**Current:** Two different auth patterns cause inconsistency and confusion
+- **Pattern A (Headers):** `/jobs/*` endpoints use `require_admin(request)` - checks `X-Admin-Token` header
+- **Pattern B (Query Params):** `/api/*` endpoints use `check_admin_token(token)` - checks `?token=` query param
+
+**Issue:**
+- Developers copy patterns from different endpoints, causing auth mismatches (e.g., Nov 18 quality review bug)
+- Frontend inconsistent: `admin_test.html` uses headers, `admin_queue.html` uses query params
+- Harder to maintain and document
+
+**Short-Term Fix (Nov 23, 2025 - commit 621f522):**
+Modified `require_admin()` to accept **both** headers AND query params as fallback. This fixes immediate 401 errors.
+
+**Long-Term Solution:**
+Create unified auth helper that all endpoints use:
+```python
+def get_admin_token(request: Request) -> str:
+    """Extract admin token from headers OR query params"""
+    # Check headers first (more secure)
+    token = request.headers.get("x-admin-token") or \
+            request.headers.get("authorization", "").replace("Bearer ", "")
+
+    # Fallback to query param
+    if not token:
+        token = request.query_params.get("token")
+
+    return token
+
+def require_admin_unified(request: Request):
+    """Verify admin token from any source (unified pattern)"""
+    token = get_admin_token(request)
+    if token != ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+```
+
+**Migration Path:**
+1. Add new unified helpers
+2. Gradually migrate all endpoints to `require_admin_unified()`
+3. Update frontend to consistently use one pattern (recommend headers for security)
+4. Retire old `require_admin()` and `check_admin_token()` functions
+5. Document single standard pattern in CLAUDE.md
+
+**Benefits:**
+- ✅ Single auth pattern across entire codebase
+- ✅ No more developer confusion
+- ✅ Easier onboarding (one pattern to learn)
+- ✅ Consistent frontend code
+- ✅ Better security (can enforce headers-only in future)
+
+**Effort:** Medium (6-8 hours for full migration)
+
+**Priority:** LOW (current fix works, but improves maintainability long-term)
+
+**Status:** Short-term fix deployed (Nov 23, 2025). Long-term unification pending.
+
 ---
 
 ### Priority 4: Data Quality Improvements
 
-#### 9. Eliminate Fallback Domain Pollution
+#### 10. Eliminate Fallback Domain Pollution
 **Current:** AI fails → creates fake domain "nug.com" → corrects later
 
 **Better:**
@@ -2489,7 +2544,7 @@ if not domain:
 
 **Effort:** Low (2 hours)
 
-#### 10. Smart Duplicate Detection During Ingestion
+#### 11. Smart Duplicate Detection During Ingestion
 **Current:** Only catches exact URL duplicates
 **Better:** Use fuzzy title matching + domain for near-duplicates
 

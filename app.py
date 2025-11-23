@@ -14990,9 +14990,14 @@ def send_user_intelligence_report(
 # Auth Middleware
 # ------------------------------------------------------------------------------
 def require_admin(request: Request):
-    """Verify admin token"""
+    """Verify admin token from headers OR query params"""
+    # Check headers first (more secure)
     token = request.headers.get("x-admin-token") or \
             request.headers.get("authorization", "").replace("Bearer ", "")
+
+    # Fallback to query param if not in headers
+    if not token:
+        token = request.query_params.get("token")
 
     if token != ADMIN_TOKEN:
         raise HTTPException(status_code=401, detail="Unauthorized")

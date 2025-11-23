@@ -2601,6 +2601,293 @@ if not domain:
 - **Total Potential: ~$100/month savings** (18% reduction)
 ---
 
+## Pending Fixes & Quick Wins
+
+**Purpose:** Short-term improvements identified but not yet implemented. Move to Migration History when completed.
+
+**Last Updated:** November 23, 2025
+
+---
+
+### ✅ **COMPLETED (Move to Migration History)**
+
+#### Auth Pattern Inconsistency Fix (Nov 23, 2025)
+**Issue:** `/jobs/batch/` endpoint returned 401 Unauthorized when called with `?token=` query param.
+**Root Cause:** Quality review feature (Nov 18) started polling `/jobs/batch/` with query params, but endpoint only accepted headers.
+**Fix:** Modified `require_admin()` to accept BOTH headers AND query params (backward compatible).
+**Commits:** `621f522` (code fix) + `7f7e5ab` (docs)
+**Status:** ✅ Deployed to production
+**Impact:** All `/jobs/*` endpoints now accept both auth patterns
+
+---
+
+### 🟠 **MEDIUM PRIORITY** (2-6 hours each)
+
+#### 1. Redundant Table: `sec_8k_filings`
+**Identified:** Nov 23, 2025
+**Issue:** Data duplicated between `sec_8k_filings` (metadata) and `company_releases` (summaries)
+
+**Duplicated Fields:**
+- ticker, company_name, filing_date
+- exhibit_number, item_codes
+- ai_provider, job_id, generated_at
+
+**Current Architecture:**
+```
+sec_8k_filings:     Metadata + raw_content + summary_text
+company_releases:   Metadata + summary_json/html/markdown + source_id FK
+```
+
+**Proposed Fix:**
+Merge `sec_8k_filings` into `company_releases`:
+- Add `raw_content`, `char_count`, `cik`, `accession_number` columns to `company_releases`
+- Migrate existing `sec_8k_filings` data to `company_releases`
+- Drop `sec_8k_filings` table
+- Update ~40 queries
+
+**Benefits:**
+- ✅ Single source of truth
+- ✅ No JOINs needed
+- ✅ Consistent with FMP press releases (no separate metadata table)
+- ✅ Removes 40+ lines of code
+
+**Effort:** 2-3 hours
+**Blocked By:** None
+**When:** Next filing architecture refactor
+
+---
+
+#### 2. Centralize AI Provider Configuration
+**Identified:** Nov 23, 2025
+**Issue:** AI provider choice hardcoded in each worker function (no single source of truth)
+
+**Current Pattern:**
+```python
+# In process_10k_phase()
+generate_company_profile_with_gemini(...)
+
+# In process_transcript_generation_phase()
+generate_transcript_json_with_fallback(...)  # Gemini-first
+
+# In process_press_release_phase()
+generate_earnings_release_with_gemini(...)
+```
+
+**Proposed Fix:**
+```python
+# Top of app.py or config.py
+FILING_AI_STRATEGY = {
+    '10-K': {'primary': 'gemini', 'model': 'gemini-2.5-flash'},
+    '10-Q': {'primary': 'gemini', 'model': 'gemini-2.5-flash'},
+    'transcript': {'primary': 'gemini', 'model': 'gemini-2.5-pro'},
+    'press_release': {'primary': 'gemini', 'model': 'gemini-2.5-flash'},
+    '8-K': {'primary': 'gemini', 'model': 'gemini-2.5-flash'},
+}
+
+def get_ai_config(filing_type):
+    """Get AI provider config for filing type"""
+    return FILING_AI_STRATEGY[filing_type]
+```
+
+**Benefits:**
+- ✅ Single source of truth
+- ✅ Easy to change strategy
+- ✅ Self-documenting
+- ✅ Can add fallback logic easily
+
+**Effort:** 1-2 hours
+**Blocked By:** None
+**When:** Anytime (low risk)
+
+---
+
+#### 3. Filing Worker Code Duplication
+**Identified:** Nov 23, 2025
+**Issue:** ~1000 lines of duplicated code across 5 filing type workers
+
+**Pattern Repeated:**
+```python
+# 1. Fetch content from API
+# 2. Generate summary with AI
+# 3. Generate email
+# 4. Save to database
+# 5. Send email to admin
+```
+
+**Current Workers:**
+- `process_10k_phase()` - 200 lines
+- `process_10q_phase()` - 200 lines
+- `process_transcript_generation_phase()` - 150 lines
+- `process_press_release_phase()` - 150 lines
+- `process_8k_summary_phase()` - 300 lines
+
+**Proposed Fix:**
+Create `FilingProcessor` base class with shared logic, override per filing type.
+
+**Benefits:**
+- ✅ DRY (Don't Repeat Yourself)
+- ✅ Single place to add features (retry logic, monitoring)
+- ✅ Reduces ~1000 lines to ~300 lines
+
+**Effort:** 6-8 hours (high risk refactor)
+**Blocked By:** None
+**When:** Only if doing major filing refactor (not urgent)
+
+---
+
+#### 4. `check_filings_for_ticker()` Complexity
+**Identified:** Nov 23, 2025
+**Issue:** Single 270-line function checks 5 filing types with nested conditionals
+
+**Current:** `check_filings_for_ticker()` at line 26798
+- If/else for 10-K vs 10-Q vs transcript vs FMP vs 8-K
+- Different DB queries for each type
+- Different job configs
+- Hard to add new filing types
+
+**Proposed Fix:**
+```python
+class FilingChecker:
+    def check_10k(self, ticker): ...
+    def check_10q(self, ticker): ...
+    def check_transcript(self, ticker): ...
+    def check_press_release(self, ticker): ...
+    def check_8k(self, ticker): ...
+```
+
+**Benefits:**
+- ✅ Each filing type isolated
+- ✅ Easy to test individual checkers
+- ✅ Easy to add new filing types
+
+**Effort:** 4-5 hours
+**Blocked By:** None
+**When:** Next cron refactor
+
+---
+
+### 🟡 **LOW PRIORITY** (< 2 hours each)
+
+#### 5. Field Naming Inconsistency
+**Identified:** Nov 23, 2025
+**Issue:** Different tables use different field names for fiscal periods
+
+**Current:**
+- `transcript_summaries`: `quarter VARCHAR(10)`, `year INTEGER`
+- `sec_filings`: `fiscal_quarter VARCHAR(5)`, `fiscal_year INTEGER`
+- `company_releases`: `fiscal_quarter VARCHAR(5)`, `fiscal_year INTEGER`
+
+**Impact:**
+- ❌ Can't write unified queries across tables
+- ❌ Confusing for developers
+
+**Proposed Fix:**
+```sql
+ALTER TABLE transcript_summaries
+  RENAME COLUMN quarter TO fiscal_quarter;
+
+ALTER TABLE transcript_summaries
+  RENAME COLUMN year TO fiscal_year;
+
+-- Update ~20 queries that reference old field names
+```
+
+**Benefits:**
+- ✅ Unified queries possible
+- ✅ Consistent with majority (2/3 tables)
+
+**Effort:** 1 hour
+**Blocked By:** None
+**When:** Only if doing schema refactor (works fine as-is)
+
+---
+
+#### 6. Unified Research Email Template
+**Identified:** Nov 23, 2025
+**Issue:** Three different email generation functions with inconsistent signatures
+
+**Current:**
+```python
+generate_company_profile_email(profile_markdown, stock_data, ...)
+generate_transcript_email_v2(json_output, stock_data, ...)
+generate_company_release_email(json_output, stock_data, ...)
+```
+
+**Proposed Fix:**
+```python
+def generate_research_email(
+    ticker: str,
+    filing_type: str,  # '10-K', 'transcript', '8-K', etc.
+    content: Dict,     # Unified: JSON or markdown
+    stock_data: Dict
+) -> str:
+    # Single unified function
+```
+
+**Benefits:**
+- ✅ Single function to maintain
+- ✅ Consistent email format
+
+**Effort:** 3-4 hours
+**Blocked By:** None
+**When:** Next email refactor
+
+---
+
+#### 7. Missing Database Indexes
+**Identified:** Nov 23, 2025
+**Issue:** Common queries might be slow without indexes
+
+**Proposed Indexes:**
+```sql
+-- Research page loads all filings for ticker
+CREATE INDEX IF NOT EXISTS idx_transcript_summaries_ticker_date
+  ON transcript_summaries(ticker, generated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_company_releases_ticker_date
+  ON company_releases(ticker, filing_date DESC);
+
+-- Check filings cron queries latest filing
+CREATE INDEX IF NOT EXISTS idx_sec_filings_ticker_year_quarter
+  ON sec_filings(ticker, fiscal_year DESC, fiscal_quarter DESC);
+```
+
+**Benefits:**
+- ✅ Faster queries
+- ✅ Better performance as data grows
+
+**Effort:** 15 minutes
+**Blocked By:** None
+**When:** Anytime (low risk)
+
+---
+
+#### 8. Document `company_profiles` VIEW
+**Identified:** Nov 23, 2025
+**Issue:** Backward compatibility VIEW not documented in CLAUDE.md
+
+**Current:**
+```sql
+CREATE VIEW company_profiles AS
+SELECT * FROM sec_filings WHERE filing_type = '10-K';
+```
+
+**Fix:**
+Add to Migration History section explaining:
+- Why VIEW exists (backward compatibility after sec_filings unification)
+- When to delete VIEW (after all code migrated)
+- Current status (~10 profiles need migration)
+
+**Benefits:**
+- ✅ Future developers understand VIEW purpose
+- ✅ Clear migration path
+
+**Effort:** 10 minutes (documentation only)
+**Blocked By:** None
+**When:** Anytime
+
+---
+
 ## Migration History
 
 ### November 2025: Company Releases Migration

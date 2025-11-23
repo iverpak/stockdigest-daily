@@ -43,14 +43,27 @@ The job queue system decouples long-running processing from HTTP requests, elimi
 
 ```bash
 # Cron job functions (run via: python app.py <function>)
-python app.py cleanup         # 6:00 AM - Delete old queue entries
-python app.py check_filings   # 6:30 AM + Hourly (8:30 AM - 9:30 PM EST) - Check for new filings (NEW - Oct 30, 2025)
-python app.py commit          # 6:30 AM - Daily GitHub CSV commit (triggers deployment)
-python app.py process         # 7:00 AM - Process all active beta users
-python app.py send            # 8:30 AM - Auto-send emails to users
-python app.py export          # 11:59 PM - Backup beta users to CSV (dual-file strategy with legal audit trail)
-python app.py alerts          # Hourly (9 AM - 10 PM EST) - Real-time article alerts (NEW - Oct 2025)
+python app.py cleanup         # 6:00 AM EST - Delete old queue entries
+python app.py check_filings   # 6:30 AM + Hourly (8:30 AM - 9:30 PM EST) - Check for new filings
+python app.py commit          # 6:30 AM EST - Daily GitHub CSV commit (triggers deployment)
+python app.py process         # 7:00 AM EST - Process all active beta users
+python app.py send            # 8:30 AM EST - Auto-send emails to users
+python app.py export          # 11:59 PM EST - Backup beta users to CSV (dual-file strategy with legal audit trail)
+python app.py alerts          # Hourly (9 AM - 10 PM EST) - Real-time article alerts
 ```
+
+**Render Cron Schedule (EST - UTC-5):**
+```
+Name: Cleanup               | Schedule: 0 11 * * *          | Command: python app.py cleanup
+Name: Ticker CSV Commit     | Schedule: 30 11 * * *         | Command: python app.py commit
+Name: Check Filings         | Schedule: 30 11,13-2 * * *    | Command: python app.py check_filings
+Name: Daily Workflow        | Schedule: 0 12 * * *          | Command: python app.py process
+Name: Auto-Send Emails      | Schedule: 30 13 * * *         | Command: python app.py send
+Name: Hourly Alerts         | Schedule: 0 14-3 * * *        | Command: python app.py alerts
+Name: Export Users          | Schedule: 59 4 * * *          | Command: python app.py export
+```
+
+**Note:** Cron times are updated manually for EST (UTC-5) and EDT (UTC-4) during daylight saving transitions.
 
 **Key Features:**
 - Reads `beta_users` table (status='active')
@@ -497,13 +510,15 @@ StockDigest provides AI-powered research tools for analyzing SEC filings (10-K, 
   - Synchronous processing (30-60 seconds)
   - Stores in `transcript_summaries` table
 
-**Press Release Worker (NEW - Oct 30, 2025):**
-- **Background Processing:** Press releases now processed via job queue (like transcripts)
+**Press Release Worker:**
+- **Background Processing:** Press releases processed via job queue (like transcripts)
 - **Worker Function:** `process_press_release_phase()` - handles `press_release_generation` jobs
 - **Phase Routing:** Integrated into main job worker with phase detection
-- **Processing Flow:** Fetch from FMP → Claude summary → Email to admin → Save to DB
-- **Email Subject:** Uses actual FMP press release title (e.g., "📰 Press Release: AAPL - Q3 2024 Earnings Results")
-- **Fixed:** 18 stuck press release jobs in production queue (worker was missing)
+- **Processing Flow:** Fetch from FMP → Claude summary → Email to admin with `[INTERNAL]` tag → Save to DB
+- **Email Subjects:**
+  - Earnings: `[INTERNAL] TICKER Q3 2024 Earnings Release`
+  - Other: `[INTERNAL] TICKER Press Release - Title`
+- **Storage:** Saves to `company_releases` table (unified with 8-K)
 
 **Key Functions (modules/company_profiles.py):**
 - **`generate_sec_filing_profile_with_gemini()`**: NEW unified function for 10-K and 10-Q generation
@@ -524,13 +539,17 @@ StockDigest provides AI-powered research tools for analyzing SEC filings (10-K, 
   - BeautifulSoup HTML parsing with script/style removal
   - Returns cleaned plain text for AI processing
 
-- `generate_company_profile_email()`: Create HTML email with profile preview and legal disclaimers **(UPDATED - Oct 30, 2025)**
-  - **New parameters for dynamic pricing:** `ytd_return_pct`, `ytd_return_color`, `market_status`, `return_label`
+- `generate_company_profile_email()`: Create HTML email with profile preview and legal disclaimers
+  - **Parameters for dynamic pricing:** `ytd_return_pct`, `ytd_return_color`, `market_status`, `return_label`
+  - **Subject format:** `[INTERNAL] TICKER FY2024 10-K Report` or `[INTERNAL] TICKER Q3 2024 10-Q Report`
   - Supports 3-row price card with real-time data
+  - Template: `email_research_report.html`
 
-- `generate_transcript_email()`: Create HTML email for transcripts and press releases **(UPDATED - Oct 30, 2025)**
-  - **New parameters for dynamic pricing:** `ytd_return_pct`, `ytd_return_color`, `market_status`, `return_label`
+- `generate_transcript_email_v2()`: Create HTML email for transcripts and press releases
+  - **Parameters for dynamic pricing:** `ytd_return_pct`, `ytd_return_color`, `market_status`, `return_label`
+  - **Subject format:** `[INTERNAL] TICKER Q3 2024 Earnings Call Transcript`
   - Same pricing system as 10-K/10-Q emails
+  - Template: `email_research_report.html`
 
 - `get_filing_stock_data(ticker)`: **NEW (Oct 30, 2025)** - Unified stock pricing helper for ALL filing types
   - Returns: `stock_price`, `daily_return_pct`, `ytd_return_pct`, `price_change_color`, `ytd_return_color`, `market_status`, `return_label`
@@ -714,7 +733,7 @@ CREATE TABLE sec_8k_filings (
 
 - **`transcript_summaries`**: Stores earnings transcript summaries
   - ticker, report_type ('transcript'), quarter, year, report_date
-  - summary_text, ai_provider (claude/gemini), ai_model
+  - summary_text (TEXT), summary_json (JSONB), ai_provider (claude/gemini), ai_model
   - UNIQUE(ticker, report_type, quarter, year)
 
 **Migration:**
@@ -796,15 +815,19 @@ Key tables managed through schema initialization:
     - `privacy_accepted_at` TIMESTAMPTZ - When user accepted Privacy
   - UNIQUE constraint on email
   - Status field: 'active' | 'paused' | 'cancelled'
-  - **Dual-file export strategy** (NEW - Oct 30, 2025):
+  - **Dual-file export strategy:**
     - **File 1:** `data/users/user_tickers.csv` - ACTIVE users only (5 fields) for 7 AM processing
       - Overwrites daily (stable filename)
       - Fields: name, email, ticker1, ticker2, ticker3
     - **File 2:** `data/users/beta_users_YYYYMMDD.csv` - ALL users (9 fields) for legal audit trail
       - New timestamped file daily (never deleted)
       - Fields: + status, created_at, terms_accepted_at, privacy_accepted_at
-      - Automatic GitHub commits for immutable audit trail (CASL/PIPEDA compliance)
-    - Replaces legacy `/tmp/backups/` export (was ephemeral, lost on deploy)
+      - Automatic GitHub commits via REST API for immutable audit trail (CASL/PIPEDA compliance)
+    - **Export Method:** Uses GitHub REST API (not git CLI)
+      - Function: `commit_csv_to_github()` - accepts file_path parameter
+      - Authentication: GITHUB_TOKEN environment variable
+      - Works in Render cron environment (no git credentials needed)
+      - Built-in retry logic and error handling
 
 **Unsubscribe System (NEW - October 2025):**
 - `unsubscribe_tokens`: Token-based unsubscribe for CASL/CAN-SPAM compliance
@@ -1019,6 +1042,45 @@ Uses Jinja2 templating and inline HTML generation:
 - **`email_hourly_alert.html`** - Hourly alert emails
 - Responsive design for email clients
 - Toronto timezone standardization (America/Toronto)
+
+### Email Routing & Recipients
+
+**Admin-Only Emails (Research Documents):**
+All research documents (10-K, 10-Q, transcripts, press releases, 8-K) are sent ONLY to admin with `[INTERNAL]` subject tags:
+- **Recipients:** Admin only (ADMIN_EMAIL environment variable)
+- **Subject Format:** `[INTERNAL] TICKER <details>`
+- **Purpose:** Legal audit trail, research archive, admin review
+- **Templates:** `email_research_report.html`
+- **Trigger:** Automated filings check (`check_filings` cron job) or manual generation
+- **Examples:**
+  - `[INTERNAL] AAPL FY2024 10-K Report`
+  - `[INTERNAL] MSFT Q3 2024 Earnings Call Transcript`
+  - `[INTERNAL] TSLA Press Release - Q4 Production Update`
+
+**User-Facing Emails (Daily Intelligence):**
+Users receive ONLY Email #3 (Premium Stock Intelligence Report) via daily workflow:
+- **Recipients:** Active beta users from `beta_users` table
+- **Subject Format:** `📊 Stock Intelligence: Company Name (TICKER) - X articles analyzed`
+- **Purpose:** Daily/weekly investment intelligence
+- **Generation:** Inline HTML (no template file)
+- **Trigger:** 7 AM daily workflow (`process` cron job)
+- **Routing:** Queued in `email_queue` table → sent at 8:30 AM (`send` cron job)
+- **Content:** Executive summary + flagged article links (no full text)
+
+**Internal QA Emails:**
+Email #1 and #2 are sent ONLY to admin during ticker processing:
+- **Email #1:** `🔍 Article Selection QA` - Shows AI triage results
+- **Email #2:** `📝 Content QA` - Shows full article content + AI analysis
+- **Recipients:** Admin only
+- **Trigger:** Job queue processing (ingest phase and digest phase)
+
+**Hourly Alert Emails:**
+Real-time article alerts sent to active beta users:
+- **Recipients:** Active beta users
+- **Subject Format:** `📰 Hourly Alerts: TICKER1, TICKER2 (X articles) - HH:MM AM/PM`
+- **Template:** `email_hourly_alert.html`
+- **Trigger:** Hourly cron job (9 AM - 10 PM EST)
+- **Content:** Cumulative articles from midnight to current hour
 
 ### 3-Email Quality Assurance Workflow
 
@@ -1724,10 +1786,10 @@ Automated monitoring system that checks for new financial documents and queues t
 
 **Key Characteristics:**
 - ✅ Monitors all active user tickers from `beta_users` table
-- ✅ Checks 4 document types: 10-K, 10-Q, earnings transcripts, press releases
-- ✅ Compares latest from FMP API vs database records
+- ✅ Checks 5 document types: 10-K, 10-Q, earnings transcripts, press releases, 8-K
+- ✅ Compares latest from FMP/SEC APIs vs database records
 - ✅ Queues jobs for missing/new documents (uses existing job queue system)
-- ✅ Generated summaries emailed to admin automatically
+- ✅ Generated summaries emailed to admin with `[INTERNAL]` tag
 - ✅ Guarantees latest filings available for 7 AM processing
 
 ### Schedule
@@ -1812,7 +1874,8 @@ Command: python app.py check_filings
    - 10-K/10-Q: Gemini 2.5 Flash generation (5-10 min)
    - Transcripts: Claude generation (30-60 sec)
    - Press Releases: Claude generation (30-60 sec)
-5. Summaries emailed to admin automatically
+   - 8-K: Claude generation (30-60 sec)
+5. Summaries emailed to admin with [INTERNAL] subject tag
 6. Database updated (prevents duplicate processing on next check)
 ```
 
@@ -1828,24 +1891,32 @@ Command: python app.py check_filings
 - Source type: `'fmp_press_release'`
 - Matches by date AND title (supports multiple PRs per day)
 
-**Unified Silent Initialization (ALL 4 Filing Types - NEW Oct 30, 2025):**
-- **Problem:** New ticker would flood admin inbox with old filings
-- **Solution:** First check saves LATEST 1 of each type silently (`send_email=False`)
-- **Applies to:** 10-K, 10-Q, Transcripts, Press Releases
+**Silent Initialization (ALL 5 Filing Types):**
+- **Purpose:** When a ticker is first monitored, save baseline documents and send admin notification emails tagged with `[INTERNAL]`
+- **Applies to:** 10-K, 10-Q, Transcripts, Press Releases, 8-K
 - **Detection:** Database-state-based (not time-based)
   - `db_has_any_10k_for_ticker(ticker)` - Check if ticker has ANY 10-K
   - `db_has_any_10q_for_ticker(ticker)` - Check if ticker has ANY 10-Q
   - `db_has_any_transcript_for_ticker(ticker)` - Check if ticker has ANY transcripts
   - `db_has_any_fmp_releases_for_ticker(ticker)` - Check if ticker has ANY FMP releases
-- **User Flow (NEW ticker AAPL):**
-  - 6:30 AM (or any first check): Save latest 1 of each type silently (4 docs, 0 emails) ✅
-  - 8:30 AM (subsequent check): Email any NEW filings ✅
+  - `db_has_any_8k_for_ticker(ticker)` - Check if ticker has ANY 8-K filings
+- **Behavior:**
+  - First check: Save latest 1 of each type + send `[INTERNAL]` email to admin
+  - Subsequent checks: Send `[INTERNAL]` email for any NEW filings
   - Works at ANY hour, not just 6:30 AM
+- **Email Subjects:**
+  - 10-K: `[INTERNAL] TICKER FY2024 10-K Report`
+  - 10-Q: `[INTERNAL] TICKER Q3 2024 10-Q Report`
+  - Transcript: `[INTERNAL] TICKER Q3 2024 Earnings Call Transcript`
+  - Press Release (Earnings): `[INTERNAL] TICKER Q3 2024 Earnings Release`
+  - Press Release (Other): `[INTERNAL] TICKER Press Release - Title`
+  - 8-K: `[INTERNAL] TICKER 8-K - Title`
 - **Benefits:**
-  - ✅ Consistent logic across all 4 document types
-  - ✅ No inbox flooding when adding new tickers
-  - ✅ Clean baseline (1 of each) in research folder
-  - ✅ Real-time email alerts for truly NEW filings
+  - ✅ Consistent logic across all 5 document types
+  - ✅ Admin receives ALL filings for legal audit trail (CASL/PIPEDA)
+  - ✅ `[INTERNAL]` tag prevents confusion with user-facing emails
+  - ✅ Clean baseline in research folder
+  - ✅ Real-time email alerts for all filings
 
 ### Benefits
 
@@ -1864,10 +1935,10 @@ python app.py check_filings
 
 # Expected output:
 # 🔍 Checking filings for 15 active user tickers...
-# ✅ AAPL: 10-K 2024 queued for generation
-# ✅ MSFT: Transcript Q3 2024 queued for generation
+# ✅ AAPL: [INTERNAL] 10-K 2024 queued for generation
+# ✅ MSFT: [INTERNAL] Transcript Q3 2024 queued for generation
 # ⏭️ GOOGL: All filings up to date
-# 📊 Summary: 3 jobs queued across 15 tickers
+# 📊 Summary: 3 jobs queued across 15 tickers (admin will receive [INTERNAL] emails)
 ```
 
 ## Key Function Locations

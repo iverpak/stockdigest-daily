@@ -1518,7 +1518,7 @@ def ensure_schema():
                     url VARCHAR(2048) UNIQUE NOT NULL,
                     name VARCHAR(255) NOT NULL,
                     search_keyword VARCHAR(255),
-                    competitor_ticker VARCHAR(10),
+                    feed_ticker VARCHAR(10),  -- Renamed from competitor_ticker (Nov 24, 2025)
                     company_name VARCHAR(255),
                     retain_days INTEGER DEFAULT 90,
                     active BOOLEAN DEFAULT TRUE,
@@ -1528,6 +1528,15 @@ def ensure_schema():
 
                 -- Add company_name column if it doesn't exist (migration)
                 ALTER TABLE feeds ADD COLUMN IF NOT EXISTS company_name VARCHAR(255);
+
+                -- Rename competitor_ticker to feed_ticker (Nov 24, 2025 - Issue #3)
+                DO $$
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM information_schema.columns
+                              WHERE table_name = 'feeds' AND column_name = 'competitor_ticker') THEN
+                        ALTER TABLE feeds RENAME COLUMN competitor_ticker TO feed_ticker;
+                    END IF;
+                END $$;
 
                 -- NEW ARCHITECTURE: Ticker-Feed relationships with per-relationship categories
                 CREATE TABLE IF NOT EXISTS ticker_feeds (
@@ -1545,15 +1554,23 @@ def ensure_schema():
                 -- MOVED FROM feeds table to ticker_feeds table to fix feed contamination
                 ALTER TABLE ticker_feeds ADD COLUMN IF NOT EXISTS value_chain_type VARCHAR(10) CHECK (value_chain_type IN ('upstream', 'downstream') OR value_chain_type IS NULL);
 
-                -- Ticker-Articles relationship table
+                -- Add CHECK constraint for category (Nov 24, 2025 - Data integrity)
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'check_category') THEN
+                        ALTER TABLE ticker_feeds ADD CONSTRAINT check_category
+                            CHECK (category IN ('company', 'industry', 'competitor', 'value_chain'));
+                    END IF;
+                END $$;
+
+                -- Ticker-Articles relationship table (NORMALIZED - Nov 24, 2025)
+                -- Removed: category, search_keyword, competitor_ticker, value_chain_type
+                -- These are now derived via JOIN to ticker_feeds and feeds tables
                 CREATE TABLE IF NOT EXISTS ticker_articles (
                     id SERIAL PRIMARY KEY,
                     ticker VARCHAR(10) NOT NULL,
                     article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
-                    category VARCHAR(20) DEFAULT 'company',
-                    feed_id INTEGER REFERENCES feeds(id) ON DELETE SET NULL,
-                    search_keyword TEXT,
-                    competitor_ticker VARCHAR(10),
+                    feed_id INTEGER REFERENCES feeds(id) ON DELETE CASCADE,  -- Changed from SET NULL to CASCADE
                     sent_in_digest BOOLEAN DEFAULT FALSE,
                     ai_summary TEXT,
                     ai_model VARCHAR(50),
@@ -1570,8 +1587,43 @@ def ensure_schema():
                 ALTER TABLE ticker_articles ADD COLUMN IF NOT EXISTS relevance_reason TEXT;
                 ALTER TABLE ticker_articles ADD COLUMN IF NOT EXISTS is_rejected BOOLEAN DEFAULT FALSE;
 
-                -- Add value_chain_type column for upstream/downstream tracking (Oct 31, 2025)
-                ALTER TABLE ticker_articles ADD COLUMN IF NOT EXISTS value_chain_type VARCHAR(10) CHECK (value_chain_type IN ('upstream', 'downstream') OR value_chain_type IS NULL);
+                -- NORMALIZATION MIGRATION (Nov 24, 2025 - Issue #2 + #3)
+                -- Drop denormalized columns (derived via JOIN from ticker_feeds/feeds)
+                DO $$
+                BEGIN
+                    -- Drop category column
+                    IF EXISTS (SELECT 1 FROM information_schema.columns
+                              WHERE table_name = 'ticker_articles' AND column_name = 'category') THEN
+                        ALTER TABLE ticker_articles DROP COLUMN category;
+                    END IF;
+
+                    -- Drop search_keyword column
+                    IF EXISTS (SELECT 1 FROM information_schema.columns
+                              WHERE table_name = 'ticker_articles' AND column_name = 'search_keyword') THEN
+                        ALTER TABLE ticker_articles DROP COLUMN search_keyword;
+                    END IF;
+
+                    -- Drop competitor_ticker column
+                    IF EXISTS (SELECT 1 FROM information_schema.columns
+                              WHERE table_name = 'ticker_articles' AND column_name = 'competitor_ticker') THEN
+                        ALTER TABLE ticker_articles DROP COLUMN competitor_ticker;
+                    END IF;
+
+                    -- Drop value_chain_type column
+                    IF EXISTS (SELECT 1 FROM information_schema.columns
+                              WHERE table_name = 'ticker_articles' AND column_name = 'value_chain_type') THEN
+                        ALTER TABLE ticker_articles DROP COLUMN value_chain_type;
+                    END IF;
+
+                    -- Change feed_id foreign key from SET NULL to CASCADE
+                    IF EXISTS (SELECT 1 FROM information_schema.table_constraints
+                              WHERE table_name = 'ticker_articles'
+                              AND constraint_name = 'ticker_articles_feed_id_fkey') THEN
+                        ALTER TABLE ticker_articles DROP CONSTRAINT ticker_articles_feed_id_fkey;
+                        ALTER TABLE ticker_articles ADD CONSTRAINT ticker_articles_feed_id_fkey
+                            FOREIGN KEY (feed_id) REFERENCES feeds(id) ON DELETE CASCADE;
+                    END IF;
+                END $$;
 
                 -- ticker_reference table - EXACT match to CSV structure
                 CREATE TABLE IF NOT EXISTS ticker_reference (
@@ -1769,8 +1821,8 @@ def ensure_schema():
                     ticker VARCHAR(20) NOT NULL,
                     company_name VARCHAR(255),
                     report_type VARCHAR(20) NOT NULL,  -- 'transcript' or 'press_release'
-                    quarter VARCHAR(10),  -- 'Q3' or NULL for press releases
-                    year INTEGER,  -- 2024 or NULL for press releases
+                    fiscal_quarter VARCHAR(10),  -- 'Q3' or NULL for press releases (renamed from quarter Nov 24, 2025)
+                    fiscal_year INTEGER,  -- 2024 or NULL for press releases (renamed from year Nov 24, 2025)
                     report_date DATE,  -- Date of transcript/PR
                     pr_title VARCHAR(500),  -- Press release title (NULL for transcripts)
                     summary_text TEXT NOT NULL,  -- Full AI-generated summary (markdown for Phase 2)
@@ -1785,15 +1837,31 @@ def ensure_schema():
                     job_id VARCHAR(50),
                     processing_duration_seconds INTEGER,
 
-                    -- UPSERT constraint: One summary per ticker+type+quarter+year
-                    UNIQUE(ticker, report_type, quarter, year)
+                    -- UPSERT constraint: One summary per ticker+type+fiscal_quarter+fiscal_year
+                    UNIQUE(ticker, report_type, fiscal_quarter, fiscal_year)
                 );
 
-                -- Migration: Ensure UNIQUE constraint exists (for existing tables created before constraint was added)
-                DO $$ BEGIN
-                    ALTER TABLE transcript_summaries ADD CONSTRAINT transcript_summaries_unique_key UNIQUE(ticker, report_type, quarter, year);
-                EXCEPTION
-                    WHEN duplicate_object OR duplicate_table THEN NULL;  -- Constraint already exists, ignore
+                -- Migration: Rename quarter/year to fiscal_quarter/fiscal_year (Nov 24, 2025)
+                DO $$
+                BEGIN
+                    -- Rename quarter to fiscal_quarter
+                    IF EXISTS (SELECT 1 FROM information_schema.columns
+                              WHERE table_name = 'transcript_summaries' AND column_name = 'quarter') THEN
+                        -- Drop old constraint first
+                        IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'transcript_summaries_unique_key') THEN
+                            ALTER TABLE transcript_summaries DROP CONSTRAINT transcript_summaries_unique_key;
+                        END IF;
+                        -- Rename columns
+                        ALTER TABLE transcript_summaries RENAME COLUMN quarter TO fiscal_quarter;
+                        ALTER TABLE transcript_summaries RENAME COLUMN year TO fiscal_year;
+                        -- Re-add constraint with new column names
+                        ALTER TABLE transcript_summaries ADD CONSTRAINT transcript_summaries_unique_key
+                            UNIQUE(ticker, report_type, fiscal_quarter, fiscal_year);
+                    ELSIF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'transcript_summaries_unique_key') THEN
+                        -- Fresh install: add constraint
+                        ALTER TABLE transcript_summaries ADD CONSTRAINT transcript_summaries_unique_key
+                            UNIQUE(ticker, report_type, fiscal_quarter, fiscal_year);
+                    END IF;
                 END $$;
 
                 -- Migration: Add ai_model column if it doesn't exist

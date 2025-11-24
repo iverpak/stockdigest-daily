@@ -1428,12 +1428,12 @@ def save_transcript_summary_to_database(
 
         cur.execute("""
             INSERT INTO transcript_summaries (
-                ticker, company_name, report_type, quarter, year,
+                ticker, company_name, report_type, fiscal_quarter, fiscal_year,
                 report_date, pr_title, summary_text, source_url,
                 ai_provider, ai_model, processing_duration_seconds
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (ticker, report_type, quarter, year)
+            ON CONFLICT (ticker, report_type, fiscal_quarter, fiscal_year)
             DO UPDATE SET
                 summary_text = EXCLUDED.summary_text,
                 ai_provider = EXCLUDED.ai_provider,

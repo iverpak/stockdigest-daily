@@ -1711,7 +1711,7 @@ def ensure_schema():
 
                 CREATE INDEX IF NOT EXISTS idx_ticker_articles_ticker ON ticker_articles(ticker);
                 CREATE INDEX IF NOT EXISTS idx_ticker_articles_article_id ON ticker_articles(article_id);
-                CREATE INDEX IF NOT EXISTS idx_ticker_articles_category ON ticker_articles(category);
+                CREATE INDEX IF NOT EXISTS idx_ticker_articles_feed_id ON ticker_articles(feed_id);
                 CREATE INDEX IF NOT EXISTS idx_ticker_articles_sent_in_digest ON ticker_articles(sent_in_digest);
                 CREATE INDEX IF NOT EXISTS idx_ticker_articles_found_at ON ticker_articles(found_at DESC);
 
@@ -1886,7 +1886,7 @@ def ensure_schema():
                 END $$;
 
                 CREATE INDEX IF NOT EXISTS idx_transcript_summaries_ticker ON transcript_summaries(ticker);
-                CREATE INDEX IF NOT EXISTS idx_transcript_summaries_quarter ON transcript_summaries(quarter, year);
+                CREATE INDEX IF NOT EXISTS idx_transcript_summaries_quarter ON transcript_summaries(fiscal_quarter, fiscal_year);
                 CREATE INDEX IF NOT EXISTS idx_transcript_summaries_type ON transcript_summaries(report_type);
                 CREATE INDEX IF NOT EXISTS idx_transcript_summaries_date ON transcript_summaries(report_date DESC);
 
@@ -1897,9 +1897,9 @@ def ensure_schema():
                     WHEN duplicate_object THEN NULL;  -- Constraint already exists, ignore
                 END $$;
 
-                -- Migration: Ensure transcripts have quarter and year (not NULL)
+                -- Migration: Ensure transcripts have fiscal_quarter and fiscal_year (not NULL)
                 DO $$ BEGIN
-                    ALTER TABLE transcript_summaries ADD CONSTRAINT transcript_summaries_quarter_year_check CHECK (quarter IS NOT NULL AND year IS NOT NULL);
+                    ALTER TABLE transcript_summaries ADD CONSTRAINT transcript_summaries_quarter_year_check CHECK (fiscal_quarter IS NOT NULL AND fiscal_year IS NOT NULL);
                 EXCEPTION
                     WHEN duplicate_object THEN NULL;  -- Constraint already exists, ignore
                 END $$;
@@ -16657,12 +16657,12 @@ async def process_transcript_phase(job: dict):
 
             cur.execute("""
                 INSERT INTO transcript_summaries (
-                    ticker, company_name, report_type, quarter, year,
+                    ticker, company_name, report_type, fiscal_quarter, fiscal_year,
                     report_date, summary_text, summary_json, prompt_version,
                     source_url, ai_provider, ai_model
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (ticker, report_type, quarter, year)
+                ON CONFLICT (ticker, report_type, fiscal_quarter, fiscal_year)
                 DO UPDATE SET
                     summary_text = EXCLUDED.summary_text,
                     summary_json = EXCLUDED.summary_json,
@@ -16842,12 +16842,12 @@ async def process_transcript_generation_phase(job: dict):
 
                 cur.execute("""
                     INSERT INTO transcript_summaries (
-                        ticker, company_name, report_type, quarter, year,
+                        ticker, company_name, report_type, fiscal_quarter, fiscal_year,
                         report_date, summary_text, summary_json, prompt_version,
                         source_url, ai_provider, ai_model
                     )
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (ticker, report_type, quarter, year)
+                    ON CONFLICT (ticker, report_type, fiscal_quarter, fiscal_year)
                     DO UPDATE SET
                         summary_text = EXCLUDED.summary_text,
                         summary_json = EXCLUDED.summary_json,
@@ -16864,11 +16864,11 @@ async def process_transcript_generation_phase(job: dict):
             else:
                 cur.execute("""
                     INSERT INTO transcript_summaries (
-                        ticker, company_name, report_type, quarter, year,
+                        ticker, company_name, report_type, fiscal_quarter, fiscal_year,
                         report_date, summary_text, source_url, ai_provider, ai_model
                     )
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (ticker, report_type, quarter, year)
+                    ON CONFLICT (ticker, report_type, fiscal_quarter, fiscal_year)
                     DO UPDATE SET
                         summary_text = EXCLUDED.summary_text,
                         ai_provider = EXCLUDED.ai_provider,
@@ -24477,7 +24477,7 @@ async def debug_transcript_summary(ticker: str, token: str):
     try:
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                SELECT ticker, company_name, report_type, quarter, year,
+                SELECT ticker, company_name, report_type, fiscal_quarter, fiscal_year,
                        report_date, summary_text, ai_provider, generated_at
                 FROM transcript_summaries
                 WHERE ticker = %s
@@ -24493,8 +24493,8 @@ async def debug_transcript_summary(ticker: str, token: str):
                     "ticker": result['ticker'],
                     "company_name": result['company_name'],
                     "report_type": result['report_type'],
-                    "quarter": result['quarter'],
-                    "year": result['year'],
+                    "quarter": result['fiscal_quarter'],
+                    "year": result['fiscal_year'],
                     "report_date": str(result['report_date']),
                     "summary_preview": result['summary_text'][:2000] + "..." if len(result['summary_text']) > 2000 else result['summary_text'],
                     "summary_length": len(result['summary_text']),
@@ -25931,8 +25931,8 @@ async def get_transcripts_api(token: str = None):
             cur.execute("""
                 SELECT
                     ticker,
-                    quarter,
-                    year,
+                    fiscal_quarter,
+                    fiscal_year,
                     report_date,
                     summary_text,
                     ai_provider,
@@ -25941,7 +25941,7 @@ async def get_transcripts_api(token: str = None):
                     generated_at
                 FROM transcript_summaries
                 WHERE report_type = 'transcript'
-                ORDER BY year DESC, quarter DESC, generated_at DESC
+                ORDER BY fiscal_year DESC, fiscal_quarter DESC, generated_at DESC
             """)
 
             transcripts = cur.fetchall()
@@ -25950,9 +25950,9 @@ async def get_transcripts_api(token: str = None):
             for t in transcripts:
                 result.append({
                     "ticker": t['ticker'],
-                    "quarter": t['quarter'],
-                    "year": t['year'],
-                    "quarter_label": f"{t['quarter']} FY{t['year']}",  # quarter already has 'Q' prefix (e.g., 'Q2')
+                    "quarter": t['fiscal_quarter'],
+                    "year": t['fiscal_year'],
+                    "quarter_label": f"{t['fiscal_quarter']} FY{t['fiscal_year']}",  # quarter already has 'Q' prefix (e.g., 'Q2')
                     "report_date": str(t['report_date']) if t['report_date'] else None,
                     "summary_text": t['summary_text'],
                     "ai_provider": t['ai_provider'],
@@ -26758,17 +26758,17 @@ async def check_ticker_missing_financials_status(ticker: str):
 
             # Check transcript
             cur.execute("""
-                SELECT year, quarter FROM transcript_summaries
+                SELECT fiscal_year, fiscal_quarter FROM transcript_summaries
                 WHERE ticker = %s AND report_type = 'transcript'
-                ORDER BY year DESC, quarter DESC LIMIT 1
+                ORDER BY fiscal_year DESC, fiscal_quarter DESC LIMIT 1
             """, (ticker,))
             result = cur.fetchone()
             our_transcript = None
             if result:
-                quarter_str = result['quarter']
+                quarter_str = result['fiscal_quarter']
                 quarter_num = int(quarter_str[1]) if quarter_str and len(quarter_str) > 1 else None
                 if quarter_num:
-                    our_transcript = {"year": result['year'], "quarter": quarter_num}
+                    our_transcript = {"year": result['fiscal_year'], "quarter": quarter_num}
 
         # Determine missing items
         missing_10k = latest_10k_year and (not our_10k_year or latest_10k_year > our_10k_year)
@@ -27061,16 +27061,16 @@ def db_get_latest_transcript(ticker: str) -> Optional[Dict]:
     try:
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                SELECT year, quarter FROM transcript_summaries
+                SELECT fiscal_year, fiscal_quarter FROM transcript_summaries
                 WHERE ticker = %s AND report_type = 'transcript'
-                ORDER BY year DESC, quarter DESC LIMIT 1
+                ORDER BY fiscal_year DESC, fiscal_quarter DESC LIMIT 1
             """, (ticker,))
             result = cur.fetchone()
-            if result and result['quarter']:
-                quarter_str = result['quarter']
+            if result and result['fiscal_quarter']:
+                quarter_str = result['fiscal_quarter']
                 quarter_num = int(quarter_str[1]) if len(quarter_str) >= 2 else None
                 if quarter_num:
-                    return {"year": result['year'], "quarter": quarter_num}
+                    return {"year": result['fiscal_year'], "quarter": quarter_num}
             return None
     except Exception as e:
         LOG.error(f"Error getting latest transcript for {ticker}: {e}")
@@ -28027,17 +28027,17 @@ async def process_ticker_missing_financials(ticker: str):
                     # Check if we have this transcript
                     with db() as conn, conn.cursor() as cur:
                         cur.execute("""
-                            SELECT year, quarter FROM transcript_summaries
+                            SELECT fiscal_year, fiscal_quarter FROM transcript_summaries
                             WHERE ticker = %s AND report_type = 'transcript'
-                            ORDER BY year DESC, quarter DESC LIMIT 1
+                            ORDER BY fiscal_year DESC, fiscal_quarter DESC LIMIT 1
                         """, (ticker,))
                         result = cur.fetchone()
                         our_transcript = None
                         if result:
-                            quarter_str = result['quarter']
+                            quarter_str = result['fiscal_quarter']
                             quarter_num = int(quarter_str[1]) if quarter_str and len(quarter_str) > 1 else None
                             if quarter_num:
-                                our_transcript = {"year": result['year'], "quarter": quarter_num}
+                                our_transcript = {"year": result['fiscal_year'], "quarter": quarter_num}
 
                     if not our_transcript or year > our_transcript['year'] or (year == our_transcript['year'] and quarter > our_transcript['quarter']):
                         # Queue transcript generation job (same as 10-K/10-Q)
@@ -31488,18 +31488,18 @@ def insert_article_minimal(url: str, resolved_url: str, title: str, description:
 
 
 @with_deadlock_retry()
-def link_article_to_ticker_minimal(article_id: int, ticker: str, category: str, search_keyword: str = None, competitor_ticker: str = None):
+def link_article_to_ticker_minimal(article_id: int, ticker: str, feed_id: int):
     """
-    Minimal article-ticker linking for hourly alerts - no AI scoring.
-    Reuses existing database structure.
+    Minimal article-ticker linking for hourly alerts (NORMALIZED - Nov 24, 2025).
+    All metadata derived via JOIN to ticker_feeds and feeds tables using feed_id.
     """
     with db() as conn, conn.cursor() as cur:
         try:
             cur.execute("""
-                INSERT INTO ticker_articles (article_id, ticker, category, search_keyword, competitor_ticker, flagged)
-                VALUES (%s, %s, %s, %s, %s, FALSE)
+                INSERT INTO ticker_articles (article_id, ticker, feed_id, flagged)
+                VALUES (%s, %s, %s, FALSE)
                 ON CONFLICT (article_id, ticker) DO NOTHING
-            """, (article_id, ticker, category, search_keyword, competitor_ticker))
+            """, (article_id, ticker, feed_id))
 
         except Exception as e:
             LOG.debug(f"Article-ticker linking failed: {e}")

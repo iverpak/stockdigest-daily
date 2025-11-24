@@ -3168,9 +3168,11 @@ def get_articles_for_ticker(ticker: str, hours: int = 24, sent_in_digest: bool =
     """Get articles for a specific ticker within time window"""
     with db() as conn, conn.cursor() as cur:
         query = """
-            SELECT a.*, ta.category, ta.sent_in_digest, ta.found_at, ta.competitor_ticker
+            SELECT a.*, tf.category, ta.sent_in_digest, ta.found_at, f.feed_ticker
             FROM articles a
             JOIN ticker_articles ta ON a.id = ta.article_id
+            JOIN ticker_feeds tf ON ta.feed_id = tf.feed_id AND ta.ticker = tf.ticker
+            JOIN feeds f ON ta.feed_id = f.id
             WHERE ta.ticker = %s
             AND ta.found_at >= NOW() - INTERVAL '%s hours'
         """
@@ -13624,19 +13626,21 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
                     SELECT DISTINCT ON (a.url_hash, ta.ticker)
                         a.id, a.url, a.resolved_url, a.title, a.description,
                         ta.ticker, a.domain, a.published_at,
-                        ta.found_at, ta.category,
-                        ta.search_keyword, ta.ai_summary, ta.ai_model,
+                        ta.found_at, tf.category,
+                        f.search_keyword, ta.ai_summary, ta.ai_model,
                         a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
                         a.quality_score,
-                        ta.competitor_ticker,
-                        ta.value_chain_type,
+                        f.feed_ticker,
+                        tf.value_chain_type,
                         ta.relevance_score, ta.relevance_reason, ta.is_rejected
                     FROM articles a
                     JOIN ticker_articles ta ON a.id = ta.article_id
+                    JOIN ticker_feeds tf ON ta.feed_id = tf.feed_id AND ta.ticker = tf.ticker
+                    JOIN feeds f ON ta.feed_id = f.id
                     WHERE ta.ticker = ANY(%s)
                         AND a.id = ANY(%s)
                     ORDER BY a.url_hash, ta.ticker,
-                        ta.value_chain_type NULLS LAST,
+                        tf.value_chain_type NULLS LAST,
                         COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
                 """, (tickers, flagged_article_ids))
             else:
@@ -13650,19 +13654,21 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
                     SELECT DISTINCT ON (a.url_hash, ta.ticker)
                         a.id, a.url, a.resolved_url, a.title, a.description,
                         ta.ticker, a.domain, a.published_at,
-                        ta.found_at, ta.category,
-                        ta.search_keyword, ta.ai_summary, ta.ai_model,
+                        ta.found_at, tf.category,
+                        f.search_keyword, ta.ai_summary, ta.ai_model,
                         a.scraped_content, a.content_scraped_at, a.scraping_failed, a.scraping_error,
                         a.quality_score,
-                        ta.competitor_ticker,
-                        ta.value_chain_type,
+                        f.feed_ticker,
+                        tf.value_chain_type,
                         ta.relevance_score, ta.relevance_reason, ta.is_rejected
                     FROM articles a
                     JOIN ticker_articles ta ON a.id = ta.article_id
+                    JOIN ticker_feeds tf ON ta.feed_id = tf.feed_id AND ta.ticker = tf.ticker
+                    JOIN feeds f ON ta.feed_id = f.id
                     WHERE a.id = ANY(%s)
                         AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
                     ORDER BY a.url_hash, ta.ticker,
-                        ta.value_chain_type NULLS LAST,
+                        tf.value_chain_type NULLS LAST,
                         COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
                 """, (flagged_article_ids,))
             else:
@@ -14764,10 +14770,12 @@ def generate_email_html_core(
         if real_article_ids:
             cur.execute("""
                 SELECT a.id, a.title, a.resolved_url, a.domain, a.published_at,
-                       ta.category, ta.ticker, ta.search_keyword, ta.competitor_ticker, ta.value_chain_type,
+                       tf.category, ta.ticker, f.search_keyword, f.feed_ticker, tf.value_chain_type,
                        ta.relevance_score, ta.relevance_reason, ta.is_rejected
                 FROM articles a
                 JOIN ticker_articles ta ON a.id = ta.article_id
+                JOIN ticker_feeds tf ON ta.feed_id = tf.feed_id AND ta.ticker = tf.ticker
+                JOIN feeds f ON ta.feed_id = f.id
                 WHERE ta.ticker = %s
                 AND a.id = ANY(%s)
                 AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
@@ -20959,26 +20967,27 @@ async def cron_ingest(
                     cur.execute("""
                         WITH ranked_articles AS (
                             SELECT a.id, a.url, a.resolved_url, a.title, a.domain, a.published_at,
-                                   ta.category, ta.search_keyword, ta.competitor_ticker, ta.value_chain_type, ta.ticker,
+                                   tf.category, f.search_keyword, f.feed_ticker, tf.value_chain_type, ta.ticker,
                                    a.scraped_content, ta.ai_summary, a.url_hash, f.company_name,
                                    ROW_NUMBER() OVER (
                                        PARTITION BY ta.ticker,
                                            CASE
-                                               WHEN ta.category = 'company' THEN ta.category
-                                               WHEN ta.category = 'industry' THEN ta.search_keyword
-                                               WHEN ta.category = 'competitor' THEN ta.competitor_ticker
-                                               WHEN ta.category = 'value_chain' THEN ta.competitor_ticker
+                                               WHEN tf.category = 'company' THEN tf.category
+                                               WHEN tf.category = 'industry' THEN f.search_keyword
+                                               WHEN tf.category = 'competitor' THEN f.feed_ticker
+                                               WHEN tf.category = 'value_chain' THEN f.feed_ticker
                                            END
                                        ORDER BY a.published_at DESC NULLS LAST, ta.found_at DESC
                                    ) as rn
                             FROM articles a
                             JOIN ticker_articles ta ON a.id = ta.article_id
+                            JOIN ticker_feeds tf ON ta.feed_id = tf.feed_id AND ta.ticker = tf.ticker
                             LEFT JOIN feeds f ON ta.feed_id = f.id
                             WHERE ta.ticker = ANY(%s)
                             AND (a.published_at >= %s OR a.published_at IS NULL)
                         )
                         SELECT id, url, resolved_url, title, domain, published_at,
-                               category, search_keyword, competitor_ticker, value_chain_type, ticker,
+                               category, search_keyword, feed_ticker, value_chain_type, ticker,
                                scraped_content, ai_summary, url_hash, company_name
                         FROM ranked_articles
                         WHERE (category = 'company' AND rn <= 50)
@@ -20991,25 +21000,26 @@ async def cron_ingest(
                     cur.execute("""
                         WITH ranked_articles AS (
                             SELECT a.id, a.url, a.resolved_url, a.title, a.domain, a.published_at,
-                                   ta.category, ta.search_keyword, ta.competitor_ticker, ta.value_chain_type, ta.ticker,
+                                   tf.category, f.search_keyword, f.feed_ticker, tf.value_chain_type, ta.ticker,
                                    a.scraped_content, ta.ai_summary, a.url_hash, f.company_name,
                                    ROW_NUMBER() OVER (
                                        PARTITION BY ta.ticker,
                                            CASE
-                                               WHEN ta.category = 'company' THEN ta.category
-                                               WHEN ta.category = 'industry' THEN ta.search_keyword
-                                               WHEN ta.category = 'competitor' THEN ta.competitor_ticker
-                                               WHEN ta.category = 'value_chain' THEN ta.competitor_ticker
+                                               WHEN tf.category = 'company' THEN tf.category
+                                               WHEN tf.category = 'industry' THEN f.search_keyword
+                                               WHEN tf.category = 'competitor' THEN f.feed_ticker
+                                               WHEN tf.category = 'value_chain' THEN f.feed_ticker
                                            END
                                        ORDER BY a.published_at DESC NULLS LAST, ta.found_at DESC
                                    ) as rn
                             FROM articles a
                             JOIN ticker_articles ta ON a.id = ta.article_id
+                            JOIN ticker_feeds tf ON ta.feed_id = tf.feed_id AND ta.ticker = tf.ticker
                             LEFT JOIN feeds f ON ta.feed_id = f.id
                             WHERE (a.published_at >= %s OR a.published_at IS NULL)
                         )
                         SELECT id, url, resolved_url, title, domain, published_at,
-                               category, search_keyword, competitor_ticker, value_chain_type, ticker,
+                               category, search_keyword, feed_ticker, value_chain_type, ticker,
                                scraped_content, ai_summary, url_hash, company_name
                         FROM ranked_articles
                         WHERE (category = 'company' AND rn <= 50)
@@ -21029,26 +21039,28 @@ async def cron_ingest(
                 cur.execute("""
                     SELECT
                         ta.ticker,
-                        ta.category,
+                        tf.category,
                         COUNT(*) FILTER (WHERE a.published_at >= %s OR a.published_at IS NULL) as within_period,
                         COUNT(*) FILTER (WHERE a.published_at < %s) as outside_period
                     FROM ticker_articles ta
                     JOIN articles a ON ta.article_id = a.id
+                    JOIN ticker_feeds tf ON ta.feed_id = tf.feed_id AND ta.ticker = tf.ticker
                     WHERE ta.ticker = ANY(%s)
-                    GROUP BY ta.ticker, ta.category
-                    ORDER BY ta.ticker, ta.category
+                    GROUP BY ta.ticker, tf.category
+                    ORDER BY ta.ticker, tf.category
                 """, (cutoff, cutoff, tickers))
             else:
                 cur.execute("""
                     SELECT
                         ta.ticker,
-                        ta.category,
+                        tf.category,
                         COUNT(*) FILTER (WHERE a.published_at >= %s OR a.published_at IS NULL) as within_period,
                         COUNT(*) FILTER (WHERE a.published_at < %s) as outside_period
                     FROM ticker_articles ta
                     JOIN articles a ON ta.article_id = a.id
-                    GROUP BY ta.ticker, ta.category
-                    ORDER BY ta.ticker, ta.category
+                    JOIN ticker_feeds tf ON ta.feed_id = tf.feed_id AND ta.ticker = tf.ticker
+                    GROUP BY ta.ticker, tf.category
+                    ORDER BY ta.ticker, tf.category
                 """, (cutoff, cutoff))
 
             filter_stats = cur.fetchall()
@@ -21510,25 +21522,29 @@ async def force_digest(request: Request, body: ForceDigestRequest):
                 SELECT
                     a.url, a.resolved_url, a.title, a.description,
                     ta.ticker, a.domain, a.published_at,
-                    ta.found_at, ta.category,
-                    ta.search_keyword
+                    ta.found_at, tf.category,
+                    f.search_keyword
                 FROM articles a
                 JOIN ticker_articles ta ON a.id = ta.article_id
+                JOIN ticker_feeds tf ON ta.feed_id = tf.feed_id AND ta.ticker = tf.ticker
+                JOIN feeds f ON ta.feed_id = f.id
                 WHERE ta.found_at >= %s
                     AND ta.ticker = ANY(%s)
-                ORDER BY ta.ticker, ta.category, COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
+                ORDER BY ta.ticker, tf.category, COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
             """, (datetime.now(timezone.utc) - timedelta(days=7), body.tickers))
         else:
             cur.execute("""
                 SELECT
                     a.url, a.resolved_url, a.title, a.description,
                     ta.ticker, a.domain, a.published_at,
-                    ta.found_at, ta.category,
-                    ta.search_keyword
+                    ta.found_at, tf.category,
+                    f.search_keyword
                 FROM articles a
                 JOIN ticker_articles ta ON a.id = ta.article_id
+                JOIN ticker_feeds tf ON ta.feed_id = tf.feed_id AND ta.ticker = tf.ticker
+                JOIN feeds f ON ta.feed_id = f.id
                 WHERE ta.found_at >= %s
-                ORDER BY ta.ticker, ta.category, COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
+                ORDER BY ta.ticker, tf.category, COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
             """, (datetime.now(timezone.utc) - timedelta(days=7),))
         
         articles_by_ticker = {}
@@ -21700,15 +21716,16 @@ async def get_stats(
                 
                 # Stats by category
                 cur.execute("""
-                    SELECT ta.category, COUNT(*) as count
+                    SELECT tf.category, COUNT(*) as count
                     FROM ticker_articles ta
+                    JOIN ticker_feeds tf ON ta.feed_id = tf.feed_id AND ta.ticker = tf.ticker
                     WHERE ta.found_at > NOW() - INTERVAL '7 days'
                         AND ta.ticker = ANY(%s)
-                    GROUP BY ta.category
-                    ORDER BY ta.category
+                    GROUP BY tf.category
+                    ORDER BY tf.category
                 """, (tickers,))
                 stats["by_category"] = list(cur.fetchall())
-                
+
                 # Top domains
                 cur.execute("""
                     SELECT a.domain, COUNT(*) as count
@@ -21721,15 +21738,16 @@ async def get_stats(
                     LIMIT 10
                 """, (tickers,))
                 stats["top_domains"] = list(cur.fetchall())
-                
+
                 # Articles by ticker and category
                 cur.execute("""
-                    SELECT ta.ticker, ta.category, COUNT(*) as count
+                    SELECT ta.ticker, tf.category, COUNT(*) as count
                     FROM ticker_articles ta
+                    JOIN ticker_feeds tf ON ta.feed_id = tf.feed_id AND ta.ticker = tf.ticker
                     WHERE ta.found_at > NOW() - INTERVAL '7 days'
                         AND ta.ticker = ANY(%s)
-                    GROUP BY ta.ticker, ta.category
-                    ORDER BY ta.ticker, ta.category
+                    GROUP BY ta.ticker, tf.category
+                    ORDER BY ta.ticker, tf.category
                 """, (tickers,))
                 stats["by_ticker_category"] = list(cur.fetchall())
             else:
@@ -21748,11 +21766,12 @@ async def get_stats(
                 
                 # Stats by category
                 cur.execute("""
-                    SELECT ta.category, COUNT(*) as count
+                    SELECT tf.category, COUNT(*) as count
                     FROM ticker_articles ta
+                    JOIN ticker_feeds tf ON ta.feed_id = tf.feed_id AND ta.ticker = tf.ticker
                     WHERE ta.found_at > NOW() - INTERVAL '7 days'
-                    GROUP BY ta.category
-                    ORDER BY ta.category
+                    GROUP BY tf.category
+                    ORDER BY tf.category
                 """)
                 stats["by_category"] = list(cur.fetchall())
                 

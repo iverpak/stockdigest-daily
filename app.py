@@ -6918,9 +6918,9 @@ def ingest_feed_basic_only(feed: Dict, mode: str = 'production', quota: int = No
 
     category = feed.get("category", "company")
     
-    # Use competitor_ticker for competitor feeds, search_keyword for others - FIXED: Consistent logic
+    # Use feed_ticker for competitor feeds, search_keyword for others - FIXED: Consistent logic
     if category == "competitor":
-        feed_keyword = feed.get("competitor_ticker")
+        feed_keyword = feed.get("feed_ticker")
         if not feed_keyword:
             feed_keyword = feed.get("search_keyword", "unknown")
     else:
@@ -7171,7 +7171,7 @@ def ingest_feed_basic_only(feed: Dict, mode: str = 'production', quota: int = No
                         clean_description = clean_null_bytes(display_content or "")
                         clean_search_keyword = clean_null_bytes(feed.get("search_keyword") or "")
                         clean_source_url = clean_null_bytes(final_source_url) if final_source_url else None
-                        clean_competitor_ticker = clean_null_bytes(feed.get("competitor_ticker") or "")
+                        clean_feed_ticker = clean_null_bytes(feed.get("feed_ticker") or "")
                         
                         # Insert article if new, then link to ticker
                         article_id = insert_article_if_new(
@@ -20878,11 +20878,11 @@ async def cron_ingest(
         for ticker in company_by_ticker:
             company_by_ticker[ticker].sort(key=lambda f: 0 if 'yahoo' in f['url'].lower() else 1)
 
-        # Group competitor feeds by (ticker, competitor_ticker) for sequential processing
-        competitor_by_key = {}  # {(ticker, competitor_ticker): [google_feed, yahoo_feed]}
+        # Group competitor feeds by (ticker, feed_ticker) for sequential processing
+        competitor_by_key = {}  # {(ticker, feed_ticker): [google_feed, yahoo_feed]}
         for feed in competitor_feeds:
             ticker = feed.get('ticker')
-            comp_ticker = feed.get('competitor_ticker', 'unknown')
+            comp_ticker = feed.get('feed_ticker', 'unknown')
             key = (ticker, comp_ticker)
             if key not in competitor_by_key:
                 competitor_by_key[key] = []
@@ -20892,11 +20892,11 @@ async def cron_ingest(
         for key in competitor_by_key:
             competitor_by_key[key].sort(key=lambda f: 0 if 'yahoo' in f['url'].lower() else 1)
 
-        # Group value chain feeds by (ticker, competitor_ticker, value_chain_type) for sequential processing
+        # Group value chain feeds by (ticker, feed_ticker, value_chain_type) for sequential processing
         value_chain_by_key = {}  # {(ticker, vc_ticker, vc_type): [google_feed, yahoo_feed]}
         for feed in value_chain_feeds:
             ticker = feed.get('ticker')
-            vc_ticker = feed.get('competitor_ticker', 'unknown')
+            vc_ticker = feed.get('feed_ticker', 'unknown')
             vc_type = feed.get('value_chain_type', 'unknown')
             key = (ticker, vc_ticker, vc_type)
             if key not in value_chain_by_key:
@@ -31148,10 +31148,10 @@ def process_ticker_feeds_hourly(ticker: str) -> Dict[str, int]:
         # Group company feeds: Yahoo first, then Google (Yahoo is cleaner, gets priority)
         company_feeds.sort(key=lambda f: 0 if 'yahoo' in f['url'].lower() else 1)
 
-        # Group competitor feeds by competitor_ticker: Yahoo first, then Google
+        # Group competitor feeds by feed_ticker: Yahoo first, then Google
         competitor_by_key = {}
         for feed in competitor_feeds:
-            comp_ticker = feed.get('competitor_ticker', 'unknown')
+            comp_ticker = feed.get('feed_ticker', 'unknown')
             if comp_ticker not in competitor_by_key:
                 competitor_by_key[comp_ticker] = []
             competitor_by_key[comp_ticker].append(feed)

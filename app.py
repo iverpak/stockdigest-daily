@@ -2394,34 +2394,24 @@ def insert_article_if_new(url_hash: str, url: str, title: str, description: str,
             return result['id'] if result else None
 
 @with_deadlock_retry()
-def link_article_to_ticker(article_id: int, ticker: str, category: str = None,
-                          feed_id: int = None, search_keyword: str = None,
-                          competitor_ticker: str = None, value_chain_type: str = None) -> None:
-    """Create relationship between article and ticker - category is immutable after first insert
+def link_article_to_ticker(article_id: int, ticker: str, feed_id: int) -> None:
+    """Create relationship between article and ticker (NORMALIZED - Nov 24, 2025)
+
+    All metadata (category, search_keyword, feed_ticker, value_chain_type) is derived
+    via JOIN to ticker_feeds and feeds tables using feed_id.
 
     Args:
-        value_chain_type: 'upstream', 'downstream', or None (for non-value-chain articles)
+        article_id: Article ID
+        ticker: Ticker symbol
+        feed_id: Feed ID (links to feeds + ticker_feeds for metadata)
     """
     with db() as conn, conn.cursor() as cur:
-        if category is not None:
-            # INSERT mode: Set category on first insert
-            cur.execute("""
-                INSERT INTO ticker_articles (ticker, article_id, category, feed_id, search_keyword, competitor_ticker, value_chain_type)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (ticker, article_id) DO UPDATE SET
-                    search_keyword = EXCLUDED.search_keyword,
-                    competitor_ticker = EXCLUDED.competitor_ticker,
-                    value_chain_type = COALESCE(EXCLUDED.value_chain_type, ticker_articles.value_chain_type)
-            """, (ticker, article_id, category, feed_id, search_keyword, competitor_ticker, value_chain_type))
-        else:
-            # UPDATE mode: Only update metadata, don't touch category
-            cur.execute("""
-                UPDATE ticker_articles
-                SET search_keyword = %s,
-                    competitor_ticker = %s,
-                    value_chain_type = COALESCE(%s, ticker_articles.value_chain_type)
-                WHERE ticker = %s AND article_id = %s
-            """, (search_keyword, competitor_ticker, value_chain_type, ticker, article_id))
+        cur.execute("""
+            INSERT INTO ticker_articles (ticker, article_id, feed_id)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (ticker, article_id) DO UPDATE SET
+                feed_id = EXCLUDED.feed_id
+        """, (ticker, article_id, feed_id))
 
 @with_deadlock_retry()
 def update_article_content(article_id: int, scraped_content: str = None, ai_summary: str = None,
@@ -6384,11 +6374,9 @@ async def process_article_batch_async(articles_batch: List[Dict], categories: Un
                         if domain:
                             track_scrape_attempt(domain, success=True)
 
-                        # Ensure ticker relationship exists (don't pass category - it's immutable)
+                        # Ensure ticker relationship exists
                         link_article_to_ticker(
-                            article_id, analysis_ticker,
-                            search_keyword=article.get("search_keyword"),
-                            competitor_ticker=article.get("competitor_ticker")
+                            article_id, analysis_ticker, article.get("feed_id")
                         )
 
                         # Update ticker-specific AI summary and quality score
@@ -6419,11 +6407,9 @@ async def process_article_batch_async(articles_batch: List[Dict], categories: Un
                         if domain:
                             track_scrape_attempt(domain, success=False)
 
-                        # Ensure ticker relationship exists (don't pass category - it's immutable)
+                        # Ensure ticker relationship exists
                         link_article_to_ticker(
-                            article_id, analysis_ticker,
-                            search_keyword=article.get("search_keyword"),
-                            competitor_ticker=article.get("competitor_ticker")
+                            article_id, analysis_ticker, article.get("feed_id")
                         )
         
         LOG.info(f"BATCH COMPLETE: {successful_updates}/{len(results)} articles successfully updated in database")
@@ -6866,9 +6852,7 @@ def ingest_feed_with_content_scraping(feed: Dict, category: str = "company", key
 
                         # Link article to ticker
                         link_article_to_ticker(
-                            article_id, feed["ticker"], category,
-                            feed["id"], feed.get("search_keyword"),
-                            feed.get("competitor_ticker")
+                            article_id, feed["ticker"], feed["id"]
                         )
 
                     if article_id:
@@ -7204,11 +7188,9 @@ def ingest_feed_basic_only(feed: Dict, mode: str = 'production', quota: int = No
                                 LOG.info(f"[DEBUG VALUE_CHAIN] category from ticker_feeds: {feed.get('category')}")
                                 LOG.info(f"[DEBUG VALUE_CHAIN] category variable: {category}")
 
-                            # Get value_chain_type from feed (upstream/downstream/None)
-                            value_chain_type = feed.get("value_chain_type")
+                            # Link article to ticker (all metadata derived via feed_id)
                             link_article_to_ticker(
-                                article_id, feed["ticker"], category,
-                                feed["id"], clean_search_keyword, clean_competitor_ticker, value_chain_type
+                                article_id, feed["ticker"], feed["id"]
                             )
                             stats["inserted"] += 1
 
@@ -15558,8 +15540,7 @@ async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_a
             with db() as conn, conn.cursor() as cur:
                 cur.execute("""
                     SELECT a.id, a.url, a.url_hash, a.resolved_url, a.title, a.description,
-                           a.domain, a.published_at,
-                           ta.category, ta.search_keyword, ta.competitor_ticker, ta.value_chain_type,
+                           a.domain, a.published_at, ta.feed_id,
                            a.scraped_content, a.content_scraped_at, ta.ai_summary
                     FROM articles a
                     JOIN ticker_articles ta ON a.id = ta.article_id

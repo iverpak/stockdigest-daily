@@ -140,31 +140,23 @@ def _build_phase1_user_content(
                 source_name = domain if domain else "Unknown Source"
                 unified_timeline.append(f"• {category_tag} {title} [{source_name}] {date_str}: {ai_summary}")
 
-    # Calculate report context (start date, end date, day of week)
-    end_date = datetime.now().strftime("%B %d, %Y")
+    # Calculate report context (current date, day of week)
+    current_date = datetime.now().strftime("%B %d, %Y")
     day_of_week = datetime.now().strftime("%A")
-
-    # Calculate start date from oldest flagged article (or default to 7 days ago)
-    if all_flagged_articles:
-        oldest_article = min(all_flagged_articles, key=lambda x: x.get("published_at") or datetime.max.replace(tzinfo=timezone.utc))
-        start_date = oldest_article.get("published_at").strftime("%B %d, %Y") if oldest_article.get("published_at") else end_date
-    else:
-        start_date = (datetime.now() - timedelta(days=7)).strftime("%B %d, %Y")
 
     # Build user_content
     # CRITICAL: Add ticker context here (not in system prompt) for prompt caching optimization
     ticker_header = f"TARGET COMPANY: {ticker} ({company_name})\n\n"
 
     # Add explicit current date for temporal staleness checks (matches Phase 2)
-    current_date_header = f"CURRENT DATE: {end_date}\n\n"
+    current_date_header = f"CURRENT DATE: {current_date}\n\n"
 
     if not all_flagged_articles:
         user_content = (
             ticker_header +
             current_date_header +
             f"REPORT CONTEXT:\n"
-            f"Report type: {day_of_week}\n"
-            f"Coverage period: {start_date} to {end_date}\n\n"
+            f"Report type: {day_of_week}\n\n"
             f"---\n\n"
             f"FLAGGED ARTICLE COUNT: 0\n\n"
             f"NO FLAGGED ARTICLES - Generate quiet day summary per template."
@@ -175,8 +167,7 @@ def _build_phase1_user_content(
             ticker_header +
             current_date_header +
             f"REPORT CONTEXT:\n"
-            f"Report type: {day_of_week}\n"
-            f"Coverage period: {start_date} to {end_date}\n\n"
+            f"Report type: {day_of_week}\n\n"
             f"---\n\n"
             f"FLAGGED ARTICLE COUNT: {article_count}\n\n"
             f"UNIFIED ARTICLE TIMELINE (newest to oldest):\n"

@@ -613,7 +613,8 @@ Escape hatch JSON:
 {
   "sections": {
     "bottom_line": {
-      "content": "No material developments reported for the target company this period. Most recent articles covered [brief 1-sentence description if anything worth noting].",
+      "content": "No material developments reported for the target company this period.",
+      "date_range": "[extract from CURRENT DATE header - e.g., 'November 23, 2025' becomes 'Nov 23']",
       "word_count": [actual count]
     },
     "major_developments": [],
@@ -623,14 +624,22 @@ Escape hatch JSON:
     "competitive_industry_dynamics": [],
     "upcoming_catalysts": [],
     "upside_scenario": {
-      "content": "No new upside catalysts discussed in recent articles."
+      "content": "No new upside catalysts discussed in recent articles.",
+      "date_range": ""
     },
     "downside_scenario": {
-      "content": "No new downside risks discussed in recent articles."
+      "content": "No new downside risks discussed in recent articles.",
+      "date_range": ""
     },
     "key_variables": []
   }
 }
+
+DATE HANDLING FOR 0-ARTICLE CASE:
+- bottom_line.date_range: Extract current date from CURRENT DATE header in user prompt (e.g., "November 23, 2025" → "Nov 23")
+- upside_scenario.date_range: Empty string ""
+- downside_scenario.date_range: Empty string ""
+- All bullet sections are empty arrays, no date_range needed
 
 If 2+ articles with ANY substantive content, proceed with full brief generation.
 

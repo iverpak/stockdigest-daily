@@ -9306,7 +9306,7 @@ async def perform_ai_triage_with_fallback_async(
     if competitor_articles:
         competitor_by_entity = {}
         for idx, article in enumerate(competitor_articles):
-            entity_key = article.get("competitor_ticker") or article.get("search_keyword", "unknown")
+            entity_key = article.get("feed_ticker") or article.get("search_keyword", "unknown")
             if entity_key not in competitor_by_entity:
                 competitor_by_entity[entity_key] = []
             competitor_by_entity[entity_key].append({"article": article, "original_idx": idx})

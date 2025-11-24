@@ -1529,9 +1529,6 @@ def ensure_schema():
                 -- Add company_name column if it doesn't exist (migration)
                 ALTER TABLE feeds ADD COLUMN IF NOT EXISTS company_name VARCHAR(255);
 
-                -- Add value_chain_type column for upstream/downstream tracking (Oct 31, 2025)
-                ALTER TABLE feeds ADD COLUMN IF NOT EXISTS value_chain_type VARCHAR(10) CHECK (value_chain_type IN ('upstream', 'downstream') OR value_chain_type IS NULL);
-
                 -- NEW ARCHITECTURE: Ticker-Feed relationships with per-relationship categories
                 CREATE TABLE IF NOT EXISTS ticker_feeds (
                     id SERIAL PRIMARY KEY,
@@ -1543,6 +1540,10 @@ def ensure_schema():
                     updated_at TIMESTAMP DEFAULT NOW(),
                     UNIQUE(ticker, feed_id)
                 );
+
+                -- Add value_chain_type column to ticker_feeds for upstream/downstream tracking (Nov 24, 2025)
+                -- MOVED FROM feeds table to ticker_feeds table to fix feed contamination
+                ALTER TABLE ticker_feeds ADD COLUMN IF NOT EXISTS value_chain_type VARCHAR(10) CHECK (value_chain_type IN ('upstream', 'downstream') OR value_chain_type IS NULL);
 
                 -- Ticker-Articles relationship table
                 CREATE TABLE IF NOT EXISTS ticker_articles (
@@ -2770,21 +2771,25 @@ def upsert_feed_new_architecture(url: str, name: str, search_keyword: str = None
     """Insert/update feed in new architecture - NO CATEGORY (category is per-relationship)
 
     Args:
-        value_chain_type: 'upstream', 'downstream', or None (for non-value-chain feeds)
+        value_chain_type: DEPRECATED - Kept for backward compatibility, but ignored.
+                         This field now lives in ticker_feeds table, not feeds table.
+                         Moved to ticker_feeds on Nov 24, 2025 to fix feed contamination.
+
+    Feed Immutability:
+        Feeds are immutable once created. ON CONFLICT only reactivates the feed.
+        This prevents contamination when multiple tickers share the same feed.
     """
     with db() as conn, conn.cursor() as cur:
         try:
-            # Insert or get existing feed - NEVER overwrite existing feeds
+            # Insert or get existing feed - Feeds are IMMUTABLE (only reactivate on conflict)
             cur.execute("""
-                INSERT INTO feeds (url, name, search_keyword, competitor_ticker, company_name, retain_days, value_chain_type)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO feeds (url, name, search_keyword, competitor_ticker, company_name, retain_days)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 ON CONFLICT (url) DO UPDATE SET
                     active = TRUE,
-                    company_name = COALESCE(EXCLUDED.company_name, feeds.company_name),
-                    value_chain_type = COALESCE(EXCLUDED.value_chain_type, feeds.value_chain_type),
                     updated_at = NOW()
                 RETURNING id;
-            """, (url, name, search_keyword, competitor_ticker, company_name, retain_days, value_chain_type))
+            """, (url, name, search_keyword, competitor_ticker, company_name, retain_days))
 
             result = cur.fetchone()
             if result:
@@ -2810,20 +2815,40 @@ def upsert_feed_new_architecture(url: str, name: str, search_keyword: str = None
                     LOG.error(f"❌ Recovery attempt failed: {recovery_error}")
             raise e
 
-def associate_ticker_with_feed_new_architecture(ticker: str, feed_id: int, category: str) -> bool:
-    """Associate a ticker with a feed with SPECIFIC CATEGORY for this relationship"""
+def associate_ticker_with_feed_new_architecture(ticker: str, feed_id: int, category: str,
+                                               value_chain_type: str = None) -> bool:
+    """Associate a ticker with a feed with SPECIFIC CATEGORY for this relationship
+
+    Args:
+        ticker: Ticker symbol
+        feed_id: Feed ID to associate
+        category: 'company', 'industry', 'competitor', or 'value_chain'
+        value_chain_type: 'upstream', 'downstream', or None
+                         - Required when category='value_chain'
+                         - Should be None for other categories
+
+    Note:
+        This is where per-ticker relationship metadata is stored.
+        The same feed can have different value_chain_type for different tickers.
+        This fixes the feed contamination issue (Nov 24, 2025).
+    """
     with db() as conn, conn.cursor() as cur:
         try:
             cur.execute("""
-                INSERT INTO ticker_feeds (ticker, feed_id, category)
-                VALUES (%s, %s, %s)
+                INSERT INTO ticker_feeds (ticker, feed_id, category, value_chain_type)
+                VALUES (%s, %s, %s, %s)
                 ON CONFLICT (ticker, feed_id) DO UPDATE SET
                     category = EXCLUDED.category,
+                    value_chain_type = EXCLUDED.value_chain_type,
                     active = TRUE,
                     updated_at = NOW()
-            """, (ticker, feed_id, category))
+            """, (ticker, feed_id, category, value_chain_type))
 
-            LOG.info(f"✅ Associated ticker {ticker} with feed {feed_id} as category '{category}'")
+            # Enhanced logging to show value_chain_type
+            if value_chain_type:
+                LOG.info(f"✅ Associated ticker {ticker} with feed {feed_id} as category '{category}' (value_chain_type='{value_chain_type}')")
+            else:
+                LOG.info(f"✅ Associated ticker {ticker} with feed {feed_id} as category '{category}'")
             return True
         except Exception as e:
             LOG.error(f"❌ Failed to associate ticker {ticker} with feed {feed_id}: {e}")
@@ -2879,7 +2904,7 @@ def create_feeds_for_ticker_new_architecture(ticker: str, metadata: dict) -> lis
             )
 
             # Associate this feed with this ticker as "company" category
-            if associate_ticker_with_feed_new_architecture(ticker, feed_id, "company"):
+            if associate_ticker_with_feed_new_architecture(ticker, feed_id, "company", value_chain_type=None):
                 feeds_created.append({
                     "feed_id": feed_id,
                     "config": {"category": "company", "name": feed_config["name"], "source": feed_config["source"]}
@@ -2899,7 +2924,7 @@ def create_feeds_for_ticker_new_architecture(ticker: str, metadata: dict) -> lis
             )
 
             # Associate this feed with this ticker as "industry" category
-            if associate_ticker_with_feed_new_architecture(ticker, feed_id, "industry"):
+            if associate_ticker_with_feed_new_architecture(ticker, feed_id, "industry", value_chain_type=None):
                 feeds_created.append({
                     "feed_id": feed_id,
                     "config": {"category": "industry", "keyword": keyword}
@@ -2930,7 +2955,7 @@ def create_feeds_for_ticker_new_architecture(ticker: str, metadata: dict) -> lis
                 )
 
                 # Associate this feed with this ticker as "competitor" category
-                if associate_ticker_with_feed_new_architecture(ticker, feed_id, "competitor"):
+                if associate_ticker_with_feed_new_architecture(ticker, feed_id, "competitor", value_chain_type=None):
                     feeds_created.append({
                         "feed_id": feed_id,
                         "config": {"category": "competitor", "name": comp_name, "source": "google"}
@@ -2947,7 +2972,7 @@ def create_feeds_for_ticker_new_architecture(ticker: str, metadata: dict) -> lis
                     )
 
                     # Associate this feed with this ticker as "competitor" category
-                    if associate_ticker_with_feed_new_architecture(ticker, feed_id, "competitor"):
+                    if associate_ticker_with_feed_new_architecture(ticker, feed_id, "competitor", value_chain_type=None):
                         feeds_created.append({
                             "feed_id": feed_id,
                             "config": {"category": "competitor", "name": comp_name, "source": "yahoo"}
@@ -2974,7 +2999,7 @@ def create_feeds_for_ticker_new_architecture(ticker: str, metadata: dict) -> lis
                 # ALWAYS create Google News feed (works for any company name)
                 feed_id = upsert_feed_new_architecture(
                     url=f"https://news.google.com/rss/search?q=\"{comp_feed_query_name.replace(' ', '%20')}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
-                    name=f"Upstream: {comp_name}",
+                    name=f"Google News: {comp_name}",
                     search_keyword=comp_feed_query_name,
                     competitor_ticker=comp_ticker,  # Can be None
                     company_name=comp_name,
@@ -2982,7 +3007,7 @@ def create_feeds_for_ticker_new_architecture(ticker: str, metadata: dict) -> lis
                 )
 
                 # Associate this feed with this ticker as "value_chain" category
-                if associate_ticker_with_feed_new_architecture(ticker, feed_id, "value_chain"):
+                if associate_ticker_with_feed_new_architecture(ticker, feed_id, "value_chain", value_chain_type='upstream'):
                     feeds_created.append({
                         "feed_id": feed_id,
                         "config": {"category": "value_chain", "type": "upstream", "name": comp_name, "source": "google"}
@@ -2996,11 +3021,11 @@ def create_feeds_for_ticker_new_architecture(ticker: str, metadata: dict) -> lis
                         search_keyword=comp_name,
                         competitor_ticker=comp_ticker,
                         company_name=comp_name,
-                        value_chain_type='upstream'  # NEW FIELD
+                        value_chain_type='upstream'  # DEPRECATED - Ignored, but kept for backward compatibility
                     )
 
                     # Associate this feed with this ticker as "value_chain" category
-                    if associate_ticker_with_feed_new_architecture(ticker, feed_id, "value_chain"):
+                    if associate_ticker_with_feed_new_architecture(ticker, feed_id, "value_chain", value_chain_type='upstream'):
                         feeds_created.append({
                             "feed_id": feed_id,
                             "config": {"category": "value_chain", "type": "upstream", "name": comp_name, "source": "yahoo"}
@@ -3026,7 +3051,7 @@ def create_feeds_for_ticker_new_architecture(ticker: str, metadata: dict) -> lis
                 # ALWAYS create Google News feed (works for any company name)
                 feed_id = upsert_feed_new_architecture(
                     url=f"https://news.google.com/rss/search?q=\"{comp_feed_query_name.replace(' ', '%20')}\"+stock+when:7d&hl=en-US&gl=US&ceid=US:en",
-                    name=f"Downstream: {comp_name}",
+                    name=f"Google News: {comp_name}",
                     search_keyword=comp_feed_query_name,
                     competitor_ticker=comp_ticker,  # Can be None
                     company_name=comp_name,
@@ -3034,7 +3059,7 @@ def create_feeds_for_ticker_new_architecture(ticker: str, metadata: dict) -> lis
                 )
 
                 # Associate this feed with this ticker as "value_chain" category
-                if associate_ticker_with_feed_new_architecture(ticker, feed_id, "value_chain"):
+                if associate_ticker_with_feed_new_architecture(ticker, feed_id, "value_chain", value_chain_type='downstream'):
                     feeds_created.append({
                         "feed_id": feed_id,
                         "config": {"category": "value_chain", "type": "downstream", "name": comp_name, "source": "google"}
@@ -3048,11 +3073,11 @@ def create_feeds_for_ticker_new_architecture(ticker: str, metadata: dict) -> lis
                         search_keyword=comp_name,
                         competitor_ticker=comp_ticker,
                         company_name=comp_name,
-                        value_chain_type='downstream'  # NEW FIELD
+                        value_chain_type='downstream'  # DEPRECATED - Ignored, but kept for backward compatibility
                     )
 
                     # Associate this feed with this ticker as "value_chain" category
-                    if associate_ticker_with_feed_new_architecture(ticker, feed_id, "value_chain"):
+                    if associate_ticker_with_feed_new_architecture(ticker, feed_id, "value_chain", value_chain_type='downstream'):
                         feeds_created.append({
                             "feed_id": feed_id,
                             "config": {"category": "value_chain", "type": "downstream", "name": comp_name, "source": "yahoo"}
@@ -20684,7 +20709,7 @@ async def cron_ingest(
             with db() as conn, conn.cursor() as cur:
                 if tickers:
                     cur.execute("""
-                        SELECT f.id, f.url, f.name, tf.ticker, tf.category, f.retain_days, f.search_keyword, f.competitor_ticker, f.value_chain_type
+                        SELECT f.id, f.url, f.name, tf.ticker, tf.category, f.retain_days, f.search_keyword, f.competitor_ticker, tf.value_chain_type
                         FROM feeds f
                         JOIN ticker_feeds tf ON f.id = tf.feed_id
                         WHERE f.active = TRUE AND tf.active = TRUE AND tf.ticker = ANY(%s)
@@ -20692,7 +20717,7 @@ async def cron_ingest(
                     """, (tickers,))
                 else:
                     cur.execute("""
-                        SELECT f.id, f.url, f.name, tf.ticker, tf.category, f.retain_days, f.search_keyword, f.competitor_ticker, f.value_chain_type
+                        SELECT f.id, f.url, f.name, tf.ticker, tf.category, f.retain_days, f.search_keyword, f.competitor_ticker, tf.value_chain_type
                         FROM feeds f
                         JOIN ticker_feeds tf ON f.id = tf.feed_id
                         WHERE f.active = TRUE AND tf.active = TRUE

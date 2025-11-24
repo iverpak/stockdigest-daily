@@ -2841,7 +2841,7 @@ def upsert_feed_new_architecture(url: str, name: str, search_keyword: str = None
         try:
             # Insert or get existing feed - Feeds are IMMUTABLE (only reactivate on conflict)
             cur.execute("""
-                INSERT INTO feeds (url, name, search_keyword, competitor_ticker, company_name, retain_days)
+                INSERT INTO feeds (url, name, search_keyword, feed_ticker, company_name, retain_days)
                 VALUES (%s, %s, %s, %s, %s, %s)
                 ON CONFLICT (url) DO UPDATE SET
                     active = TRUE,
@@ -3154,7 +3154,7 @@ def get_feeds_for_ticker_new_architecture(ticker: str) -> list:
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
             SELECT
-                f.id, f.url, f.name, f.search_keyword, f.competitor_ticker,
+                f.id, f.url, f.name, f.search_keyword, f.feed_ticker,
                 tf.category, tf.active as association_active, tf.created_at as associated_at
             FROM feeds f
             JOIN ticker_feeds tf ON f.id = tf.feed_id
@@ -7559,7 +7559,7 @@ def list_active_feeds(tickers: List[str] = None) -> List[Dict]:
     with db() as conn, conn.cursor() as cur:
         if tickers:
             cur.execute("""
-                SELECT f.id, f.url, f.name, tf.ticker, f.retain_days, tf.category, f.search_keyword, f.competitor_ticker
+                SELECT f.id, f.url, f.name, tf.ticker, f.retain_days, tf.category, f.search_keyword, f.feed_ticker
                 FROM feeds f
                 JOIN ticker_feeds tf ON f.id = tf.feed_id
                 WHERE f.active = TRUE AND tf.active = TRUE AND tf.ticker = ANY(%s)
@@ -7567,7 +7567,7 @@ def list_active_feeds(tickers: List[str] = None) -> List[Dict]:
             """, (tickers,))
         else:
             cur.execute("""
-                SELECT f.id, f.url, f.name, tf.ticker, f.retain_days, tf.category, f.search_keyword, f.competitor_ticker
+                SELECT f.id, f.url, f.name, tf.ticker, f.retain_days, tf.category, f.search_keyword, f.feed_ticker
                 FROM feeds f
                 JOIN ticker_feeds tf ON f.id = tf.feed_id
                 WHERE f.active = TRUE AND tf.active = TRUE
@@ -10339,11 +10339,11 @@ class FeedManager:
             
             # Count unique competitors separately
             cur.execute("""
-                SELECT COUNT(DISTINCT f.competitor_ticker) as unique_competitors
+                SELECT COUNT(DISTINCT f.feed_ticker) as unique_competitors
                 FROM feeds f
                 JOIN ticker_feeds tf ON f.id = tf.feed_id
                 WHERE tf.ticker = %s AND tf.category = 'competitor' AND f.active = TRUE AND tf.active = TRUE
-                AND f.competitor_ticker IS NOT NULL
+                AND f.feed_ticker IS NOT NULL
             """, (ticker,))
             result = cur.fetchone()
             existing_competitor_entities = result["unique_competitors"] if result else 0
@@ -10402,11 +10402,11 @@ class FeedManager:
             # Get existing competitor tickers to avoid duplicates
             with db() as conn, conn.cursor() as cur:
                 cur.execute("""
-                    SELECT DISTINCT f.competitor_ticker
+                    SELECT DISTINCT f.feed_ticker
                     FROM feeds f
                     JOIN ticker_feeds tf ON f.id = tf.feed_id
                     WHERE tf.ticker = %s AND tf.category = 'competitor' AND f.active = TRUE AND tf.active = TRUE
-                    AND f.competitor_ticker IS NOT NULL
+                    AND f.feed_ticker IS NOT NULL
                 """, (ticker,))
                 existing_competitor_tickers = {row["competitor_ticker"] for row in cur.fetchall()}
             
@@ -20758,7 +20758,7 @@ async def cron_ingest(
             with db() as conn, conn.cursor() as cur:
                 if tickers:
                     cur.execute("""
-                        SELECT f.id, f.url, f.name, tf.ticker, tf.category, f.retain_days, f.search_keyword, f.competitor_ticker, tf.value_chain_type
+                        SELECT f.id, f.url, f.name, tf.ticker, tf.category, f.retain_days, f.search_keyword, f.feed_ticker, tf.value_chain_type
                         FROM feeds f
                         JOIN ticker_feeds tf ON f.id = tf.feed_id
                         WHERE f.active = TRUE AND tf.active = TRUE AND tf.ticker = ANY(%s)
@@ -20766,7 +20766,7 @@ async def cron_ingest(
                     """, (tickers,))
                 else:
                     cur.execute("""
-                        SELECT f.id, f.url, f.name, tf.ticker, tf.category, f.retain_days, f.search_keyword, f.competitor_ticker, tf.value_chain_type
+                        SELECT f.id, f.url, f.name, tf.ticker, tf.category, f.retain_days, f.search_keyword, f.feed_ticker, tf.value_chain_type
                         FROM feeds f
                         JOIN ticker_feeds tf ON f.id = tf.feed_id
                         WHERE f.active = TRUE AND tf.active = TRUE
@@ -31072,7 +31072,7 @@ def process_ticker_feeds_hourly(ticker: str) -> Dict[str, int]:
         # Get feeds for this ticker from database (feeds already created at 7 AM)
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                SELECT f.id, f.url, f.name, f.search_keyword, f.competitor_ticker, tf.category, tf.ticker
+                SELECT f.id, f.url, f.name, f.search_keyword, f.feed_ticker, tf.category, tf.ticker
                 FROM feeds f
                 JOIN ticker_feeds tf ON f.id = tf.feed_id
                 WHERE tf.ticker = %s AND f.active = TRUE AND tf.active = TRUE

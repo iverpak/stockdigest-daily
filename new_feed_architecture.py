@@ -143,7 +143,7 @@ def upsert_feed_new_architecture(url: str, name: str, search_keyword: str = None
         try:
             # Insert or get existing feed - NEVER overwrite existing feeds
             cur.execute("""
-                INSERT INTO feeds (url, name, search_keyword, competitor_ticker, retain_days)
+                INSERT INTO feeds (url, name, search_keyword, feed_ticker, retain_days)
                 VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (url) DO UPDATE SET
                     active = TRUE,
@@ -207,7 +207,7 @@ def get_feeds_for_ticker(ticker: str) -> list:
     with db() as conn, conn.cursor() as cur:
         cur.execute("""
             SELECT
-                f.id, f.url, f.name, f.search_keyword, f.competitor_ticker,
+                f.id, f.url, f.name, f.search_keyword, f.feed_ticker,
                 tf.category, tf.active as association_active, tf.created_at as associated_at
             FROM feeds f
             JOIN ticker_feeds tf ON f.id = tf.feed_id

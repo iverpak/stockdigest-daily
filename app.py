@@ -15501,6 +15501,7 @@ async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_a
                 # Process articles in batches using existing batch scraping logic
                 BATCH_SIZE = 5
                 total_scraped = 0
+                total_reused = 0
                 total_failed = 0
 
                 for i in range(0, len(articles_to_scrape), BATCH_SIZE):
@@ -15531,9 +15532,10 @@ async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_a
                             if result["success"] and result.get("scraped_content"):
                                 if result.get("reused"):
                                     batch_reused += 1
+                                    total_reused += 1
                                 else:
                                     batch_scraped += 1
-                                total_scraped += 1
+                                    total_scraped += 1
                             else:
                                 batch_failed += 1
                                 total_failed += 1
@@ -15544,7 +15546,8 @@ async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_a
                         LOG.error(f"[{ticker}] ❌ Batch {batch_num} scraping error: {e}")
                         total_failed += len(batch)
 
-                LOG.info(f"[{ticker}] 📊 Processing complete: {total_scraped} total successful ({needs_scraping - total_failed} scraped + {needs_ai_only} reused content), {total_failed} failed")
+                total_successful = total_scraped + total_reused
+                LOG.info(f"[{ticker}] 📊 Processing complete: {total_successful} total successful ({total_scraped} scraped + {total_reused} reused), {total_failed} failed")
             else:
                 LOG.info(f"[{ticker}] ✅ All flagged articles already processed")
         else:

@@ -6341,8 +6341,20 @@ async def process_article_batch_async(articles_batch: List[Dict], categories: Un
     return results
 
 async def scrape_single_article_async(article: Dict, category: str, metadata: Dict, analysis_ticker: str, article_idx: int) -> Dict:
-    """Scrape a single article asynchronously"""
+    """Scrape a single article asynchronously, or reuse existing content if available"""
     try:
+        # Check if article already has scraped content (from another ticker's processing)
+        existing_content = article.get("scraped_content")
+        if existing_content:
+            LOG.info(f"[{analysis_ticker}] ♻️ Reusing existing content for article {article_idx}: {article.get('title', 'No title')[:60]}...")
+            return {
+                "success": True,
+                "scraped_content": existing_content,
+                "content_scraped_at": article.get("content_scraped_at") or datetime.now(timezone.utc),
+                "error": None,
+                "reused": True  # Flag to track content reuse
+            }
+
         resolved_url = article.get("resolved_url") or article.get("url")
         domain = article.get("domain", "unknown")
         title = article.get("title", "")
@@ -15454,20 +15466,29 @@ async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_a
                 cur.execute("""
                     SELECT a.id, a.url, a.url_hash, a.resolved_url, a.title, a.description,
                            a.domain, a.published_at,
-                           ta.category, ta.search_keyword, ta.competitor_ticker, ta.value_chain_type
+                           ta.category, ta.search_keyword, ta.competitor_ticker, ta.value_chain_type,
+                           a.scraped_content, a.content_scraped_at, ta.ai_summary
                     FROM articles a
                     JOIN ticker_articles ta ON a.id = ta.article_id
                     WHERE a.id = ANY(%s)
                     AND ta.ticker = %s
-                    AND a.scraped_content IS NULL
                     AND a.scraping_failed = FALSE
+                    AND (
+                        a.scraped_content IS NULL
+                        OR
+                        (a.scraped_content IS NOT NULL AND ta.ai_summary IS NULL)
+                    )
                     ORDER BY a.published_at DESC NULLS LAST
                 """, (flagged_article_ids, ticker))
 
                 articles_to_scrape = cur.fetchall()
 
             if articles_to_scrape:
-                LOG.info(f"[{ticker}] 🔍 Found {len(articles_to_scrape)} articles needing scraping")
+                # Count articles by processing type
+                needs_scraping = sum(1 for a in articles_to_scrape if a['scraped_content'] is None)
+                needs_ai_only = len(articles_to_scrape) - needs_scraping
+
+                LOG.info(f"[{ticker}] 🔍 Found {len(articles_to_scrape)} articles to process: {needs_scraping} need scraping, {needs_ai_only} need AI summary only")
 
                 # Get ticker metadata for AI analysis
                 config = get_ticker_config(ticker)
@@ -15503,21 +15524,29 @@ async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_a
                         )
 
                         # Count successes and failures
+                        batch_scraped = 0
+                        batch_reused = 0
+                        batch_failed = 0
                         for result in batch_results:
                             if result["success"] and result.get("scraped_content"):
+                                if result.get("reused"):
+                                    batch_reused += 1
+                                else:
+                                    batch_scraped += 1
                                 total_scraped += 1
                             else:
+                                batch_failed += 1
                                 total_failed += 1
 
-                        LOG.info(f"[{ticker}] ✅ Batch {batch_num}/{total_batches} complete: {total_scraped} scraped, {total_failed} failed")
+                        LOG.info(f"[{ticker}] ✅ Batch {batch_num}/{total_batches} complete: {batch_scraped} scraped, {batch_reused} reused, {batch_failed} failed")
 
                     except Exception as e:
                         LOG.error(f"[{ticker}] ❌ Batch {batch_num} scraping error: {e}")
                         total_failed += len(batch)
 
-                LOG.info(f"[{ticker}] 📊 Scraping complete: {total_scraped} successful, {total_failed} failed")
+                LOG.info(f"[{ticker}] 📊 Processing complete: {total_scraped} total successful ({needs_scraping - total_failed} scraped + {needs_ai_only} reused content), {total_failed} failed")
             else:
-                LOG.info(f"[{ticker}] ✅ All flagged articles already scraped (or scraping previously failed)")
+                LOG.info(f"[{ticker}] ✅ All flagged articles already processed")
         else:
             LOG.info(f"[{ticker}] ⚠️ No flagged articles to scrape")
 

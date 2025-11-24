@@ -21789,11 +21789,12 @@ async def get_stats(
                 
                 # Articles by ticker and category
                 cur.execute("""
-                    SELECT ta.ticker, ta.category, COUNT(*) as count
+                    SELECT ta.ticker, tf.category, COUNT(*) as count
                     FROM ticker_articles ta
+                    JOIN ticker_feeds tf ON ta.feed_id = tf.feed_id AND ta.ticker = tf.ticker
                     WHERE ta.found_at > NOW() - INTERVAL '7 days'
-                    GROUP BY ta.ticker, ta.category
-                    ORDER BY ta.ticker, ta.category
+                    GROUP BY ta.ticker, tf.category
+                    ORDER BY ta.ticker, tf.category
                 """)
                 stats["by_ticker_category"] = list(cur.fetchall())
             
@@ -21891,18 +21892,22 @@ def rerun_ai_analysis(
         # Get articles that need AI analysis - NO LIMIT restriction
         if tickers:
             cur.execute("""
-                SELECT a.id, a.title, a.description, a.domain, ta.ticker, ta.category, ta.search_keyword
+                SELECT a.id, a.title, a.description, a.domain, ta.ticker, tf.category, f.search_keyword
                 FROM articles a
                 JOIN ticker_articles ta ON a.id = ta.article_id
+                JOIN ticker_feeds tf ON ta.feed_id = tf.feed_id AND ta.ticker = tf.ticker
+                JOIN feeds f ON ta.feed_id = f.id
                 WHERE ta.ticker = ANY(%s)
                 ORDER BY ta.found_at DESC
                 LIMIT %s
             """, (tickers, limit))
         else:
             cur.execute("""
-                SELECT a.id, a.title, a.description, a.domain, ta.ticker, ta.category, ta.search_keyword
+                SELECT a.id, a.title, a.description, a.domain, ta.ticker, tf.category, f.search_keyword
                 FROM articles a
                 JOIN ticker_articles ta ON a.id = ta.article_id
+                JOIN ticker_feeds tf ON ta.feed_id = tf.feed_id AND ta.ticker = tf.ticker
+                JOIN feeds f ON ta.feed_id = f.id
                 ORDER BY ta.found_at DESC
                 LIMIT %s
             """, (limit,))
@@ -22564,12 +22569,13 @@ async def debug_digest_check(request: Request, ticker: str):
 
             # Get sample articles
             cur.execute("""
-                SELECT a.id, a.title, ta.category,
+                SELECT a.id, a.title, tf.category,
                        ta.ai_summary IS NOT NULL as has_ai_summary,
                        a.scraped_content IS NOT NULL as has_content,
                        ta.sent_in_digest
                 FROM articles a
                 JOIN ticker_articles ta ON a.id = ta.article_id
+                JOIN ticker_feeds tf ON ta.feed_id = tf.feed_id AND ta.ticker = tf.ticker
                 WHERE ta.ticker = %s
                 AND ta.found_at >= %s
                 ORDER BY ta.found_at DESC
@@ -28568,11 +28574,13 @@ async def regenerate_email_api(request: Request):
             if real_article_ids:
                 cur.execute("""
                     SELECT a.id, a.title, a.url, a.resolved_url, a.domain, a.published_at,
-                           ta.category, ta.search_keyword, ta.competitor_ticker,
+                           tf.category, f.search_keyword, f.feed_ticker,
                            ta.relevance_score, ta.relevance_reason,
                            ta.ai_summary
                     FROM articles a
                     JOIN ticker_articles ta ON a.id = ta.article_id
+                    JOIN ticker_feeds tf ON ta.feed_id = tf.feed_id AND ta.ticker = tf.ticker
+                    JOIN feeds f ON ta.feed_id = f.id
                     WHERE ta.ticker = %s
                     AND a.id = ANY(%s)
                     AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
@@ -31356,9 +31364,11 @@ def process_hourly_alerts():
                     query = f"""
                         SELECT DISTINCT ON (a.id)
                             a.id, a.title, a.url, a.resolved_url, a.domain, a.published_at,
-                            ta.ticker, ta.category, ta.search_keyword, ta.competitor_ticker, ta.value_chain_type
+                            ta.ticker, tf.category, f.search_keyword, f.feed_ticker, tf.value_chain_type
                         FROM articles a
                         JOIN ticker_articles ta ON a.id = ta.article_id
+                        JOIN ticker_feeds tf ON ta.feed_id = tf.feed_id AND ta.ticker = tf.ticker
+                        JOIN feeds f ON ta.feed_id = f.id
                         WHERE ta.ticker = ANY(%s)
                         AND a.created_at {operator} %s
                         AND a.created_at <= %s

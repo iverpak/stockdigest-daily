@@ -519,8 +519,8 @@ def review_phase2_context_quality(
         # Add Transcript if available
         if 'transcript' in filings:
             t = filings['transcript']
-            quarter = t.get('quarter', 'Unknown')
-            year = t.get('year', 'Unknown')
+            quarter = t.get('fiscal_quarter', 'Unknown')
+            year = t.get('fiscal_year', 'Unknown')
             company = t.get('company_name', ticker)
             filings_text += f"EARNINGS TRANSCRIPT ({quarter} {year}):\n\n"
             filings_text += f"{t['text']}\n\n\n"

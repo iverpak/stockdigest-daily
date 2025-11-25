@@ -182,10 +182,10 @@ def _fetch_available_filings(ticker: str, db_func) -> Dict[str, Dict]:
         with db_func() as conn, conn.cursor() as cur:
             # 1. Latest Transcript (prefer Claude if multiple exist for same period)
             cur.execute("""
-                SELECT summary_text, quarter, year, report_date, company_name, ai_provider
+                SELECT summary_text, fiscal_quarter, fiscal_year, report_date, company_name, ai_provider
                 FROM transcript_summaries
                 WHERE ticker = %s AND report_type = 'transcript'
-                ORDER BY year DESC, quarter DESC,
+                ORDER BY fiscal_year DESC, fiscal_quarter DESC,
                          CASE WHEN ai_provider = 'claude' THEN 0 ELSE 1 END
                 LIMIT 1
             """, (ticker,))
@@ -194,12 +194,12 @@ def _fetch_available_filings(ticker: str, db_func) -> Dict[str, Dict]:
             if row and row['summary_text']:
                 filings['transcript'] = {
                     'text': row['summary_text'],
-                    'quarter': row['quarter'],
-                    'year': row['year'],
+                    'fiscal_quarter': row['fiscal_quarter'],
+                    'fiscal_year': row['fiscal_year'],
                     'date': row['report_date'],
                     'company_name': row['company_name']
                 }
-                LOG.debug(f"[{ticker}] Found Transcript: {row['quarter']} {row['year']}")
+                LOG.debug(f"[{ticker}] Found Transcript: {row['fiscal_quarter']} {row['fiscal_year']}")
 
             # 2. Latest 10-Q
             cur.execute("""

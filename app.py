@@ -26062,24 +26062,24 @@ async def email_research_api(request: Request):
                 # Include ai_provider to fetch the specific version (Gemini or Sonnet)
                 if ai_provider:
                     cur.execute("""
-                        SELECT ticker, quarter, year, report_date, summary_text, summary_json, ai_provider, ai_model
+                        SELECT ticker, fiscal_quarter, fiscal_year, report_date, summary_text, summary_json, ai_provider, ai_model
                         FROM transcript_summaries
                         WHERE ticker = %s
                           AND report_type = 'transcript'
-                          AND quarter = %s
-                          AND year = %s
+                          AND fiscal_quarter = %s
+                          AND fiscal_year = %s
                           AND ai_provider = %s
                         LIMIT 1
                     """, (ticker, quarter, year, ai_provider))
                 else:
                     # Fallback: fetch any version if ai_provider not specified
                     cur.execute("""
-                        SELECT ticker, quarter, year, report_date, summary_text, summary_json, ai_provider, ai_model
+                        SELECT ticker, fiscal_quarter, fiscal_year, report_date, summary_text, summary_json, ai_provider, ai_model
                         FROM transcript_summaries
                         WHERE ticker = %s
                           AND report_type = 'transcript'
-                          AND quarter = %s
-                          AND year = %s
+                          AND fiscal_quarter = %s
+                          AND fiscal_year = %s
                         LIMIT 1
                     """, (ticker, quarter, year))
 
@@ -26093,8 +26093,8 @@ async def email_research_api(request: Request):
 
                 content = doc['summary_text']  # Still used for content check
                 model_label = f" ({doc.get('ai_model', doc.get('ai_provider', 'AI'))})" if ai_provider else ""
-                # doc['quarter'] from database already has "Q" prefix (e.g., "Q2")
-                subject = f"{ticker} {doc['quarter']} {year} Earnings Call Transcript{model_label}"
+                # doc['fiscal_quarter'] from database already has "Q" prefix (e.g., "Q2")
+                subject = f"{ticker} {doc['fiscal_quarter']} {year} Earnings Call Transcript{model_label}"
 
             elif research_type == 'press_release':
                 return {"status": "error", "message": "Press release emailing not supported. Use Company Releases instead."}
@@ -26544,11 +26544,11 @@ async def get_ticker_research_status(ticker: str = Query(...), token: str = Quer
 
             # Check generated transcripts
             cur.execute("""
-                SELECT quarter, year, generated_at
+                SELECT fiscal_quarter, fiscal_year, generated_at
                 FROM transcript_summaries
                 WHERE ticker = %s AND report_type = 'transcript'
             """, (ticker,))
-            generated_transcripts = {f"{row['year']}-Q{row['quarter']}": str(row['generated_at']) for row in cur.fetchall()}
+            generated_transcripts = {f"{row['fiscal_year']}-Q{row['fiscal_quarter']}": str(row['generated_at']) for row in cur.fetchall()}
 
             # Check generated press releases (NEW: company_releases table)
             cur.execute("""

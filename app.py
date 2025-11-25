@@ -3675,6 +3675,87 @@ def _wait_for_polygon_rate_limit():
     # Record this call
     POLYGON_CALL_TIMES.append(time.time())
 
+
+def get_stock_data_fmp(ticker: str) -> Optional[Dict]:
+    """
+    Fetch financial data from FMP (Financial Modeling Prep) as PRIMARY source.
+
+    Uses two endpoints:
+    - /v3/quote/{ticker}: Current price, daily change, market cap
+    - /v3/stock-price-change/{ticker}: Pre-calculated YTD return
+
+    Returns dict with financial_* keys matching yfinance format, or None on failure.
+    """
+    if not FMP_API_KEY:
+        LOG.warning("FMP_API_KEY not set, skipping FMP")
+        return None
+
+    try:
+        LOG.info(f"📊 Fetching stock data from FMP for {ticker}")
+
+        # Get quote data (price, daily change)
+        quote_url = f"https://financialmodelingprep.com/api/v3/quote/{ticker}"
+        quote_resp = requests.get(quote_url, params={"apikey": FMP_API_KEY}, timeout=10)
+
+        if quote_resp.status_code != 200:
+            LOG.warning(f"FMP quote API error {quote_resp.status_code} for {ticker}")
+            return None
+
+        quote_data = quote_resp.json()
+        if not quote_data or len(quote_data) == 0:
+            LOG.warning(f"FMP returned no quote data for {ticker}")
+            return None
+
+        quote = quote_data[0]
+        current_price = quote.get('price')
+
+        if not current_price:
+            LOG.warning(f"FMP missing price data for {ticker}")
+            return None
+
+        # Get price change data (YTD, 1D, etc.)
+        change_url = f"https://financialmodelingprep.com/api/v3/stock-price-change/{ticker}"
+        change_resp = requests.get(change_url, params={"apikey": FMP_API_KEY}, timeout=10)
+
+        ytd_return = None
+        if change_resp.status_code == 200:
+            change_data = change_resp.json()
+            if change_data and len(change_data) > 0:
+                ytd_return = change_data[0].get('ytd')
+
+        # Build financial data dict (matching yfinance format)
+        daily_change = quote.get('changesPercentage')
+
+        financial_data = {
+            'financial_last_price': float(current_price),
+            'financial_price_change_pct': float(daily_change) if daily_change is not None else None,
+            'financial_yesterday_return_pct': float(daily_change) if daily_change is not None else None,
+            'financial_ytd_return_pct': float(ytd_return) if ytd_return is not None else None,
+            'financial_market_cap': float(quote.get('marketCap')) if quote.get('marketCap') else None,
+            'financial_enterprise_value': None,  # Not in quote endpoint
+            'financial_volume': float(quote.get('volume')) if quote.get('volume') else None,
+            'financial_avg_volume': float(quote.get('avgVolume')) if quote.get('avgVolume') else None,
+            'financial_analyst_target': None,
+            'financial_analyst_range_low': None,
+            'financial_analyst_range_high': None,
+            'financial_analyst_count': None,
+            'financial_analyst_recommendation': None,
+            'financial_snapshot_date': datetime.now(pytz.timezone('America/Toronto')).strftime('%Y-%m-%d')
+        }
+
+        change_str = f"{daily_change:+.2f}%" if daily_change is not None else "N/A"
+        ytd_str = f", YTD={ytd_return:+.2f}%" if ytd_return is not None else ""
+        LOG.info(f"✅ FMP data retrieved for {ticker}: Price=${current_price:.2f}, Change={change_str}{ytd_str}")
+        return financial_data
+
+    except requests.exceptions.Timeout:
+        LOG.warning(f"FMP timeout for {ticker}")
+        return None
+    except Exception as e:
+        LOG.error(f"❌ FMP failed for {ticker}: {e}")
+        return None
+
+
 def get_stock_context_polygon(ticker: str) -> Optional[Dict]:
     """
     Fetch financial data from Polygon.io as fallback when yfinance fails.
@@ -3835,15 +3916,28 @@ def fetch_company_name_from_yfinance(ticker: str, timeout: int = 10) -> Optional
 
 def get_stock_context(ticker: str, retries: int = 3, timeout: int = 10) -> Optional[Dict]:
     """
-    Fetch financial data with yfinance (primary) and Polygon.io (fallback).
+    Fetch financial data with 3-tier fallback: FMP (primary) → yfinance → Polygon.io
 
-    Returns dict with price + yesterday's return (required for Email #3).
+    Priority order:
+    1. FMP (Financial Modeling Prep) - Fast, reliable, has pre-calculated YTD
+    2. yfinance - Full data but unreliable (timeouts, rate limits)
+    3. Polygon.io - Emergency fallback, price + daily return only (no YTD)
+
+    Returns dict with price + daily return + YTD (required for emails).
     Other fields (market cap, analysts) are optional extras.
 
     Validation: Only requires price data (not market cap).
     This supports forex (EURUSD=X), indices (^GSPC), crypto (BTC-USD), stocks (AAPL).
     """
 
+    # Tier 1: FMP (Primary) - Fast, reliable, has YTD
+    fmp_data = get_stock_data_fmp(ticker)
+    if fmp_data and fmp_data.get('financial_last_price'):
+        return fmp_data
+
+    LOG.info(f"[{ticker}] FMP failed, trying yfinance fallback...")
+
+    # Tier 2: yfinance (Fallback) - Full data but unreliable
     for attempt in range(retries):
         try:
             LOG.info(f"Fetching financial data for {ticker} (attempt {attempt + 1}/{retries})")
@@ -3872,7 +3966,8 @@ def get_stock_context(ticker: str, retries: int = 3, timeout: int = 10) -> Optio
                     time.sleep(2 ** attempt)  # Exponential backoff
                     continue
                 else:
-                    return None
+                    # Last attempt timed out - break to try Polygon
+                    break
 
             # Check for errors
             if result['error']:
@@ -3960,18 +4055,17 @@ def get_stock_context(ticker: str, retries: int = 3, timeout: int = 10) -> Optio
             if attempt < retries - 1:
                 time.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
             else:
-                LOG.error(f"❌ yfinance failed after {retries} attempts for {ticker}")
-                # Don't return None yet - try Polygon.io fallback
+                LOG.warning(f"[{ticker}] yfinance failed after {retries} attempts, trying Polygon.io...")
 
-    # yfinance failed, try Polygon.io as fallback
-    LOG.info(f"🔄 Trying Polygon.io fallback for {ticker}...")
+    # Tier 3: Polygon.io (Emergency fallback) - Price + daily return only, no YTD
+    LOG.info(f"[{ticker}] 🔄 Trying Polygon.io emergency fallback...")
     polygon_data = get_stock_context_polygon(ticker)
 
     if polygon_data:
-        LOG.info(f"✅ Polygon.io fallback succeeded for {ticker}")
+        LOG.info(f"[{ticker}] ✅ Polygon.io fallback succeeded (note: no YTD data)")
         return polygon_data
     else:
-        LOG.error(f"❌ Both yfinance and Polygon.io failed for {ticker}")
+        LOG.error(f"[{ticker}] ❌ All stock data sources failed (FMP, yfinance, Polygon)")
         return None
 
 # Backwards compatability ticker_reference to ticker_config
@@ -15784,44 +15878,26 @@ def get_filing_stock_data(ticker: str) -> dict:
     Get real-time stock data for filing emails (10-K, 10-Q, Transcripts, Press Releases).
 
     Priority order:
-    1. Try yfinance (live data with 3 retries, 10s timeout)
-    2. Try Polygon.io (fallback, rate limited)
-    3. Try ticker_reference database (cached data)
-    4. Return all None if everything fails
+    1. FMP (Financial Modeling Prep) - Fast, reliable, has pre-calculated YTD
+    2. yfinance - Full data but unreliable (timeouts, rate limits)
+    3. Polygon.io - Emergency fallback, price + daily return only (no YTD)
+    4. Return all None if everything fails (email will hide price card)
+
+    NOTE: Database fallback removed (Nov 2025) - stale data is worse than no data.
 
     Returns:
         dict with template variables: stock_price, price_change_pct, price_change_color,
         ytd_return_pct, ytd_return_color, market_status, return_label
         All values are None if data fetch completely fails.
     """
-    LOG.info(f"[{ticker}] Fetching stock data for filing email (live → database → None)")
+    LOG.info(f"[{ticker}] Fetching stock data for email (FMP → yfinance → Polygon)")
 
-    # Try live data first (yfinance → Polygon with retries)
-    live_data = get_stock_context(ticker)  # Already has 3 retries + 10s timeout + Polygon fallback
+    # Get live data using 3-tier fallback (FMP → yfinance → Polygon)
+    live_data = get_stock_context(ticker)
 
-    source_data = None
-    source_type = None
-
-    if live_data and live_data.get('financial_last_price'):
-        source_data = live_data
-        source_type = "live (yfinance/Polygon)"
-    else:
-        # Fallback to database
-        LOG.info(f"[{ticker}] Live data failed, falling back to ticker_reference database")
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                SELECT financial_last_price, financial_price_change_pct, financial_ytd_return_pct
-                FROM ticker_reference WHERE ticker = %s
-            """, (ticker,))
-            db_data = cur.fetchone()
-
-            if db_data and db_data.get('financial_last_price'):
-                source_data = db_data
-                source_type = "database (ticker_reference)"
-
-    # If all sources failed, return None for everything
-    if not source_data or not source_data.get('financial_last_price'):
-        LOG.warning(f"[{ticker}] ⚠️ All price sources failed (yfinance, Polygon, database) - email will show no price")
+    # If all sources failed, return None for everything (email will hide price card)
+    if not live_data or not live_data.get('financial_last_price'):
+        LOG.warning(f"[{ticker}] ⚠️ All price sources failed (FMP, yfinance, Polygon) - email will hide price card")
         return {
             'stock_price': None,
             'price_change_pct': None,
@@ -15832,15 +15908,13 @@ def get_filing_stock_data(ticker: str) -> dict:
             'return_label': None
         }
 
-    # Successfully got data - format it
-    LOG.info(f"[{ticker}] ✅ Stock data fetched from {source_type}")
-
+    # Successfully got data - format for templates
     market_is_open = is_market_open()
-    daily_return = source_data.get('financial_price_change_pct')
-    ytd_return = source_data.get('financial_ytd_return_pct')
+    daily_return = live_data.get('financial_price_change_pct')
+    ytd_return = live_data.get('financial_ytd_return_pct')
 
     return {
-        'stock_price': f"${source_data['financial_last_price']:.2f}",
+        'stock_price': f"${live_data['financial_last_price']:.2f}",
         'price_change_pct': f"{'+' if daily_return >= 0 else ''}{daily_return:.2f}%" if daily_return is not None else None,
         'price_change_color': "#4ade80" if daily_return is not None and daily_return >= 0 else "#ef4444",
         'ytd_return_pct': f"{'+' if ytd_return >= 0 else ''}{ytd_return:.2f}%" if ytd_return is not None else None,

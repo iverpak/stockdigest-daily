@@ -26261,25 +26261,22 @@ async def email_research_api(request: Request):
 
         elif research_type == 'transcript':
             # Use transcript email v2 template (JSON-based)
+            from modules.transcript_summaries import generate_transcript_email_v2
+
             json_output = doc['summary_json'] if isinstance(doc['summary_json'], dict) else json.loads(doc['summary_json'])
+
+            # Extract quarter number from "Q3" format (DB stores "Q3", function expects 3)
+            quarter_num = int(doc['fiscal_quarter'].replace('Q', '')) if doc['fiscal_quarter'] else None
 
             email_data = generate_transcript_email_v2(
                 ticker=ticker,
-                company_name=company_name,
-                report_type='transcript',
-                quarter=doc['quarter'],
-                year=doc['year'],
-                report_date=doc.get('report_date'),
-                pr_title=None,
                 json_output=json_output,
-                fmp_url=f"https://financialmodelingprep.com/financial-summary/{ticker}",
-                stock_price=stock_data['stock_price'],
-                price_change_pct=stock_data['price_change_pct'],
-                price_change_color=stock_data['price_change_color'],
-                ytd_return_pct=stock_data['ytd_return_pct'],
-                ytd_return_color=stock_data['ytd_return_color'],
-                market_status=stock_data['market_status'],
-                return_label=stock_data['return_label']
+                config=config,
+                content_type='transcript',
+                quarter=quarter_num,
+                year=doc['fiscal_year'],
+                report_date=doc.get('report_date'),
+                stock_data=stock_data
             )
             html_body = email_data['html']
             subject = email_data['subject']

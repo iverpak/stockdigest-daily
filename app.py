@@ -16766,7 +16766,7 @@ async def process_transcript_generation_phase(job: dict):
                 AND column_name IN ('summary_json', 'prompt_version')
             """)
             rows = cur.fetchall()
-            existing_columns = {row[0] for row in rows}
+            existing_columns = {row['column_name'] for row in rows}
             has_json_columns = 'summary_json' in existing_columns and 'prompt_version' in existing_columns
 
             fmp_url = f"https://financialmodelingprep.com/api/v3/earning_call_transcript/{ticker}?quarter={quarter}&year={year}"

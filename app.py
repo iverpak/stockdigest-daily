@@ -875,7 +875,7 @@ SPAM_DOMAINS = {
     "stockstory.org", "www.stockstory.org",
     "news.stocktradersdaily.com", "stocktradersdaily.com", "www.stocktradersdaily.com",
     "earlytimes.in", "www.earlytimes.in",
-    "investing.com", "www.investing.com",
+    "investing.com", "www.investing.com", "in.investing.com",  # Including India subdomain
     "fool.com", "www.fool.com", "fool.ca", "www.fool.ca",
     "marketsmojo.com", "www.marketsmojo.com",
     "stocktitan.net", "www.stocktitan.net",
@@ -913,6 +913,9 @@ SPAM_DOMAINS = {
     # Retail stock picking sites - automated content and listicles (Nov 2025)
     "tradingview.com", "www.tradingview.com",  # "Why [Stock] Is Up Today" automated daily content, multi-ticker noise
     "theglobeandmail.com", "www.theglobeandmail.com",  # "X Stocks to Buy/Avoid" retail listicles, multi-stock roundups
+    # AI slop / low-quality aggregators (Nov 2025)
+    "meyka.com", "www.meyka.com",  # Unknown/suspicious finance domain
+    "ad-hoc-news.de", "www.ad-hoc-news.de",  # German aggregator, republishes content
 }
 
 QUALITY_DOMAINS = {

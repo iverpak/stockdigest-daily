@@ -283,8 +283,8 @@ def _build_phase2_user_content(ticker: str, phase1_json: Dict, filings: Dict) ->
     # Add Transcript if available (matches old format)
     if 'transcript' in filings:
         t = filings['transcript']
-        quarter = t['quarter']
-        year = t['year']
+        quarter = t['fiscal_quarter']
+        year = t['fiscal_year']
         company = t['company_name'] or ticker
         date = t['date'].strftime('%b %d, %Y') if t['date'] else 'Unknown Date'
 

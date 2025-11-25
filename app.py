@@ -6336,10 +6336,20 @@ async def process_article_batch_async(articles_batch: List[Dict], categories: Un
                 "ai_model": None
             })
         elif result["success"]:
-            # Check if article was rejected by relevance gate
+            # Check if article was rejected by relevance gate OR retail filter
             if i in relevance_scores and relevance_scores[i]["is_rejected"]:
                 article_category = categories[i] if i < len(categories) else categories[0]
-                LOG.info(f"[{analysis_ticker}] ⏭️ Skipping AI summary for rejected {article_category} article {i} (score: {relevance_scores[i]['score']:.1f}/10)")
+
+                # Distinguish between retail filter vs AI relevance scoring rejection
+                if relevance_scores[i].get("provider") == "retail_filter":
+                    # Retail platform content - use "filtered" tag (same as non-industry articles)
+                    ai_model_tag = "filtered"
+                    LOG.info(f"[{analysis_ticker}] 🚫 Skipping AI summary for retail-filtered {article_category} article {i}")
+                else:
+                    # AI relevance scoring rejected - use "low_relevance" tag
+                    ai_model_tag = "low_relevance"
+                    LOG.info(f"[{analysis_ticker}] ⏭️ Skipping AI summary for rejected {article_category} article {i} (score: {relevance_scores[i]['score']:.1f}/10)")
+
                 # Add to results as successful scrape but no AI summary
                 results.append({
                     "article_id": articles_batch[i]["id"],
@@ -6347,7 +6357,7 @@ async def process_article_batch_async(articles_batch: List[Dict], categories: Un
                     "success": True,
                     "scraped_content": result["scraped_content"],
                     "ai_summary": None,  # Rejected articles get no summary
-                    "ai_model": "low_relevance",  # Mark as rejected by relevance gate
+                    "ai_model": ai_model_tag,
                     "content_scraped_at": result["content_scraped_at"],
                     "scraping_error": None
                 })

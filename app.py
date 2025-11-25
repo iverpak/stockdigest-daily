@@ -25978,8 +25978,8 @@ async def delete_transcript_api(request: Request):
                         DELETE FROM transcript_summaries
                         WHERE ticker = %s
                           AND report_type = 'transcript'
-                          AND quarter = %s
-                          AND year = %s
+                          AND fiscal_quarter = %s
+                          AND fiscal_year = %s
                           AND ai_provider = %s
                     """, (ticker, quarter, year, ai_provider))
                 else:
@@ -25988,8 +25988,8 @@ async def delete_transcript_api(request: Request):
                         DELETE FROM transcript_summaries
                         WHERE ticker = %s
                           AND report_type = 'transcript'
-                          AND quarter = %s
-                          AND year = %s
+                          AND fiscal_quarter = %s
+                          AND fiscal_year = %s
                     """, (ticker, quarter, year))
 
                 identifier = f"Q{quarter} {year} ({ai_provider or 'all versions'})"

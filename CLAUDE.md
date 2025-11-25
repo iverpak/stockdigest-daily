@@ -259,13 +259,13 @@ restart. This prevents memory buildup from zombie threads and ensures all jobs c
 1. **Job Submission** (`/jobs/submit`): Submit batch of tickers for processing
 2. **Background Worker**: Polls database, processes jobs sequentially with full isolation
 3. **Status Polling** (`/jobs/batch/{id}`): Real-time progress monitoring
-4. Each job executes: Ingest Phase → Digest Phase (3 Emails) → GitHub Commit
+4. Each job executes: Ingest Phase → Digest Phase (3 Emails) → Finalize
 
 **Processing Timeline per Ticker:**
 - 0-60%: Ingest Phase - **Async feed parsing** (5.5x faster), AI triage, Email #1 (Article Selection QA)
 - 60-95%: Digest Phase - Content scraping, AI analysis, Email #2 (Content QA)
 - 95-97%: Email #3 Generation - User-facing intelligence report (fetches executive summary from database)
-- 97-99%: GitHub Commit - Incremental commit to data repository
+- 97-99%: Finalize - Job completion (NOTE: GitHub commits removed Nov 25, 2025)
 - 100%: Complete
 
 #### Async Feed Ingestion (NEW - Production)
@@ -1268,8 +1268,10 @@ PowerShell → /jobs/batch/{id} (<1s) → Real-time status (poll every 20s)
 4. Phase 1: Ingest (RSS, AI triage, Email #1) → Update progress: 60%
 5. Phase 2: Digest (scrape, AI analysis, Email #2) → Update progress: 95%
 6. Email #3: User intelligence report (fetch summary from DB) → Update progress: 97%
-7. Phase 3: GitHub commit → Update progress: 99%
+7. Finalize → Update progress: 99%
 8. Mark complete → Release lock → Poll for next job
+
+NOTE (Nov 25, 2025): Per-ticker GitHub commits removed. CSV is source of truth.
 ```
 
 **Email Timeline:**
@@ -1491,22 +1493,21 @@ MAX_CONCURRENT_JOBS=3  # Number of tickers to process simultaneously (default: 2
 
 ### GitHub Commit Logic
 
-**Smart Deployment Control:**
-- Each ticker checks if it's the LAST job in batch
-- Query: `COUNT(*) WHERE status IN ('queued', 'processing')`
-- **NOT last:** `skip_render=TRUE` → `[skip render]` in commit (no deployment)
-- **IS last:** `skip_render=FALSE` → Normal commit (triggers Render deployment)
+**UPDATED (Nov 25, 2025): Per-Ticker Commits REMOVED**
 
-**Example with 5 Tickers:**
-```
-RY.TO finishes → 4 remaining → [skip render]
-TD.TO finishes → 3 remaining → [skip render]
-VST finishes   → 2 remaining → [skip render]
-CEG finishes   → 1 remaining → [skip render]
-MO finishes    → 0 remaining → DEPLOYS! 🚀
-```
+Per-ticker GitHub commits have been removed entirely. The previous "smart deployment control" logic is no longer needed because:
+- CSV (`ticker_reference.csv`) is the source of truth
+- Database doesn't change during processing (no AI enhancement)
+- No data needs to be committed back to GitHub after each ticker
 
-**Result:** Only ONE deployment per batch, regardless of batch size (2, 5, or 100 tickers). **No scheduled commits needed!**
+**Previous Behavior (REMOVED):**
+- Each ticker would commit `ticker_reference.csv` to GitHub after processing
+- Last ticker in batch would trigger Render deployment
+
+**Current Behavior:**
+- No commits during job processing
+- Daily cron commit (`python app.py commit`) available if manual sync needed
+- Cleaner git history, faster processing
 
 ### Testing & Validation
 
@@ -2019,9 +2020,11 @@ python app.py check_filings
 - `cron_ingest()` - Line 12730 (RSS feed processing & database-first triage)
 - Database-first triage query - Lines 12862-12916 (Pulls from DB, not RSS)
 
-**Digest & Commit:**
+**Digest:**
 - `cron_digest()` - Line 13335 (Digest generation - called by job queue worker)
-- `safe_incremental_commit()` - Line 14732 (GitHub commit)
+
+**NOTE (Nov 25, 2025):** `process_commit_phase()` removed - per-ticker GitHub commits no longer occur.
+`safe_incremental_commit()` endpoint still exists but is not called from job processing.
 
 ## Claude API Prompt Caching (2023-06-01)
 
@@ -2889,6 +2892,83 @@ Add to Migration History section explaining:
 ---
 
 ## Migration History
+
+### November 25, 2025: Feed Architecture Stabilization
+
+**Objective:** Prevent AI from overwriting ticker metadata during daily processing. CSV (`ticker_reference.csv`) is now the single source of truth for all ticker data.
+
+**Problem Solved:**
+- AI enhancement was running during every ticker processing job (via `force_refresh=True`)
+- AI-generated competitors/upstream/downstream would overwrite CSV data in database
+- Per-ticker GitHub commits would propagate corrupted data back to CSV
+- Result: Feed drift (e.g., AMD → Intel → AMD cycling as AI gave different answers)
+
+**Changes Made:**
+
+**1. Removed AI Enhancement Block** (`get_or_create_enhanced_ticker_metadata()`)
+- Removed `force_refresh` parameter entirely
+- Removed `needs_enhancement` logic block (~55 lines)
+- Function now returns database data directly for existing tickers
+- AI fallback preserved ONLY for truly new tickers (not in database)
+
+**2. Fixed `TickerManager.get_or_create_metadata()`**
+- Same treatment: removed `force_refresh`, returns database data only
+- AI fallback preserved for new tickers
+
+**3. Removed Per-Ticker GitHub Commits**
+- Removed `process_commit_phase()` function (dead code)
+- Removed commit block from `process_ticker_job()`
+- Eliminates unnecessary git history noise
+
+**4. Updated Call Sites**
+- Line 17773: Job failsafe - removed `force_refresh=True`
+- Line 20572: `/admin/init` - removed `force_refresh=True`
+- Line 7469: Wrapper function - removed `force_refresh` parameter
+
+**Architecture Before:**
+```
+CSV (GitHub) → Database (startup sync)
+     ↑              ↓
+     └── AI corrupts database (force_refresh=True)
+              ↓
+         Database → CSV (per-ticker commits)
+              ↑
+         Corruption propagates back
+```
+
+**Architecture After (November 25, 2025):**
+```
+CSV (GitHub) → Database (startup sync) → Feeds
+                     ↓
+              Read-only for processing
+                     ↓
+              NO AI enhancement
+              NO database writes
+              NO per-ticker commits
+```
+
+**What Still Works:**
+- ✅ CSV sync from GitHub on startup (source of truth)
+- ✅ Feed creation based on database data
+- ✅ AI generation for truly NEW tickers (not in CSV/database)
+- ✅ AI functions preserved (for future explicit admin endpoints)
+- ✅ Daily cron commit (if manually enabled)
+
+**Functions Preserved (Not Deleted):**
+- `generate_enhanced_ticker_metadata_with_ai()` - Still exists, not called automatically
+- `update_ticker_reference_ai_data()` - Still exists, not called
+- `TickerManager.store_metadata()` - Still exists, not called for existing tickers
+
+**Benefits:**
+- ✅ Feeds stable (based on CSV, not AI whims)
+- ✅ No more relationship drift
+- ✅ Cleaner git history (no per-ticker commits)
+- ✅ Faster processing (no AI calls for existing tickers)
+- ✅ Future-ready (AI functions preserved for IPOs/updates)
+
+**Lines Changed:** ~100 lines removed/modified in `app.py`
+
+---
 
 ### November 2025: Company Releases Migration
 

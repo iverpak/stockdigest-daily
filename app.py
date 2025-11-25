@@ -7466,9 +7466,9 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
     </div>
     """
 
-def get_or_create_ticker_metadata(ticker: str, force_refresh: bool = False) -> Dict:
-    """Wrapper for backward compatibility"""
-    return ticker_manager.get_or_create_metadata(ticker, force_refresh)
+def get_or_create_ticker_metadata(ticker: str) -> Dict:
+    """Wrapper for backward compatibility - delegates to TickerManager"""
+    return ticker_manager.get_or_create_metadata(ticker)
 
 def build_feed_urls(ticker: str, keywords: Dict) -> List[Dict]:
     """NEW ARCHITECTURE: Build feed URLs based on ticker metadata (without creating feeds)"""
@@ -10513,63 +10513,61 @@ feed_manager = FeedManager()
 
 class TickerManager:
     @staticmethod
-    def get_or_create_metadata(ticker: str, force_refresh: bool = False) -> Dict:
-        """Unified ticker metadata management - ALWAYS returns a valid dict"""
-        # Check database first
-        if not force_refresh:
-            with db() as conn, conn.cursor() as cur:
-                cur.execute("""
-                    SELECT ticker, company_name,
-                           industry_keyword_1, industry_keyword_2, industry_keyword_3,
-                           competitor_1_name, competitor_1_ticker,
-                           competitor_2_name, competitor_2_ticker,
-                           competitor_3_name, competitor_3_ticker,
-                           ai_generated
-                    FROM ticker_reference WHERE ticker = %s AND active = TRUE
-                """, (ticker,))
-                config = cur.fetchone()
+    def get_or_create_metadata(ticker: str) -> Dict:
+        """Get ticker metadata from database. Returns database data for existing tickers.
 
-                if config:
-                    # Reconstruct industry_keywords array from individual columns
-                    industry_keywords = []
-                    for i in range(1, 4):
-                        kw = config.get(f"industry_keyword_{i}")
-                        if kw:
-                            industry_keywords.append(kw)
+        NOTE (Nov 2025): AI enhancement during daily processing has been DISABLED.
+        - CSV (ticker_reference.csv) is the source of truth
+        - AI enhancement functions still exist but are not called automatically
+        - For future AI enhancement, use explicit admin endpoints
+        """
+        # Check database first - this is now the ONLY path for existing tickers
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT ticker, company_name,
+                       industry_keyword_1, industry_keyword_2, industry_keyword_3,
+                       competitor_1_name, competitor_1_ticker,
+                       competitor_2_name, competitor_2_ticker,
+                       competitor_3_name, competitor_3_ticker,
+                       ai_generated
+                FROM ticker_reference WHERE ticker = %s AND active = TRUE
+            """, (ticker,))
+            config = cur.fetchone()
 
-                    # Reconstruct competitors array from individual columns
-                    competitors = []
-                    for i in range(1, 4):
-                        comp_name = config.get(f"competitor_{i}_name")
-                        comp_ticker = config.get(f"competitor_{i}_ticker")
-                        if comp_name:
-                            competitors.append({
-                                "name": comp_name,
-                                "ticker": comp_ticker if comp_ticker else None
-                            })
+            if config:
+                # Reconstruct industry_keywords array from individual columns
+                industry_keywords = []
+                for i in range(1, 4):
+                    kw = config.get(f"industry_keyword_{i}")
+                    if kw:
+                        industry_keywords.append(kw)
 
-                    return {
-                        "company_name": config.get("company_name", ticker),
-                        "industry_keywords": industry_keywords,
-                        "competitors": competitors
-                    }
-        
-        # Generate with AI
-        ai_metadata = generate_enhanced_ticker_metadata_with_ai(ticker)
-        
-        # ALWAYS store something, even if AI failed
-        if ai_metadata:
-            TickerManager.store_metadata(ticker, ai_metadata)
-            return ai_metadata
-        else:
-            # Create and store fallback metadata
-            fallback_metadata = {
-                "company_name": ticker,
-                "industry_keywords": [],
-                "competitors": []
-            }
-            TickerManager.store_metadata(ticker, fallback_metadata)
-            return fallback_metadata
+                # Reconstruct competitors array from individual columns
+                competitors = []
+                for i in range(1, 4):
+                    comp_name = config.get(f"competitor_{i}_name")
+                    comp_ticker = config.get(f"competitor_{i}_ticker")
+                    if comp_name:
+                        competitors.append({
+                            "name": comp_name,
+                            "ticker": comp_ticker if comp_ticker else None
+                        })
+
+                LOG.info(f"[TickerManager] Found database data for {ticker}: {config.get('company_name')}")
+                return {
+                    "company_name": config.get("company_name", ticker),
+                    "industry_keywords": industry_keywords,
+                    "competitors": competitors
+                }
+
+        # No database record - return fallback (NO AI generation)
+        # This should rarely happen since all tickers should be in CSV
+        LOG.warning(f"[TickerManager] No database record for {ticker}, returning fallback")
+        return {
+            "company_name": ticker,
+            "industry_keywords": [],
+            "competitors": []
+        }
     
     @staticmethod
     def store_metadata(ticker: str, metadata: Dict):
@@ -11692,100 +11690,45 @@ def generate_enhanced_ticker_metadata_with_ai(ticker: str, company_name: str = N
     """
     return generate_ticker_metadata_with_fallback(ticker, company_name, sector, industry)
 
-def get_or_create_enhanced_ticker_metadata(ticker: str, force_refresh: bool = False) -> Dict:
-    """Get ticker metadata with reference table lookup first, then AI enhancement"""
+def get_or_create_enhanced_ticker_metadata(ticker: str) -> Dict:
+    """Get ticker metadata from reference table. Returns database data for existing tickers.
 
-    # CRITICAL: Force complete isolation by creating new string objects
-    isolated_ticker = str(ticker).strip()
-    isolated_force_refresh = bool(force_refresh)
+    NOTE (Nov 2025): AI enhancement during daily processing has been DISABLED.
+    - CSV (ticker_reference.csv) is the source of truth
+    - AI enhancement functions still exist but are not called automatically
+    - For future AI enhancement, use explicit admin endpoints
+    """
 
     # Normalize ticker format for consistent lookup
+    isolated_ticker = str(ticker).strip()
     normalized_ticker = normalize_ticker_format(isolated_ticker)
 
-    # CRITICAL DEBUG: Log the exact ticker being looked up
-    LOG.info(f"[METADATA_DEBUG] Input ticker: '{isolated_ticker}' -> normalized: '{normalized_ticker}'")
+    LOG.info(f"[METADATA] Looking up ticker: '{isolated_ticker}' -> normalized: '{normalized_ticker}'")
 
-    # Step 1: Use the new get_ticker_config wrapper for consistent data access
+    # Step 1: Use get_ticker_config for consistent data access
     config = get_ticker_config(normalized_ticker)
-    LOG.info(f"[METADATA_DEBUG] config returned for '{normalized_ticker}': {config}")
-    LOG.info(f"DEBUG: config bool check: {bool(config)}")
-    LOG.info(f"DEBUG: force_refresh: {isolated_force_refresh}")
-    
-    # === MINIMAL CHANGE: handle both force_refresh and normal path inside the config branch ===
+
     if config:
-        LOG.info("DEBUG: Entering enhancement path")
-        LOG.info(f"DEBUG: config exists: {bool(config)}, force_refresh: {force_refresh}")
-        LOG.info(f"DEBUG: config content: {config}")
-        LOG.info(f"Found ticker reference data for {ticker}: {config['company_name']}")
-        
-        # Data is already in the correct format from get_ticker_config()
+        LOG.info(f"[METADATA] Found ticker_reference data for {ticker}: {config['company_name']}")
+
+        # Build metadata from database - NO AI enhancement
         metadata = {
-            "ticker": normalized_ticker,  # keep normalized for consistency
+            "ticker": normalized_ticker,
             "company_name": config["company_name"],
             "name": config["company_name"],
             "sector": config.get("sector", ""),
             "industry": config.get("industry", ""),
             "sub_industry": config.get("sub_industry", ""),
             "industry_keywords": config.get("industry_keywords", []),
-            "competitors": config.get("competitors", [])
+            "competitors": config.get("competitors", []),
+            "value_chain": config.get("value_chain", {"upstream": [], "downstream": []})
         }
-        
-        # === MINIMAL CHANGE: Enhancement happens if force_refresh OR fields are missing (and AI is available)
-        needs_enhancement = (
-            OPENAI_API_KEY and (
-                force_refresh or
-                not metadata["industry_keywords"] or
-                not metadata["competitors"]
-            )
-        )
-        
-        if needs_enhancement:
-            LOG.info(f"[AI_ENHANCEMENT_DEBUG] Enhancing {ticker} with AI - "
-                     f"keywords: {len(metadata.get('industry_keywords', []))}, "
-                     f"competitors: {len(metadata.get('competitors', []))}, "
-                     f"force_refresh={force_refresh}")
-            LOG.info(f"[AI_ENHANCEMENT_DEBUG] BEFORE AI: {ticker} company_name='{config['company_name']}'")
 
-            ai_metadata = generate_enhanced_ticker_metadata_with_ai(
-                normalized_ticker,
-                config["company_name"],
-                config.get("sector", ""),
-                config.get("industry", "")
-            )
-
-            LOG.info(f"[AI_ENHANCEMENT_DEBUG] AFTER AI: {ticker} ai_metadata company_name='{ai_metadata.get('company_name', 'MISSING') if ai_metadata else 'NO_AI_RESULT'}'")
-            LOG.info(f"[AI_ENHANCEMENT_DEBUG] AI result: {ai_metadata}")
-            
-            if ai_metadata:
-                # Only fill empty fields, don't overwrite existing data
-                if not metadata["industry_keywords"]:
-                    metadata["industry_keywords"] = ai_metadata.get("industry_keywords", [])
-
-                if not metadata["competitors"]:
-                    # AI returns "horizontal_competitors" (new format), fallback to "competitors" (old format)
-                    metadata["competitors"] = ai_metadata.get("horizontal_competitors", ai_metadata.get("competitors", []))
-
-                # Copy geographic_markets and subsidiaries from AI to metadata
-                metadata['geographic_markets'] = ai_metadata.get('geographic_markets', '')
-                metadata['subsidiaries'] = ai_metadata.get('subsidiaries', '')
-
-                # Copy value chain data from AI to metadata (upstream/downstream)
-                if ai_metadata.get('value_chain'):
-                    metadata['value_chain'] = ai_metadata.get('value_chain')
-
-                # === MINIMAL CHANGE: update using the NORMALIZED ticker so the row matches
-                update_ticker_reference_ai_data(normalized_ticker, metadata)
-
-                # Fetch financial data from yfinance if AI enhancement happened
-                LOG.info(f"Fetching financial data for {ticker} alongside AI metadata")
-                financial_data = get_stock_context(normalized_ticker)
-                if financial_data:
-                    # Update metadata dict with financial data
-                    metadata.update(financial_data)
-                    # Store financial data in database
-                    update_ticker_reference_financial_data(normalized_ticker, financial_data)
-                else:
-                    LOG.warning(f"Financial data fetch failed for {ticker}, keeping existing data")
+        # Copy additional fields from config if present
+        if config.get("geographic_markets"):
+            metadata["geographic_markets"] = config["geographic_markets"]
+        if config.get("subsidiaries"):
+            metadata["subsidiaries"] = config["subsidiaries"]
 
         return metadata
     
@@ -15685,39 +15628,10 @@ async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_a
         LOG.error(f"[JOB {job_id}] Stacktrace: {traceback.format_exc()}")
         raise
 
-async def process_commit_phase(job_id: str, ticker: str, batch_id: str = None, is_last_job: bool = False):
-    """Wrapper for commit logic with error handling - includes job_id for idempotency"""
-    try:
-        # Call the actual GitHub commit function (it's named safe_incremental_commit, not admin_safe_incremental_commit)
-        commit_func = globals().get('safe_incremental_commit')
-        if not commit_func:
-            raise RuntimeError("safe_incremental_commit not yet defined")
-
-        class MockRequest:
-            def __init__(self):
-                self.headers = {"x-admin-token": ADMIN_TOKEN}
-
-        class CommitBody(BaseModel):
-            tickers: List[str]
-            job_id: Optional[str] = None  # Pass job_id for idempotency tracking
-            skip_render: Optional[bool] = True  # Control [skip render] flag
-
-        LOG.info(f"[JOB {job_id}] Calling GitHub commit for {ticker}...")
-
-        # ALWAYS skip render for job queue commits (deployment only via 6:30 AM cron or manual button)
-        skip_render = True
-        LOG.info(f"[JOB {job_id}] [skip render] flag enabled - no deployment (job queue mode)")
-
-        # Convert job_id to string (PostgreSQL returns UUID objects)
-        result = await commit_func(MockRequest(), CommitBody(tickers=[ticker], job_id=str(job_id), skip_render=skip_render))
-
-        LOG.info(f"[JOB {job_id}] GitHub commit completed for {ticker}")
-        return result
-
-    except Exception as e:
-        LOG.error(f"[JOB {job_id}] COMMIT FAILED for {ticker}: {e}")
-        LOG.error(f"[JOB {job_id}] Stacktrace: {traceback.format_exc()}")
-        raise
+# NOTE (Nov 2025): process_commit_phase() REMOVED
+# - Per-ticker GitHub commits are no longer needed
+# - CSV is source of truth, database doesn't change during processing
+# - Function was only called from process_ticker_job() which now skips commits
 
 def get_worker_id():
     """Get unique worker ID (Render instance or hostname)"""
@@ -17824,8 +17738,8 @@ async def process_ticker_job(job: dict):
             if feed_count == 0:
                 LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No feeds found! Creating now (failsafe)...")
 
-                # Get or create metadata
-                metadata = get_or_create_enhanced_ticker_metadata(ticker, force_refresh=True)
+                # Get metadata from database (no AI enhancement)
+                metadata = get_or_create_enhanced_ticker_metadata(ticker)
                 LOG.info(f"[{ticker}] 📋 [JOB {job_id}] Metadata: company={metadata.get('company_name', 'N/A')}")
 
                 # Create feeds
@@ -18216,25 +18130,10 @@ async def process_ticker_job(job: dict):
                 LOG.warning(f"[{ticker}] 🚫 [JOB {job_id}] Job cancelled after digest, exiting")
                 return
 
-        # COMMIT METADATA TO GITHUB after all emails sent
-        # This ensures GitHub commit doesn't trigger server restart before emails are sent
-        update_job_status(job_id, progress=99)
-        LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Committing AI metadata to GitHub after final email...")
-
-        try:
-            # Commit to GitHub (always with [skip render] for job queue)
-            batch_id = job.get('batch_id')
-
-            await process_commit_phase(
-                job_id=job_id,
-                ticker=ticker,
-                batch_id=batch_id,
-                is_last_job=False  # Not used anymore - always skip render
-            )
-            LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Metadata committed to GitHub successfully")
-        except Exception as e:
-            LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] GitHub commit failed (non-fatal): {e}")
-            # Don't fail the job if commit fails - continue processing
+        # NOTE (Nov 2025): Per-ticker GitHub commits REMOVED
+        # - CSV is source of truth, database doesn't change during processing
+        # - Eliminates unnecessary commits and git history noise
+        # - Daily cron commit (if needed) handles any legitimate changes
 
         # PHASE 3: Complete
         update_job_status(job_id, progress=99)
@@ -20623,13 +20522,10 @@ async def admin_init(request: Request, body: InitRequest):
             LOG.info(f"=== INITIALIZING TICKER: {isolated_ticker} ===")
 
             try:
-                # STEP 2: Get or generate metadata with enhanced ticker reference integration
-                # CRITICAL: Force refresh to ensure no cached contamination from previous tickers
-                metadata = get_or_create_enhanced_ticker_metadata(isolated_ticker, force_refresh=True)
+                # STEP 2: Get metadata from database (no AI enhancement - CSV is source of truth)
+                metadata = get_or_create_enhanced_ticker_metadata(isolated_ticker)
 
-                # CRITICAL DEBUG: Log what metadata was actually returned
-                LOG.info(f"[NEW_ARCH_DEBUG] {isolated_ticker} metadata returned: {metadata}")
-                LOG.info(f"[NEW_ARCH_DEBUG] {isolated_ticker} company_name in metadata: '{metadata.get('company_name', 'MISSING')}'")
+                LOG.info(f"[INIT] {isolated_ticker} metadata: company='{metadata.get('company_name', 'MISSING')}'")
 
                 # STEP 3: Create feeds using NEW MANY-TO-MANY ARCHITECTURE
                 feeds_created = create_feeds_for_ticker_new_architecture(isolated_ticker, metadata)
@@ -31438,7 +31334,7 @@ def process_hourly_alerts():
                         'category': article['category'],  # Raw category for template conditionals
                         'category_display': category_display,
                         'search_keyword': article.get('search_keyword'),  # For industry badge
-                        'competitor_ticker': article.get('competitor_ticker'),  # For competitor badge
+                        'competitor_ticker': article.get('feed_ticker'),  # For competitor badge
                         'value_chain_type': article.get('value_chain_type'),  # For upstream/downstream badge
                         'title': article['title'],
                         'resolved_url': article.get('resolved_url') or article.get('url', '#'),

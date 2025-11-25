@@ -14632,35 +14632,15 @@ def generate_email_html_core(
     sector = config.get("sector")
     sector_display = f" • {sector}" if sector and sector.strip() else ""
 
-    # Fetch stock price from ticker_reference (cached)
-    stock_price = "$0.00"
-    price_change_pct = None
-    price_change_color = "#4ade80"  # Green default
-    ytd_return_pct = None
-    ytd_return_color = "#4ade80"  # Green default
-
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT financial_last_price, financial_price_change_pct, financial_ytd_return_pct
-            FROM ticker_reference
-            WHERE ticker = %s
-        """, (ticker,))
-        price_data = cur.fetchone()
-
-        if price_data and price_data['financial_last_price']:
-            stock_price = f"${price_data['financial_last_price']:.2f}"
-
-            # Daily return (price change)
-            if price_data['financial_price_change_pct'] is not None:
-                pct = price_data['financial_price_change_pct']
-                price_change_pct = f"{'+' if pct >= 0 else ''}{pct:.2f}%"
-                price_change_color = "#4ade80" if pct >= 0 else "#ef4444"
-
-            # YTD return
-            if price_data['financial_ytd_return_pct'] is not None:
-                ytd = price_data['financial_ytd_return_pct']
-                ytd_return_pct = f"{'+' if ytd >= 0 else ''}{ytd:.2f}%"
-                ytd_return_color = "#4ade80" if ytd >= 0 else "#ef4444"
+    # Fetch stock price using unified helper (live yfinance/Polygon → database fallback)
+    stock_data = get_filing_stock_data(ticker)
+    stock_price = stock_data.get('stock_price') or "$0.00"
+    price_change_pct = stock_data.get('price_change_pct')
+    price_change_color = stock_data.get('price_change_color') or "#4ade80"
+    ytd_return_pct = stock_data.get('ytd_return_pct')
+    ytd_return_color = stock_data.get('ytd_return_color') or "#4ade80"
+    market_status = stock_data.get('market_status')
+    return_label = stock_data.get('return_label')
 
     # Fetch executive summary from database (Phase 3 merged JSON)
     executive_summary_text = ""
@@ -14812,10 +14792,7 @@ def generate_email_html_core(
         # Header: Abbreviated month, UPPERCASE
         current_date = now_eastern.strftime("%b %d, %Y").upper()
 
-    # Determine market status for dynamic labels
-    market_is_open = is_market_open()
-    market_status = "INTRADAY" if market_is_open else "LAST CLOSE"
-    return_label = "TODAY" if market_is_open else "1D"
+    # market_status and return_label already set from get_filing_stock_data() above
 
     # Build HTML sections - SAME AS EMAIL #3
     summary_html = build_executive_summary_html(sections, strip_emojis=True)

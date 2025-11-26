@@ -450,7 +450,7 @@
         const TOKEN = '{{ token }}';
 
         // Get current Toronto time
-        async function updateCurrentTime() {
+        async function updateCurrentTime(isInitialLoad = false) {
             try {
                 const response = await fetch(`/api/schedule/current-time?token=${TOKEN}`);
                 const data = await response.json();
@@ -462,8 +462,8 @@
                     // Store current day for highlighting
                     window.currentDayOfWeek = data.day_of_week;
 
-                    // Re-render schedule to highlight today
-                    if (window.scheduleData) {
+                    // Only re-render schedule on initial load (not every second)
+                    if (isInitialLoad && window.scheduleData) {
                         renderScheduleTable(window.scheduleData);
                     }
                 }
@@ -651,11 +651,11 @@
 
         // Initialize
         document.addEventListener('DOMContentLoaded', function() {
-            updateCurrentTime();
+            updateCurrentTime(true);  // Initial load - will render schedule
             loadScheduleConfig();
 
-            // Update time every second
-            setInterval(updateCurrentTime, 1000);
+            // Update time every second (but don't re-render schedule)
+            setInterval(() => updateCurrentTime(false), 1000);
         });
     </script>
 </body>

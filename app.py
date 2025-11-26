@@ -2360,9 +2360,68 @@ def ensure_schema():
 
                 -- Create index on report_type for faster filtering
                 CREATE INDEX IF NOT EXISTS idx_email_queue_report_type ON email_queue(report_type);
+
+                -- ============================================================
+                -- SCHEDULER SYSTEM (Nov 26, 2025)
+                -- Timezone-aware scheduling with admin UI configuration
+                -- ============================================================
+
+                -- Schedule configuration per day of week
+                -- Times stored in Toronto timezone (auto-handles EST/EDT)
+                CREATE TABLE IF NOT EXISTS schedule_config (
+                    day_of_week INTEGER PRIMARY KEY,  -- 0=Monday, 6=Sunday (Python weekday())
+                    report_type VARCHAR(10) NOT NULL DEFAULT 'none',  -- 'daily', 'weekly', 'none'
+                    process_time TIME,  -- When to start processing (NULL if report_type='none')
+                    send_time TIME,     -- When to send emails (NULL if report_type='none')
+                    cleanup_offset_minutes INTEGER DEFAULT 60,  -- Minutes before process_time
+                    filings_offset_minutes INTEGER DEFAULT 60,  -- Minutes before process_time
+                    updated_at TIMESTAMPTZ DEFAULT NOW(),
+                    CONSTRAINT schedule_config_report_type_check CHECK (report_type IN ('daily', 'weekly', 'none'))
+                );
+
+                -- Insert default schedule configuration
+                -- Monday: Weekly report at 2am, send at 7:30am
+                -- Tue-Fri: Daily report at 7am, send at 8:30am
+                -- Sat-Sun: No processing
+                INSERT INTO schedule_config (day_of_week, report_type, process_time, send_time, cleanup_offset_minutes, filings_offset_minutes)
+                VALUES
+                    (0, 'weekly', '02:00', '07:30', 60, 60),  -- Monday
+                    (1, 'daily',  '07:00', '08:30', 60, 60),  -- Tuesday
+                    (2, 'daily',  '07:00', '08:30', 60, 60),  -- Wednesday
+                    (3, 'daily',  '07:00', '08:30', 60, 60),  -- Thursday
+                    (4, 'daily',  '07:00', '08:30', 60, 60),  -- Friday
+                    (5, 'none',   NULL,    NULL,    60, 60),  -- Saturday
+                    (6, 'none',   NULL,    NULL,    60, 60)   -- Sunday
+                ON CONFLICT (day_of_week) DO NOTHING;
+
+                -- Hourly jobs configuration (filings check, alerts, backup)
+                CREATE TABLE IF NOT EXISTS schedule_hourly_config (
+                    job_type VARCHAR(50) PRIMARY KEY,  -- 'filings_check', 'alerts', 'backup'
+                    start_hour INTEGER NOT NULL,  -- Start hour in Toronto time (0-23)
+                    end_hour INTEGER NOT NULL,    -- End hour in Toronto time (0-23)
+                    run_on_half_hour BOOLEAN DEFAULT FALSE,  -- TRUE = run at :30, FALSE = run at :00
+                    enabled BOOLEAN DEFAULT TRUE,
+                    updated_at TIMESTAMPTZ DEFAULT NOW(),
+                    CONSTRAINT schedule_hourly_start_hour_check CHECK (start_hour >= 0 AND start_hour <= 23),
+                    CONSTRAINT schedule_hourly_end_hour_check CHECK (end_hour >= 0 AND end_hour <= 23)
+                );
+
+                -- Insert default hourly job configuration
+                -- filings_check: 8:30am-8:30pm (runs at :30)
+                -- alerts: 9am-9pm (runs at :00)
+                -- backup: 11pm-11pm (runs at :00, i.e., only at 11pm)
+                INSERT INTO schedule_hourly_config (job_type, start_hour, end_hour, run_on_half_hour, enabled)
+                VALUES
+                    ('filings_check', 8, 20, TRUE, TRUE),   -- 8:30am-8:30pm, runs at :30
+                    ('alerts', 9, 21, FALSE, TRUE),         -- 9am-9pm, runs at :00
+                    ('backup', 23, 23, FALSE, TRUE)         -- 11pm only, runs at :00
+                ON CONFLICT (job_type) DO NOTHING;
+
+                CREATE INDEX IF NOT EXISTS idx_schedule_config_day ON schedule_config(day_of_week);
+                CREATE INDEX IF NOT EXISTS idx_schedule_hourly_job_type ON schedule_hourly_config(job_type);
                 """)
 
-                LOG.info("✅ Complete database schema created successfully with NEW ARCHITECTURE + JOB QUEUE + BETA USERS + DAILY/WEEKLY REPORTS")
+                LOG.info("✅ Complete database schema created successfully with NEW ARCHITECTURE + JOB QUEUE + BETA USERS + DAILY/WEEKLY REPORTS + SCHEDULER")
 
             finally:
                 # STEP 4: CRITICAL - Always release the advisory lock
@@ -24049,6 +24108,17 @@ def admin_settings_page(request: Request, token: str = Query(...)):
         "token": token
     })
 
+@APP.get("/admin/schedule")
+def admin_schedule_page(request: Request, token: str = Query(...)):
+    """Schedule Configuration - Timezone-aware cron scheduling"""
+    if not check_admin_token(token):
+        return HTMLResponse("Unauthorized", status_code=401)
+
+    return templates.TemplateResponse("admin_schedule.html", {
+        "request": request,
+        "token": token
+    })
+
 @APP.get("/admin/domains")
 def admin_domains_page(request: Request, token: str = Query(...)):
     """Domain Analytics - Quality rankings and scrape health"""
@@ -30146,6 +30216,234 @@ async def set_phase3_model_api(request: Request):
         LOG.error(f"Failed to set Phase 3 model: {e}")
         return {"status": "error", "message": str(e)}
 
+# ==============================================================================
+# SCHEDULE CONFIGURATION API (Nov 26, 2025)
+# ==============================================================================
+
+@APP.get("/api/schedule/config")
+async def get_schedule_config_api(token: str = Query(...)):
+    """Get all schedule configuration (daily schedule + hourly jobs)"""
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Get daily schedule config
+            cur.execute("""
+                SELECT day_of_week, report_type, process_time, send_time,
+                       cleanup_offset_minutes, filings_offset_minutes
+                FROM schedule_config
+                ORDER BY day_of_week
+            """)
+            schedule_rows = cur.fetchall()
+
+            # Get hourly jobs config
+            cur.execute("""
+                SELECT job_type, start_hour, end_hour, run_on_half_hour, enabled
+                FROM schedule_hourly_config
+                ORDER BY job_type
+            """)
+            hourly_rows = cur.fetchall()
+
+        # Convert to serializable format
+        day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        schedule = []
+        for row in schedule_rows:
+            schedule.append({
+                'day_of_week': row['day_of_week'],
+                'day_name': day_names[row['day_of_week']],
+                'report_type': row['report_type'],
+                'process_time': row['process_time'].strftime('%H:%M') if row['process_time'] else None,
+                'send_time': row['send_time'].strftime('%H:%M') if row['send_time'] else None,
+                'cleanup_offset_minutes': row['cleanup_offset_minutes'],
+                'filings_offset_minutes': row['filings_offset_minutes']
+            })
+
+        hourly_jobs = []
+        for row in hourly_rows:
+            hourly_jobs.append({
+                'job_type': row['job_type'],
+                'start_hour': row['start_hour'],
+                'end_hour': row['end_hour'],
+                'run_on_half_hour': row['run_on_half_hour'],
+                'enabled': row['enabled']
+            })
+
+        return {
+            "status": "success",
+            "schedule": schedule,
+            "hourly_jobs": hourly_jobs
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to get schedule config: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@APP.post("/api/schedule/update-day")
+async def update_schedule_day_api(request: Request):
+    """Update schedule for a specific day"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        day_of_week = body.get('day_of_week')
+        report_type = body.get('report_type')
+        process_time = body.get('process_time')
+        send_time = body.get('send_time')
+
+        if day_of_week is None or day_of_week < 0 or day_of_week > 6:
+            return {"status": "error", "message": "Invalid day_of_week (must be 0-6)"}
+
+        if report_type not in ['daily', 'weekly', 'none']:
+            return {"status": "error", "message": "Invalid report_type (must be daily, weekly, or none)"}
+
+        with db() as conn, conn.cursor() as cur:
+            if report_type == 'none':
+                cur.execute("""
+                    UPDATE schedule_config
+                    SET report_type = %s, process_time = NULL, send_time = NULL, updated_at = NOW()
+                    WHERE day_of_week = %s
+                """, (report_type, day_of_week))
+            else:
+                # Validate times
+                if not process_time or not send_time:
+                    return {"status": "error", "message": "process_time and send_time required for daily/weekly"}
+
+                cur.execute("""
+                    UPDATE schedule_config
+                    SET report_type = %s, process_time = %s, send_time = %s, updated_at = NOW()
+                    WHERE day_of_week = %s
+                """, (report_type, process_time, send_time, day_of_week))
+
+            conn.commit()
+
+        day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        LOG.info(f"✅ Schedule updated for {day_names[day_of_week]}: {report_type}")
+
+        return {
+            "status": "success",
+            "message": f"Schedule updated for {day_names[day_of_week]}"
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to update schedule day: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@APP.post("/api/schedule/update-offsets")
+async def update_schedule_offsets_api(request: Request):
+    """Update cleanup and filings offset minutes (applies to all days)"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        cleanup_offset = body.get('cleanup_offset_minutes')
+        filings_offset = body.get('filings_offset_minutes')
+
+        if cleanup_offset is None or filings_offset is None:
+            return {"status": "error", "message": "Both cleanup_offset_minutes and filings_offset_minutes required"}
+
+        if cleanup_offset < 0 or cleanup_offset > 180:
+            return {"status": "error", "message": "cleanup_offset must be 0-180 minutes"}
+
+        if filings_offset < 0 or filings_offset > 180:
+            return {"status": "error", "message": "filings_offset must be 0-180 minutes"}
+
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE schedule_config
+                SET cleanup_offset_minutes = %s, filings_offset_minutes = %s, updated_at = NOW()
+            """, (cleanup_offset, filings_offset))
+            conn.commit()
+
+        LOG.info(f"✅ Schedule offsets updated: cleanup={cleanup_offset}min, filings={filings_offset}min")
+
+        return {
+            "status": "success",
+            "message": f"Offsets updated: cleanup {cleanup_offset}min, filings {filings_offset}min"
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to update schedule offsets: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@APP.post("/api/schedule/update-hourly-job")
+async def update_hourly_job_api(request: Request):
+    """Update hourly job configuration"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        job_type = body.get('job_type')
+        start_hour = body.get('start_hour')
+        end_hour = body.get('end_hour')
+        enabled = body.get('enabled', True)
+
+        if job_type not in ['filings_check', 'alerts', 'backup']:
+            return {"status": "error", "message": "Invalid job_type"}
+
+        if start_hour is None or end_hour is None:
+            return {"status": "error", "message": "start_hour and end_hour required"}
+
+        if start_hour < 0 or start_hour > 23 or end_hour < 0 or end_hour > 23:
+            return {"status": "error", "message": "Hours must be 0-23"}
+
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE schedule_hourly_config
+                SET start_hour = %s, end_hour = %s, enabled = %s, updated_at = NOW()
+                WHERE job_type = %s
+            """, (start_hour, end_hour, enabled, job_type))
+            conn.commit()
+
+        LOG.info(f"✅ Hourly job '{job_type}' updated: {start_hour}:00-{end_hour}:00, enabled={enabled}")
+
+        return {
+            "status": "success",
+            "message": f"Hourly job '{job_type}' updated"
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to update hourly job: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@APP.get("/api/schedule/current-time")
+async def get_current_toronto_time_api(token: str = Query(...)):
+    """Get current Toronto time for display in UI"""
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        eastern = pytz.timezone('America/Toronto')
+        toronto_now = datetime.now(eastern)
+        day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+
+        return {
+            "status": "success",
+            "time": toronto_now.strftime('%H:%M:%S'),
+            "date": toronto_now.strftime('%Y-%m-%d'),
+            "day_of_week": toronto_now.weekday(),
+            "day_name": day_names[toronto_now.weekday()],
+            "timezone": "America/Toronto",
+            "is_dst": bool(toronto_now.dst())
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to get Toronto time: {e}")
+        return {"status": "error", "message": str(e)}
+
 @APP.post("/api/cancel-ready-emails")
 async def cancel_ready_emails_api(request: Request):
     """Cancel ready emails - prevent 8:30am auto-send (tracks previous_status for smart restore)"""
@@ -30728,6 +31026,308 @@ def send_all_ready_emails_impl() -> Dict:
 
 
 # ------------------------------------------------------------------------------
+# SCHEDULER SYSTEM (Nov 26, 2025)
+# Timezone-aware scheduling - replaces 7 separate Render cron jobs with 1
+# Runs every 30 minutes via: python app.py scheduler
+# ------------------------------------------------------------------------------
+
+def get_schedule_config_for_day(day_of_week: int) -> Optional[Dict]:
+    """
+    Get schedule configuration for a specific day of week.
+
+    Args:
+        day_of_week: 0=Monday, 6=Sunday (Python weekday())
+
+    Returns:
+        Dict with: report_type, process_time, send_time, cleanup_offset_minutes, filings_offset_minutes
+        None if day not found
+    """
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT report_type, process_time, send_time,
+                       cleanup_offset_minutes, filings_offset_minutes
+                FROM schedule_config
+                WHERE day_of_week = %s
+            """, (day_of_week,))
+            row = cur.fetchone()
+            if row:
+                return {
+                    'report_type': row['report_type'],
+                    'process_time': row['process_time'],
+                    'send_time': row['send_time'],
+                    'cleanup_offset_minutes': row['cleanup_offset_minutes'] or 60,
+                    'filings_offset_minutes': row['filings_offset_minutes'] or 60
+                }
+            return None
+    except Exception as e:
+        LOG.error(f"Failed to get schedule config for day {day_of_week}: {e}")
+        return None
+
+
+def get_hourly_job_config(job_type: str) -> Optional[Dict]:
+    """
+    Get hourly job configuration.
+
+    Args:
+        job_type: 'filings_check', 'alerts', or 'backup'
+
+    Returns:
+        Dict with: start_hour, end_hour, run_on_half_hour, enabled
+        None if job_type not found
+    """
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT start_hour, end_hour, run_on_half_hour, enabled
+                FROM schedule_hourly_config
+                WHERE job_type = %s
+            """, (job_type,))
+            row = cur.fetchone()
+            if row:
+                return {
+                    'start_hour': row['start_hour'],
+                    'end_hour': row['end_hour'],
+                    'run_on_half_hour': row['run_on_half_hour'],
+                    'enabled': row['enabled']
+                }
+            return None
+    except Exception as e:
+        LOG.error(f"Failed to get hourly job config for {job_type}: {e}")
+        return None
+
+
+def is_within_time_window(current_time, target_time, window_minutes: int = 15) -> bool:
+    """
+    Check if current time is within ±window_minutes of target time.
+
+    Args:
+        current_time: datetime.time object (current Toronto time)
+        target_time: datetime.time object (target scheduled time)
+        window_minutes: Window size in minutes (default ±15)
+
+    Returns:
+        True if current_time is within window of target_time
+    """
+    if target_time is None:
+        return False
+
+    # Convert times to minutes since midnight for easy comparison
+    current_minutes = current_time.hour * 60 + current_time.minute
+    target_minutes = target_time.hour * 60 + target_time.minute
+
+    # Calculate difference (handle midnight wraparound)
+    diff = abs(current_minutes - target_minutes)
+    if diff > 720:  # More than 12 hours, must be wraparound
+        diff = 1440 - diff  # 1440 = minutes in a day
+
+    return diff <= window_minutes
+
+
+def is_hourly_job_time(current_hour: int, current_minute: int, job_config: Dict) -> bool:
+    """
+    Check if it's time to run an hourly job.
+
+    Args:
+        current_hour: Current hour in Toronto time (0-23)
+        current_minute: Current minute (0-59)
+        job_config: Dict with start_hour, end_hour, run_on_half_hour, enabled
+
+    Returns:
+        True if job should run now
+    """
+    if not job_config or not job_config.get('enabled', True):
+        return False
+
+    start_hour = job_config['start_hour']
+    end_hour = job_config['end_hour']
+    run_on_half_hour = job_config.get('run_on_half_hour', False)
+
+    # Check if we're in the right minute window
+    # :00 jobs run when minute < 15
+    # :30 jobs run when 15 <= minute < 45
+    if run_on_half_hour:
+        if not (15 <= current_minute < 45):
+            return False
+    else:
+        if not (current_minute < 15 or current_minute >= 45):
+            return False
+
+    # Check if we're in the hour window
+    # Handle wraparound (e.g., start=22, end=2)
+    if start_hour <= end_hour:
+        # Normal case: start_hour to end_hour
+        return start_hour <= current_hour <= end_hour
+    else:
+        # Wraparound case: start_hour to midnight, then midnight to end_hour
+        return current_hour >= start_hour or current_hour <= end_hour
+
+
+def run_scheduler():
+    """
+    Master scheduler - runs every 30 minutes via Render cron.
+    Dispatches to existing cron functions based on Toronto time + database config.
+
+    This replaces 7 separate Render cron jobs with 1 timezone-aware scheduler.
+
+    Render cron: */30 * * * * python app.py scheduler
+    """
+    # Get current Toronto time
+    eastern = pytz.timezone('America/Toronto')
+    toronto_now = datetime.now(eastern)
+    current_hour = toronto_now.hour
+    current_minute = toronto_now.minute
+    current_time = toronto_now.time()
+    day_of_week = toronto_now.weekday()  # 0=Monday, 6=Sunday
+
+    day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+    day_name = day_names[day_of_week]
+
+    LOG.info("="*80)
+    LOG.info(f"🕐 SCHEDULER RUN: {toronto_now.strftime('%Y-%m-%d %H:%M:%S')} Toronto ({day_name})")
+    LOG.info("="*80)
+
+    tasks_run = []
+
+    # =========================================================================
+    # PART 1: DAILY WORKFLOW TASKS (based on schedule_config)
+    # =========================================================================
+
+    config = get_schedule_config_for_day(day_of_week)
+
+    if config is None:
+        LOG.warning(f"⚠️ No schedule config found for {day_name} (day {day_of_week})")
+    elif config['report_type'] == 'none':
+        LOG.info(f"📅 {day_name}: No processing scheduled (report_type='none')")
+    else:
+        report_type = config['report_type']
+        process_time = config['process_time']
+        send_time = config['send_time']
+        cleanup_offset = config['cleanup_offset_minutes']
+        filings_offset = config['filings_offset_minutes']
+
+        LOG.info(f"📅 {day_name}: {report_type.upper()} report")
+        LOG.info(f"   Process: {process_time}, Send: {send_time}")
+        LOG.info(f"   Cleanup offset: -{cleanup_offset}min, Filings offset: -{filings_offset}min")
+
+        # Calculate derived times
+        if process_time:
+            process_minutes = process_time.hour * 60 + process_time.minute
+
+            # Cleanup time
+            cleanup_minutes = process_minutes - cleanup_offset
+            if cleanup_minutes < 0:
+                cleanup_minutes += 1440  # Wrap to previous day
+            cleanup_hour = cleanup_minutes // 60
+            cleanup_min = cleanup_minutes % 60
+            cleanup_time = datetime.strptime(f"{cleanup_hour:02d}:{cleanup_min:02d}", "%H:%M").time()
+
+            # Morning filings time
+            filings_minutes = process_minutes - filings_offset
+            if filings_minutes < 0:
+                filings_minutes += 1440
+            filings_hour = filings_minutes // 60
+            filings_min = filings_minutes % 60
+            morning_filings_time = datetime.strptime(f"{filings_hour:02d}:{filings_min:02d}", "%H:%M").time()
+
+            LOG.info(f"   Derived: Cleanup={cleanup_time}, Morning Filings={morning_filings_time}")
+
+            # --- CLEANUP ---
+            if is_within_time_window(current_time, cleanup_time, window_minutes=15):
+                LOG.info(f"✅ Running CLEANUP (scheduled: {cleanup_time}, current: {current_time})")
+                try:
+                    cleanup_old_queue_entries()
+                    tasks_run.append('cleanup')
+                except Exception as e:
+                    LOG.error(f"❌ Cleanup failed: {e}")
+
+            # --- MORNING FILINGS CHECK ---
+            if is_within_time_window(current_time, morning_filings_time, window_minutes=15):
+                LOG.info(f"✅ Running MORNING FILINGS CHECK (scheduled: {morning_filings_time}, current: {current_time})")
+                try:
+                    check_all_filings_cron()
+                    tasks_run.append('morning_filings')
+                except Exception as e:
+                    LOG.error(f"❌ Morning filings check failed: {e}")
+
+            # --- PROCESS (DAILY WORKFLOW) ---
+            if is_within_time_window(current_time, process_time, window_minutes=15):
+                LOG.info(f"✅ Running PROCESS ({report_type.upper()}) (scheduled: {process_time}, current: {current_time})")
+                try:
+                    # Pass report_type from schedule_config to ensure UI settings are respected
+                    process_daily_workflow(force_report_type=report_type)
+                    tasks_run.append('process')
+                except Exception as e:
+                    LOG.error(f"❌ Process failed: {e}")
+
+        # --- SEND EMAILS ---
+        if send_time and is_within_time_window(current_time, send_time, window_minutes=15):
+            LOG.info(f"✅ Running SEND EMAILS (scheduled: {send_time}, current: {current_time})")
+            try:
+                auto_send_cron_job()
+                tasks_run.append('send')
+            except Exception as e:
+                LOG.error(f"❌ Send emails failed: {e}")
+
+    # =========================================================================
+    # PART 2: HOURLY JOBS (filings_check, alerts, backup)
+    # These run every day including weekends
+    # =========================================================================
+
+    # --- HOURLY FILINGS CHECK ---
+    filings_config = get_hourly_job_config('filings_check')
+    if is_hourly_job_time(current_hour, current_minute, filings_config):
+        # Don't run if we already ran morning filings in this scheduler run
+        if 'morning_filings' not in tasks_run:
+            LOG.info(f"✅ Running HOURLY FILINGS CHECK (hour: {current_hour}, minute: {current_minute})")
+            try:
+                check_all_filings_cron()
+                tasks_run.append('hourly_filings')
+            except Exception as e:
+                LOG.error(f"❌ Hourly filings check failed: {e}")
+        else:
+            LOG.info(f"⏭️ Skipping HOURLY FILINGS CHECK (morning filings already ran)")
+
+    # --- HOURLY ALERTS ---
+    alerts_config = get_hourly_job_config('alerts')
+    if is_hourly_job_time(current_hour, current_minute, alerts_config):
+        LOG.info(f"✅ Running HOURLY ALERTS (hour: {current_hour}, minute: {current_minute})")
+        try:
+            process_hourly_alerts()
+            tasks_run.append('alerts')
+        except Exception as e:
+            LOG.error(f"❌ Hourly alerts failed: {e}")
+
+    # --- NIGHTLY BACKUP ---
+    backup_config = get_hourly_job_config('backup')
+    if is_hourly_job_time(current_hour, current_minute, backup_config):
+        LOG.info(f"✅ Running NIGHTLY BACKUP (hour: {current_hour}, minute: {current_minute})")
+        try:
+            export_beta_users_csv()
+            tasks_run.append('backup')
+        except Exception as e:
+            LOG.error(f"❌ Nightly backup failed: {e}")
+
+    # =========================================================================
+    # SUMMARY
+    # =========================================================================
+
+    LOG.info("="*80)
+    if tasks_run:
+        LOG.info(f"📊 SCHEDULER COMPLETE: Ran {len(tasks_run)} task(s): {', '.join(tasks_run)}")
+    else:
+        LOG.info(f"📊 SCHEDULER COMPLETE: No tasks scheduled for {current_time.strftime('%H:%M')} Toronto")
+    LOG.info("="*80)
+
+    return {
+        'status': 'success',
+        'toronto_time': toronto_now.isoformat(),
+        'day_of_week': day_name,
+        'tasks_run': tasks_run
+    }
+
+
+# ------------------------------------------------------------------------------
 # CRON JOB HELPER FUNCTIONS
 # ------------------------------------------------------------------------------
 
@@ -30755,7 +31355,7 @@ def cleanup_old_queue_entries():
         raise
 
 
-def process_daily_workflow():
+def process_daily_workflow(force_report_type: str = None):
     """
     7:00 AM: Process all active beta users via job queue system.
     Generates emails and queues for 8:30 AM send.
@@ -30763,6 +31363,14 @@ def process_daily_workflow():
     NEW (Nov 20, 2025): Determines report type based on day of week.
     - Monday: Weekly report (7 days lookback)
     - Tuesday-Sunday: Daily report (1 day lookback)
+
+    NEW (Nov 26, 2025): Can be overridden by scheduler via force_report_type.
+    When called by scheduler, uses report_type from schedule_config table.
+
+    Args:
+        force_report_type: Optional override ('daily' or 'weekly'). If provided,
+                          uses this instead of day-of-week detection. Used by
+                          scheduler to ensure schedule_config settings are respected.
     """
     LOG.info("="*80)
     LOG.info("=== DAILY WORKFLOW START ===")
@@ -30782,8 +31390,8 @@ def process_daily_workflow():
             LOG.warning("No active beta users found")
             return
 
-        # NEW: Determine report type based on day of week
-        report_type, lookback_minutes = get_report_type_and_lookback()
+        # Determine report type - use override if provided, else day-of-week detection
+        report_type, lookback_minutes = get_report_type_and_lookback(force_type=force_report_type)
         LOG.info(f"📅 Report Type: {report_type.upper()}")
         LOG.info(f"⏱️  Lookback: {lookback_minutes} minutes ({lookback_minutes/1440:.1f} days)")
 
@@ -31543,9 +32151,16 @@ if __name__ == "__main__":
         elif func_name == "check_filings":
             # Check for new filings (6:30 AM + hourly 8:30 AM - 9:30 PM)
             check_all_filings_cron()
+        elif func_name == "scheduler":
+            # Master scheduler - runs every 30 min, dispatches to other functions
+            # Replaces 7 separate cron jobs with 1 timezone-aware scheduler
+            result = run_scheduler()
+            print(f"✅ Scheduler complete: {result['toronto_time']}")
+            print(f"   Day: {result['day_of_week']}")
+            print(f"   Tasks run: {result['tasks_run'] if result['tasks_run'] else 'None'}")
         else:
             print(f"Unknown function: {func_name}")
-            print("Available functions: cleanup, process, send, export, commit, alerts, check_filings")
+            print("Available functions: cleanup, process, send, export, commit, alerts, check_filings, scheduler")
             sys.exit(1)
     else:
         # Normal server startup

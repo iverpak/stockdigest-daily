@@ -14916,18 +14916,15 @@ def generate_email_html_core(
 
     # Calculate date strings for subject and header
     if report_type == 'weekly':
-        # Weekly: Calculate last Monday through Sunday date range
-        days_since_monday = now_eastern.weekday()  # 0=Monday, 6=Sunday
-        if days_since_monday == 0:  # Today is Monday
-            last_monday = now_eastern - timedelta(days=7)
-        else:
-            last_monday = now_eastern - timedelta(days=days_since_monday + 7)
-        last_sunday = last_monday + timedelta(days=6)
+        # Weekly: 7-day lookback ending yesterday (t-1)
+        # Report runs at 2am, so lookback is previous 7 days before today
+        end_date = now_eastern - timedelta(days=1)  # Yesterday
+        start_date = end_date - timedelta(days=6)   # 7-day window
 
         # Subject: Full month name, date range
-        subject_date = f"{last_monday.strftime('%B %d')}-{last_sunday.strftime('%d, %Y')}"
+        subject_date = f"{start_date.strftime('%B %d')}-{end_date.strftime('%d, %Y')}"
         # Header: Abbreviated month, UPPERCASE, date range
-        current_date = f"{last_monday.strftime('%b %d').upper()}-{last_sunday.strftime('%d, %Y').upper()}"
+        current_date = f"{start_date.strftime('%b %d').upper()}-{end_date.strftime('%d, %Y').upper()}"
     else:  # daily
         # Subject: Full month name
         subject_date = now_eastern.strftime("%B %d, %Y")

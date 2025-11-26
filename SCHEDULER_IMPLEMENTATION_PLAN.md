@@ -1,19 +1,70 @@
 # Scheduler Implementation Plan
 
-**Status:** ✅ IMPLEMENTED
+**Status:** ✅ IMPLEMENTED (Simplified Architecture)
 **Last Updated:** November 26, 2025
 
 ---
 
 ## Overview
 
-Replaced 7 separate Render cron jobs with 1 timezone-aware scheduler that automatically handles EST/EDT transitions and allows schedule configuration via database.
+**SIMPLIFIED ARCHITECTURE (Nov 26, 2025):** The unified scheduler handles only **4 report-related functions**. Memory-intensive jobs run as **separate Render crons** for isolation.
+
+### What the Scheduler Handles (4 functions)
+1. **Cleanup** - Delete old queue entries (offset before processing)
+2. **Process** - Run/queue reports (daily @ 7am, weekly @ 2am)
+3. **Send** - Send ready emails (daily @ 8:30am, weekly @ 7:30am)
+4. **Export** - Nightly CSV backup (11:59pm)
+
+### What Runs as Separate Crons (3 jobs)
+1. **Morning Filings Check** - 6:00 AM EST daily
+2. **Hourly Filings Check** - 8:30 AM - 10:30 PM EST (:30 each hour)
+3. **Hourly Alerts** - 9:00 AM - 11:00 PM EST (:00 each hour)
+
+**Why Separate?** These are memory-intensive operations that have crashed before. Separating them prevents memory spikes from affecting report processing.
 
 ---
 
-## What Was Built
+## Architecture Diagram
 
-### Database Tables
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         RENDER CRON JOBS (4 total)                       │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │  UNIFIED SCHEDULER (*/30 * * * *)                                │    │
+│  │  python app.py scheduler                                         │    │
+│  │                                                                   │    │
+│  │  Handles: Cleanup → Process → Send → Export                      │    │
+│  │  - Timezone-aware (America/Toronto)                              │    │
+│  │  - Day-of-week detection (Mon=weekly, Tue-Fri=daily)            │    │
+│  │  - Database-configurable times                                   │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                                                                          │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │  MORNING FILINGS CHECK (0 11 * * *)                              │    │
+│  │  python app.py check_filings                                     │    │
+│  │  6:00 AM EST daily - Standard tier for memory                    │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                                                                          │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │  HOURLY FILINGS CHECK (30 13-3 * * *)                            │    │
+│  │  python app.py check_filings                                     │    │
+│  │  8:30 AM - 10:30 PM EST - Standard tier for memory               │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                                                                          │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │  HOURLY ALERTS (0 14-4 * * *)                                    │    │
+│  │  python app.py alerts                                            │    │
+│  │  9:00 AM - 11:00 PM EST - Standard tier for memory               │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Database Tables
 
 **`schedule_config`** - Per-day schedule configuration:
 ```sql
@@ -23,14 +74,14 @@ CREATE TABLE schedule_config (
     process_time TIME,                 -- When to start processing
     send_time TIME,                    -- When to send emails
     cleanup_offset_minutes INTEGER DEFAULT 60,
-    filings_offset_minutes INTEGER DEFAULT 60,
+    filings_offset_minutes INTEGER DEFAULT 60,  -- Legacy, not used by scheduler
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 ```
 
-**Default values:**
-| Day | Report | Process | Send | Cleanup/Filings Offset |
-|-----|--------|---------|------|------------------------|
+**Default Schedule:**
+| Day | Report | Process | Send | Cleanup Offset |
+|-----|--------|---------|------|----------------|
 | Monday | weekly | 02:00 | 07:30 | 60 min |
 | Tuesday | daily | 07:00 | 08:30 | 60 min |
 | Wednesday | daily | 07:00 | 08:30 | 60 min |
@@ -39,38 +90,7 @@ CREATE TABLE schedule_config (
 | Saturday | none | - | - | 60 min |
 | Sunday | none | - | - | 60 min |
 
-**`schedule_hourly_config`** - Hourly job configuration:
-```sql
-CREATE TABLE schedule_hourly_config (
-    job_type VARCHAR(50) PRIMARY KEY,  -- 'filings_check', 'alerts', 'backup'
-    start_hour INTEGER NOT NULL,       -- Start hour (0-23)
-    end_hour INTEGER NOT NULL,         -- End hour (0-23)
-    run_on_half_hour BOOLEAN DEFAULT FALSE,
-    enabled BOOLEAN DEFAULT TRUE,
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-```
-
-**Default values:**
-| Job Type | Start | End | Runs At | Enabled |
-|----------|-------|-----|---------|---------|
-| filings_check | 8 | 20 | :30 | TRUE |
-| alerts | 9 | 21 | :00 | TRUE |
-| backup | 23 | 23 | :00 | TRUE |
-
-### Functions Added
-
-**`get_schedule_config_for_day(day_of_week)`** - Fetch schedule config for a day
-**`get_hourly_job_config(job_type)`** - Fetch hourly job config
-**`is_within_time_window(current_time, target_time, window_minutes=15)`** - Check if within ±15 min
-**`is_hourly_job_time(current_hour, current_minute, job_config)`** - Check if hourly job should run
-**`run_scheduler()`** - Main scheduler function
-
-### CLI Command
-
-```bash
-python app.py scheduler
-```
+**Note:** `schedule_hourly_config` table still exists but is NOT used by the scheduler. Hourly jobs run as separate crons.
 
 ---
 
@@ -80,15 +100,11 @@ python app.py scheduler
 
 1. Get current Toronto time (auto-handles EST/EDT via `pytz.timezone('America/Toronto')`)
 2. Load day's schedule config from database
-3. For daily workflow tasks (cleanup, morning filings, process, send):
-   - Calculate target times based on config
-   - Check if current time is within ±15 min window
-   - Run task if in window
-4. For hourly jobs (filings check, alerts, backup):
-   - Check if within configured hour range
-   - Check if current minute matches (:00 or :30)
-   - Run task if conditions met
-5. Log summary of tasks run
+3. Calculate cleanup time (process_time - cleanup_offset)
+4. Check if current time is within ±15 min window of each task:
+   - Cleanup → Process → Send
+5. At 11:59 PM, run nightly backup (export)
+6. Log summary of tasks run
 
 ### Time Window Logic
 
@@ -100,11 +116,9 @@ python app.py scheduler
   - 7:00 scheduler: 7:00 within ±15 min window → RUN
   - 7:30 scheduler: 7:00 outside ±15 min window → skip
 
-### Hourly Jobs
+### Report Type Override
 
-- **filings_check**: Runs at :30 (minute 15-44) within 8am-8pm
-- **alerts**: Runs at :00 (minute 0-14 or 45-59) within 9am-9pm
-- **backup**: Runs at :00 only at 11pm
+When scheduler calls `process_daily_workflow()`, it passes `force_report_type` from the `schedule_config` table. This ensures UI settings are respected, overriding the default day-of-week detection.
 
 ---
 
@@ -112,31 +126,41 @@ python app.py scheduler
 
 ### Step 1: Deploy Code
 
-Push the updated `app.py` to trigger Render deployment. The schema will auto-create on startup.
+Push the updated `app.py` to trigger Render deployment.
 
-### Step 2: Create New Render Cron
+### Step 2: Create/Update Render Crons
 
-1. Go to Render Dashboard → New → Cron Job
-2. Configure:
-   - Name: `Weavara-Scheduler`
-   - Schedule: `*/30 * * * *`
-   - Command: `python app.py scheduler`
-   - Service: Same as your web service
+**Unified Scheduler:**
+- Name: `Weavara-Scheduler`
+- Schedule: `*/30 * * * *`
+- Command: `python app.py scheduler`
+- Tier: Starter (lightweight)
+
+**Morning Filings Check:**
+- Name: `Weavara-Morning-Filings`
+- Schedule: `0 11 * * *` (6am EST = 11:00 UTC)
+- Command: `python app.py check_filings`
+- Tier: **Standard** (memory-intensive)
+
+**Hourly Filings Check:**
+- Name: `Weavara-Hourly-Filings`
+- Schedule: `30 13-3 * * *` (8:30am-10:30pm EST = 13:30-03:30 UTC)
+- Command: `python app.py check_filings`
+- Tier: **Standard** (memory-intensive)
+
+**Hourly Alerts:**
+- Name: `Weavara-Hourly-Alerts`
+- Schedule: `0 14-4 * * *` (9am-11pm EST = 14:00-04:00 UTC)
+- Command: `python app.py alerts`
+- Tier: **Standard** (memory-intensive)
 
 ### Step 3: Suspend Old Crons
 
-Suspend (don't delete) these 7 cron jobs:
-- Weavara-Daily CSV Backup
-- Weavara-Auto Send Emails
-- Weavara-Daily Cleanup
-- Weavara-Hourly Filings Check
-- Weavara-Daily Processing
-- Weavara-Morning Filings Check
-- Weavara-Hourly Alerts
-
-### Step 4: Monitor
-
-Watch the scheduler logs for a few days to verify correct behavior.
+Suspend (don't delete) these legacy cron jobs:
+- Weavara-Daily CSV Backup (now handled by scheduler)
+- Weavara-Auto Send Emails (now handled by scheduler)
+- Weavara-Daily Cleanup (now handled by scheduler)
+- Weavara-Daily Processing (now handled by scheduler)
 
 ---
 
@@ -145,8 +169,12 @@ Watch the scheduler logs for a few days to verify correct behavior.
 If something goes wrong:
 
 1. **Suspend** the new `Weavara-Scheduler` cron
-2. **Resume** all 7 old cron jobs
-3. Everything works exactly as before (code unchanged)
+2. **Resume** these old cron jobs:
+   - Weavara-Daily CSV Backup
+   - Weavara-Auto Send Emails
+   - Weavara-Daily Cleanup
+   - Weavara-Daily Processing
+3. Keep the separate filings/alerts crons running (unchanged)
 
 The old CLI commands still work:
 ```bash
@@ -160,94 +188,80 @@ python app.py alerts
 
 ---
 
-## Testing
+## Admin UI
 
-### Manual Test
+Access at: `/admin/schedule?token=YOUR_TOKEN`
 
-Run scheduler manually to see what would execute:
-```bash
-python app.py scheduler
-```
+**Features:**
+- Configure process and send times per day of week
+- Set report type (daily/weekly/none) per day
+- Adjust cleanup offset (minutes before processing)
+- Real-time Toronto time display
+- Info box showing separate cron schedules
 
-Output shows:
-- Current Toronto time
-- Day of week
-- Schedule config for today
-- Derived times (cleanup, filings)
-- Which tasks ran (if any)
-
-### Logic Tests
-
-Time window and hourly job logic tested with assertions:
-- `is_within_time_window()` - 6 test cases
-- `is_hourly_job_time()` - 12 test cases
-
-All tests passed.
-
----
-
-## Future: Admin UI
-
-A `/admin/schedule` page can be built to edit these database tables. The scheduler already reads from the database, so UI changes take effect immediately.
-
-**Proposed UI:**
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  📅 Schedule Configuration                                      │
-├─────────────────────────────────────────────────────────────────┤
-│  Day         Report Type     Process Time     Send Time         │
-│  ───────────────────────────────────────────────────────────    │
-│  Monday      [Weekly ▼]      [ 2:00 AM ]      [ 7:30 AM ]      │
-│  Tuesday     [Daily  ▼]      [ 7:00 AM ]      [ 8:30 AM ]      │
-│  ...                                                            │
-└─────────────────────────────────────────────────────────────────┘
-```
+**Note:** Hourly jobs are NOT configurable in the UI since they run as separate crons. The UI displays their schedules for reference.
 
 ---
 
 ## Cron Comparison
 
-### Before (7 Render Crons)
-| Cron | UTC Time | EST Time | Command |
-|------|----------|----------|---------|
-| Daily Cleanup | 10:00 | 5:00 AM | `python app.py cleanup` |
-| Morning Filings | 11:00 | 6:00 AM | `python app.py check_filings` |
-| Daily Processing | 12:00 | 7:00 AM | `python app.py process` |
-| Auto Send | 13:30 | 8:30 AM | `python app.py send` |
-| Hourly Filings | 13-23,0-1 :30 | 8:30am-8:30pm | `python app.py check_filings` |
-| Hourly Alerts | 14-23,0-3 :00 | 9am-10pm | `python app.py alerts` |
-| CSV Backup | 4:59 | 11:59 PM | `python app.py export` |
+### Before (7 Render Crons - Unified)
+| Cron | Schedule | Issues |
+|------|----------|--------|
+| All in one scheduler | `*/30 * * * *` | Memory-intensive jobs could crash report processing |
 
-**Problems:**
-- Manual EST/EDT updates twice per year
-- Different times for weekly vs daily not possible
-- Schedule changes require Render dashboard edits
-
-### After (1 Render Cron)
-| Cron | Schedule | Command |
-|------|----------|---------|
-| Scheduler | `*/30 * * * *` | `python app.py scheduler` |
+### After (4 Render Crons - Separated)
+| Cron | Schedule | Tier | Purpose |
+|------|----------|------|---------|
+| Scheduler | `*/30 * * * *` | Starter | Report workflow |
+| Morning Filings | `0 11 * * *` | Standard | 6am daily check |
+| Hourly Filings | `30 13-3 * * *` | Standard | 8:30am-10:30pm |
+| Hourly Alerts | `0 14-4 * * *` | Standard | 9am-11pm |
 
 **Benefits:**
-- Automatic EST/EDT handling
-- Different schedules per day of week
-- Database-configurable (future admin UI)
-- Single cron to manage
+- ✅ Memory isolation (intensive jobs can't crash reports)
+- ✅ Automatic EST/EDT handling for scheduler
+- ✅ Different schedules per day of week
+- ✅ Database-configurable times via admin UI
+- ✅ Independent scaling (can upgrade filings/alerts tier separately)
 
 ---
 
-## Code Locations
+## Functions Reference
 
-- **Schema**: `app.py` lines 2364-2421 (in `ensure_schema()`)
-- **Functions**: `app.py` lines 30789-31087
-- **CLI**: `app.py` lines 31906-31912
+### Scheduler Functions (app.py)
+
+| Function | Purpose |
+|----------|---------|
+| `run_scheduler()` | Main scheduler - runs cleanup, process, send, export |
+| `get_schedule_config_for_day(day)` | Fetch schedule config from database |
+| `is_within_time_window(current, target, window)` | Check if within ±N min of target |
+| `cleanup_old_queue_entries()` | Delete old email queue entries |
+| `process_daily_workflow(force_report_type)` | Queue reports for all active users |
+| `auto_send_cron_job()` | Send all ready emails |
+| `export_beta_users_csv()` | Nightly CSV backup |
+
+### Separate Cron Functions (app.py)
+
+| Function | Cron Command | Purpose |
+|----------|--------------|---------|
+| `check_all_filings_cron()` | `python app.py check_filings` | Check for new SEC filings |
+| `process_hourly_alerts()` | `python app.py alerts` | Send hourly article alerts |
 
 ---
 
 ## Changelog
 
+**November 26, 2025 - Simplified Architecture**
+- Removed hourly jobs from unified scheduler
+- Removed morning filings check from scheduler
+- Scheduler now only handles: cleanup, process, send, export
+- Memory-intensive jobs run as separate Render crons
+- Updated admin UI to show separate cron schedules
+- Removed filings offset setting (no longer used)
+
 **November 26, 2025 - Initial Implementation**
 - Created `schedule_config` and `schedule_hourly_config` tables
 - Implemented `run_scheduler()` with timezone-aware logic
 - Added `python app.py scheduler` CLI command
-- Tested time window and hourly job logic
+- Added admin UI at `/admin/schedule`

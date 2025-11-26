@@ -31166,17 +31166,24 @@ def is_hourly_job_time(current_hour: int, current_minute: int, job_config: Dict)
 def run_scheduler():
     """
     Master scheduler - runs every 30 minutes via Render cron.
-    Dispatches to existing cron functions based on Toronto time + database config.
+    Dispatches to report-related functions based on Toronto time + database config.
 
-    This replaces 7 separate Render cron jobs with 1 timezone-aware scheduler.
+    SIMPLIFIED (Nov 26, 2025): Only handles 4 report-related functions:
+    1. Cleanup - Delete old queue entries
+    2. Process - Run/queue reports (daily or weekly)
+    3. Send - Send ready emails
+    4. Export - Nightly CSV backup
+
+    Memory-intensive jobs run as SEPARATE crons for isolation:
+    - Morning filings check (6am daily)
+    - Hourly filings check (8:30am-10:30pm)
+    - Hourly alerts (9am-11pm)
 
     Render cron: */30 * * * * python app.py scheduler
     """
     # Get current Toronto time
     eastern = pytz.timezone('America/Toronto')
     toronto_now = datetime.now(eastern)
-    current_hour = toronto_now.hour
-    current_minute = toronto_now.minute
     current_time = toronto_now.time()
     day_of_week = toronto_now.weekday()  # 0=Monday, 6=Sunday
 
@@ -31190,7 +31197,7 @@ def run_scheduler():
     tasks_run = []
 
     # =========================================================================
-    # PART 1: DAILY WORKFLOW TASKS (based on schedule_config)
+    # REPORT WORKFLOW TASKS (based on schedule_config)
     # =========================================================================
 
     config = get_schedule_config_for_day(day_of_week)
@@ -31204,13 +31211,12 @@ def run_scheduler():
         process_time = config['process_time']
         send_time = config['send_time']
         cleanup_offset = config['cleanup_offset_minutes']
-        filings_offset = config['filings_offset_minutes']
 
         LOG.info(f"📅 {day_name}: {report_type.upper()} report")
         LOG.info(f"   Process: {process_time}, Send: {send_time}")
-        LOG.info(f"   Cleanup offset: -{cleanup_offset}min, Filings offset: -{filings_offset}min")
+        LOG.info(f"   Cleanup offset: -{cleanup_offset}min")
 
-        # Calculate derived times
+        # Calculate cleanup time
         if process_time:
             process_minutes = process_time.hour * 60 + process_time.minute
 
@@ -31222,15 +31228,7 @@ def run_scheduler():
             cleanup_min = cleanup_minutes % 60
             cleanup_time = datetime.strptime(f"{cleanup_hour:02d}:{cleanup_min:02d}", "%H:%M").time()
 
-            # Morning filings time
-            filings_minutes = process_minutes - filings_offset
-            if filings_minutes < 0:
-                filings_minutes += 1440
-            filings_hour = filings_minutes // 60
-            filings_min = filings_minutes % 60
-            morning_filings_time = datetime.strptime(f"{filings_hour:02d}:{filings_min:02d}", "%H:%M").time()
-
-            LOG.info(f"   Derived: Cleanup={cleanup_time}, Morning Filings={morning_filings_time}")
+            LOG.info(f"   Derived: Cleanup={cleanup_time}")
 
             # --- CLEANUP ---
             if is_within_time_window(current_time, cleanup_time, window_minutes=15):
@@ -31240,15 +31238,6 @@ def run_scheduler():
                     tasks_run.append('cleanup')
                 except Exception as e:
                     LOG.error(f"❌ Cleanup failed: {e}")
-
-            # --- MORNING FILINGS CHECK ---
-            if is_within_time_window(current_time, morning_filings_time, window_minutes=15):
-                LOG.info(f"✅ Running MORNING FILINGS CHECK (scheduled: {morning_filings_time}, current: {current_time})")
-                try:
-                    check_all_filings_cron()
-                    tasks_run.append('morning_filings')
-                except Exception as e:
-                    LOG.error(f"❌ Morning filings check failed: {e}")
 
             # --- PROCESS (DAILY WORKFLOW) ---
             if is_within_time_window(current_time, process_time, window_minutes=15):
@@ -31270,38 +31259,13 @@ def run_scheduler():
                 LOG.error(f"❌ Send emails failed: {e}")
 
     # =========================================================================
-    # PART 2: HOURLY JOBS (filings_check, alerts, backup)
-    # These run every day including weekends
+    # NIGHTLY BACKUP (runs at 11:59 PM every day)
     # =========================================================================
 
-    # --- HOURLY FILINGS CHECK ---
-    filings_config = get_hourly_job_config('filings_check')
-    if is_hourly_job_time(current_hour, current_minute, filings_config):
-        # Don't run if we already ran morning filings in this scheduler run
-        if 'morning_filings' not in tasks_run:
-            LOG.info(f"✅ Running HOURLY FILINGS CHECK (hour: {current_hour}, minute: {current_minute})")
-            try:
-                check_all_filings_cron()
-                tasks_run.append('hourly_filings')
-            except Exception as e:
-                LOG.error(f"❌ Hourly filings check failed: {e}")
-        else:
-            LOG.info(f"⏭️ Skipping HOURLY FILINGS CHECK (morning filings already ran)")
-
-    # --- HOURLY ALERTS ---
-    alerts_config = get_hourly_job_config('alerts')
-    if is_hourly_job_time(current_hour, current_minute, alerts_config):
-        LOG.info(f"✅ Running HOURLY ALERTS (hour: {current_hour}, minute: {current_minute})")
-        try:
-            process_hourly_alerts()
-            tasks_run.append('alerts')
-        except Exception as e:
-            LOG.error(f"❌ Hourly alerts failed: {e}")
-
-    # --- NIGHTLY BACKUP ---
-    backup_config = get_hourly_job_config('backup')
-    if is_hourly_job_time(current_hour, current_minute, backup_config):
-        LOG.info(f"✅ Running NIGHTLY BACKUP (hour: {current_hour}, minute: {current_minute})")
+    # Check if it's around midnight (11:45 PM - 12:15 AM window)
+    backup_time = datetime.strptime("23:59", "%H:%M").time()
+    if is_within_time_window(current_time, backup_time, window_minutes=15):
+        LOG.info(f"✅ Running NIGHTLY BACKUP (scheduled: {backup_time}, current: {current_time})")
         try:
             export_beta_users_csv()
             tasks_run.append('backup')

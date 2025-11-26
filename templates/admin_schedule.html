@@ -293,97 +293,6 @@
             display: block;
         }
 
-        /* Hourly Jobs Section */
-        .hourly-jobs-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 20px;
-        }
-
-        .hourly-job-card {
-            background: #f8fafc;
-            border: 2px solid #e2e8f0;
-            border-radius: 10px;
-            padding: 20px;
-        }
-
-        .hourly-job-card h3 {
-            color: #1e293b;
-            font-size: 16px;
-            margin-bottom: 15px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .hourly-job-card .job-icon {
-            font-size: 20px;
-        }
-
-        .hourly-job-row {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 12px;
-        }
-
-        .hourly-job-row label {
-            color: #64748b;
-            font-size: 13px;
-            min-width: 80px;
-        }
-
-        .hourly-job-row span {
-            color: #64748b;
-            font-size: 13px;
-        }
-
-        /* Toggle Switch */
-        .toggle-switch {
-            position: relative;
-            width: 48px;
-            height: 26px;
-        }
-
-        .toggle-switch input {
-            opacity: 0;
-            width: 0;
-            height: 0;
-        }
-
-        .toggle-slider {
-            position: absolute;
-            cursor: pointer;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background-color: #cbd5e1;
-            transition: 0.3s;
-            border-radius: 26px;
-        }
-
-        .toggle-slider:before {
-            position: absolute;
-            content: "";
-            height: 20px;
-            width: 20px;
-            left: 3px;
-            bottom: 3px;
-            background-color: white;
-            transition: 0.3s;
-            border-radius: 50%;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-        }
-
-        input:checked + .toggle-slider {
-            background-color: #10b981;
-        }
-
-        input:checked + .toggle-slider:before {
-            transform: translateX(22px);
-        }
-
         /* Offset Settings */
         .offset-settings {
             display: flex;
@@ -495,11 +404,6 @@
                     <input type="number" id="cleanup-offset" min="0" max="180" value="60">
                     <span style="color: #64748b;">min before processing</span>
                 </div>
-                <div class="offset-group">
-                    <label>📄 Morning filings check runs</label>
-                    <input type="number" id="filings-offset" min="0" max="180" value="60">
-                    <span style="color: #64748b;">min before processing</span>
-                </div>
                 <button class="btn btn-primary btn-small" onclick="saveOffsets()">💾 Save Offsets</button>
             </div>
 
@@ -530,22 +434,15 @@
                 <strong>ℹ️ How it works:</strong> The scheduler runs every 30 minutes and checks if any task should run based on current Toronto time.
                 Tasks trigger within a ±15 minute window of their scheduled time. Changes take effect immediately.
             </div>
-        </div>
 
-        <!-- Hourly Jobs -->
-        <div class="card">
-            <h2>⏰ Hourly Jobs</h2>
-            <p style="color: #64748b; margin-bottom: 20px; font-size: 14px;">
-                Configure time windows for recurring jobs. These run every day including weekends.
-            </p>
-
-            <div class="hourly-jobs-grid" id="hourly-jobs-grid">
-                <div style="text-align: center; color: #64748b; grid-column: 1 / -1;">
-                    <div class="loading"></div> Loading hourly jobs...
-                </div>
+            <div class="info-box" style="background: #fef3c7; border-color: #fbbf24; color: #92400e; margin-top: 15px;">
+                <strong>⚠️ Separate Crons:</strong> Memory-intensive jobs run as separate Render crons for isolation:
+                <ul style="margin: 10px 0 0 20px; line-height: 1.8;">
+                    <li><strong>Morning Filings Check:</strong> 6:00 AM EST daily</li>
+                    <li><strong>Hourly Filings Check:</strong> 8:30 AM - 10:30 PM EST (:30 each hour)</li>
+                    <li><strong>Hourly Alerts:</strong> 9:00 AM - 11:00 PM EST (:00 each hour)</li>
+                </ul>
             </div>
-
-            <div id="hourly-status" class="status-message"></div>
         </div>
     </div>
 
@@ -583,15 +480,12 @@
 
                 if (data.status === 'success') {
                     window.scheduleData = data.schedule;
-                    window.hourlyJobsData = data.hourly_jobs;
 
                     renderScheduleTable(data.schedule);
-                    renderHourlyJobs(data.hourly_jobs);
 
                     // Set offset values
                     if (data.schedule.length > 0) {
                         document.getElementById('cleanup-offset').value = data.schedule[0].cleanup_offset_minutes || 60;
-                        document.getElementById('filings-offset').value = data.schedule[0].filings_offset_minutes || 60;
                     }
                 } else {
                     showStatus('schedule-status', 'error', 'Failed to load schedule: ' + data.message);
@@ -713,10 +607,9 @@
         // Save offsets
         async function saveOffsets() {
             const cleanupOffset = parseInt(document.getElementById('cleanup-offset').value);
-            const filingsOffset = parseInt(document.getElementById('filings-offset').value);
 
-            if (isNaN(cleanupOffset) || isNaN(filingsOffset)) {
-                showStatus('offset-status', 'error', 'Please enter valid numbers');
+            if (isNaN(cleanupOffset)) {
+                showStatus('offset-status', 'error', 'Please enter a valid number');
                 return;
             }
 
@@ -726,8 +619,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         token: TOKEN,
-                        cleanup_offset_minutes: cleanupOffset,
-                        filings_offset_minutes: filingsOffset
+                        cleanup_offset_minutes: cleanupOffset
                     })
                 });
 
@@ -740,98 +632,6 @@
                 }
             } catch (error) {
                 showStatus('offset-status', 'error', '❌ Failed to save: ' + error.message);
-            }
-        }
-
-        // Render hourly jobs
-        function renderHourlyJobs(jobs) {
-            const grid = document.getElementById('hourly-jobs-grid');
-
-            const jobConfig = {
-                'alerts': { icon: '📰', name: 'Hourly Alerts', description: 'Send article alerts to users' },
-                'backup': { icon: '💾', name: 'Nightly Backup', description: 'Export beta users to CSV' },
-                'filings_check': { icon: '📄', name: 'Filings Check', description: 'Check for new SEC filings' }
-            };
-
-            grid.innerHTML = jobs.map(job => {
-                const config = jobConfig[job.job_type] || { icon: '⚙️', name: job.job_type, description: '' };
-                const runsAt = job.run_on_half_hour ? ':30' : ':00';
-
-                return `
-                    <div class="hourly-job-card">
-                        <h3><span class="job-icon">${config.icon}</span> ${config.name}</h3>
-                        <p style="color: #64748b; font-size: 13px; margin-bottom: 15px;">${config.description}</p>
-
-                        <div class="hourly-job-row">
-                            <label>Start:</label>
-                            <select id="hourly-start-${job.job_type}">
-                                ${generateHourOptions(job.start_hour)}
-                            </select>
-                            <span>${runsAt}</span>
-                        </div>
-
-                        <div class="hourly-job-row">
-                            <label>End:</label>
-                            <select id="hourly-end-${job.job_type}">
-                                ${generateHourOptions(job.end_hour)}
-                            </select>
-                            <span>${runsAt}</span>
-                        </div>
-
-                        <div class="hourly-job-row">
-                            <label>Enabled:</label>
-                            <label class="toggle-switch">
-                                <input type="checkbox" id="hourly-enabled-${job.job_type}" ${job.enabled ? 'checked' : ''}>
-                                <span class="toggle-slider"></span>
-                            </label>
-                        </div>
-
-                        <button class="btn btn-save-row" onclick="saveHourlyJob('${job.job_type}')" style="margin-top: 10px; width: 100%;">
-                            💾 Save
-                        </button>
-                    </div>
-                `;
-            }).join('');
-        }
-
-        // Generate hour options for select
-        function generateHourOptions(selectedHour) {
-            let options = '';
-            for (let i = 0; i < 24; i++) {
-                const hour12 = i === 0 ? '12 AM' : i < 12 ? `${i} AM` : i === 12 ? '12 PM' : `${i - 12} PM`;
-                options += `<option value="${i}" ${i === selectedHour ? 'selected' : ''}>${hour12}</option>`;
-            }
-            return options;
-        }
-
-        // Save hourly job
-        async function saveHourlyJob(jobType) {
-            const startHour = parseInt(document.getElementById(`hourly-start-${jobType}`).value);
-            const endHour = parseInt(document.getElementById(`hourly-end-${jobType}`).value);
-            const enabled = document.getElementById(`hourly-enabled-${jobType}`).checked;
-
-            try {
-                const response = await fetch('/api/schedule/update-hourly-job', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        token: TOKEN,
-                        job_type: jobType,
-                        start_hour: startHour,
-                        end_hour: endHour,
-                        enabled: enabled
-                    })
-                });
-
-                const data = await response.json();
-
-                if (data.status === 'success') {
-                    showStatus('hourly-status', 'success', '✅ ' + data.message);
-                } else {
-                    showStatus('hourly-status', 'error', '❌ ' + data.message);
-                }
-            } catch (error) {
-                showStatus('hourly-status', 'error', '❌ Failed to save: ' + error.message);
             }
         }
 

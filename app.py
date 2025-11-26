@@ -7515,7 +7515,16 @@ def _format_article_html_with_ai_summary(article: Dict, category: str, ticker_me
     elif ai_model == 'error':
         # AI analysis failed (technical error)
         header_badges.append('<span class="error-badge" style="display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fee; color: #c53030; border: 1px solid #fc8181;">❌ Failed (AI Error)</span>')
-    elif ai_summary and ai_model and ai_model not in ('none', 'spam', 'filtered', 'low_relevance', 'error'):
+    elif ai_model == 'short_content':
+        # Article too short for AI analysis (< 200 chars)
+        header_badges.append('<span class="short-badge" style="display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fee; color: #c53030; border: 1px solid #fc8181;">❌ Failed (Too Short)</span>')
+    elif ai_model == 'api_failed':
+        # Both Gemini and Claude API calls failed
+        header_badges.append('<span class="api-failed-badge" style="display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fee; color: #c53030; border: 1px solid #fc8181;">❌ Failed (AI)</span>')
+    elif ai_model == 'metadata_missing':
+        # Missing feed_ticker or value_chain_type for competitor/value_chain articles
+        header_badges.append('<span class="metadata-badge" style="display: inline-block; padding: 2px 8px; margin-right: 8px; border-radius: 3px; font-weight: bold; font-size: 10px; background-color: #fee; color: #c53030; border: 1px solid #fc8181;">❌ Failed (Metadata)</span>')
+    elif ai_summary and ai_model and ai_model not in ('none', 'spam', 'filtered', 'low_relevance', 'error', 'short_content', 'api_failed', 'metadata_missing'):
         # Successfully analyzed article - show which AI model was used
         header_badges.append(f'<span class="ai-model-badge">🤖 {ai_model}</span>')
     elif scraping_failed:
@@ -8126,6 +8135,8 @@ async def generate_article_summary_company(company_name: str, ticker: str, title
         if provider == "Gemini" and usage:
             calculate_gemini_api_cost(usage, "article_summary_company", model="flash")
             return summary, provider
+        if provider == "short_content":
+            return None, "short_content"  # Don't try Claude - same check will fail
         LOG.warning(f"[{ticker}] Gemini company summary failed, falling back to Claude")
 
     # Fallback to Claude
@@ -8139,7 +8150,7 @@ async def generate_article_summary_company(company_name: str, ticker: str, title
             calculate_claude_api_cost(usage, "article_summary_company")
             return summary, provider
 
-    return None, "failed"
+    return None, "api_failed"
 
 
 async def generate_article_summary_competitor(competitor_name: str, competitor_ticker: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Tuple[Optional[str], str]:
@@ -8152,6 +8163,8 @@ async def generate_article_summary_competitor(competitor_name: str, competitor_t
         if provider == "Gemini" and usage:
             calculate_gemini_api_cost(usage, "article_summary_competitor", model="flash")
             return summary, provider
+        if provider == "short_content":
+            return None, "short_content"  # Don't try Claude - same check will fail
         LOG.warning(f"[{target_ticker}] Gemini competitor summary failed, falling back to Claude")
 
     if ANTHROPIC_API_KEY:
@@ -8164,7 +8177,7 @@ async def generate_article_summary_competitor(competitor_name: str, competitor_t
             calculate_claude_api_cost(usage, "article_summary_competitor")
             return summary, provider
 
-    return None, "failed"
+    return None, "api_failed"
 
 
 async def generate_article_summary_upstream(value_chain_company: str, value_chain_ticker: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Tuple[Optional[str], str]:
@@ -8177,6 +8190,8 @@ async def generate_article_summary_upstream(value_chain_company: str, value_chai
         if provider == "Gemini" and usage:
             calculate_gemini_api_cost(usage, "article_summary_upstream", model="flash")
             return summary, provider
+        if provider == "short_content":
+            return None, "short_content"  # Don't try Claude - same check will fail
         LOG.warning(f"[{target_ticker}] Gemini upstream summary failed, falling back to Claude")
 
     if ANTHROPIC_API_KEY:
@@ -8189,7 +8204,7 @@ async def generate_article_summary_upstream(value_chain_company: str, value_chai
             calculate_claude_api_cost(usage, "article_summary_upstream")
             return summary, provider
 
-    return None, "failed"
+    return None, "api_failed"
 
 
 async def generate_article_summary_downstream(value_chain_company: str, value_chain_ticker: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Tuple[Optional[str], str]:
@@ -8202,6 +8217,8 @@ async def generate_article_summary_downstream(value_chain_company: str, value_ch
         if provider == "Gemini" and usage:
             calculate_gemini_api_cost(usage, "article_summary_downstream", model="flash")
             return summary, provider
+        if provider == "short_content":
+            return None, "short_content"  # Don't try Claude - same check will fail
         LOG.warning(f"[{target_ticker}] Gemini downstream summary failed, falling back to Claude")
 
     if ANTHROPIC_API_KEY:
@@ -8214,7 +8231,7 @@ async def generate_article_summary_downstream(value_chain_company: str, value_ch
             calculate_claude_api_cost(usage, "article_summary_downstream")
             return summary, provider
 
-    return None, "failed"
+    return None, "api_failed"
 
 
 async def generate_article_summary_industry(industry_keyword: str, target_company: str, target_ticker: str, title: str, scraped_content: str) -> Tuple[Optional[str], str]:
@@ -8231,6 +8248,8 @@ async def generate_article_summary_industry(industry_keyword: str, target_compan
         if provider == "Gemini" and usage:
             calculate_gemini_api_cost(usage, "article_summary_industry", model="flash")
             return summary, provider
+        if provider == "short_content":
+            return None, "short_content"  # Don't try Claude - same check will fail
         LOG.warning(f"[{target_ticker}] Gemini industry summary failed, falling back to Claude")
 
     if ANTHROPIC_API_KEY:
@@ -8243,7 +8262,7 @@ async def generate_article_summary_industry(industry_keyword: str, target_compan
             calculate_claude_api_cost(usage, "article_summary_industry")
             return summary, provider
 
-    return None, "failed"
+    return None, "api_failed"
 
 
 async def score_industry_article_relevance(ticker: str, company_name: str, industry_keyword: str, title: str, scraped_content: str, threshold: float = 5.0) -> Dict:
@@ -8291,7 +8310,9 @@ async def route_article_summary_by_category(scraped_content: str, title: str, ti
         Tuple[Optional[str], str]: (summary, provider) where provider is:
             - "Gemini": Generated by Gemini
             - "Sonnet": Generated by Claude Sonnet (fallback)
-            - "failed": API error or processing failure
+            - "short_content": Article too short (< 200 chars)
+            - "api_failed": Both Gemini and Claude API calls failed
+            - "metadata_missing": Missing feed_ticker or value_chain_type for competitor/value_chain
     """
     # Debug: Validate metadata before routing
     LOG.debug(f"[{ticker}] 🎯 Routing {category} article: {title[:50]}...")
@@ -8302,18 +8323,14 @@ async def route_article_summary_by_category(scraped_content: str, title: str, ti
     elif category == "competitor":
         competitor_ticker = article_metadata.get("feed_ticker")
         if not competitor_ticker:
-            LOG.error(f"[{ticker}] ❌ Missing 'feed_ticker' for competitor article")
-            LOG.error(f"[{ticker}]    This means query is missing JOINs to ticker_feeds/feeds tables")
-            return None, "failed"
+            return None, "metadata_missing"
         competitor_name = competitor_name_cache.get(competitor_ticker, competitor_ticker)
         return await generate_article_summary_competitor(competitor_name, competitor_ticker, target_company_name, ticker, title, scraped_content)
     elif category == "value_chain":
         value_chain_ticker = article_metadata.get("feed_ticker")  # Feed ticker (competitor, supplier, or customer)
         value_chain_type = article_metadata.get("value_chain_type")  # upstream or downstream
         if not value_chain_ticker or not value_chain_type:
-            LOG.error(f"[{ticker}] ❌ Missing 'feed_ticker' or 'value_chain_type' for value_chain article")
-            LOG.error(f"[{ticker}]    This means query is missing JOINs to ticker_feeds/feeds tables")
-            return None, "failed"
+            return None, "metadata_missing"
         value_chain_name = competitor_name_cache.get(value_chain_ticker, value_chain_ticker)
         # Call appropriate value chain function
         if value_chain_type == "upstream":
@@ -8321,11 +8338,11 @@ async def route_article_summary_by_category(scraped_content: str, title: str, ti
         elif value_chain_type == "downstream":
             return await generate_article_summary_downstream(value_chain_name, value_chain_ticker, target_company_name, ticker, title, scraped_content)
         else:
-            return None, "failed"
+            return None, "metadata_missing"  # Invalid value_chain_type
     elif category == "industry":
         industry_keyword = article_metadata.get("search_keyword", "this industry")
         return await generate_article_summary_industry(industry_keyword, target_company_name, ticker, title, scraped_content)
-    return None, "failed"
+    return None, "api_failed"  # Unknown category
 
 async def generate_article_summary(scraped_content: str, title: str, ticker: str, description: str,
                                    category: str, article_metadata: dict, target_company_name: str,
@@ -8335,14 +8352,14 @@ async def generate_article_summary(scraped_content: str, title: str, ticker: str
     Architecture: Routes by category → Gemini primary → Claude fallback
 
     Returns (summary, model_used) where model_used is:
-        - "Claude": Successfully generated (Gemini or Claude Sonnet)
+        - "Gemini": Successfully generated by Gemini
+        - "Sonnet": Successfully generated by Claude Sonnet
         - "filtered": Article intentionally skipped by AI (retail analysis)
-        - "none": Both APIs failed or unavailable
+        - "short_content": Article too short (< 200 chars)
+        - "api_failed": Both Gemini and Claude API calls failed
+        - "metadata_missing": Missing feed_ticker or value_chain_type
     """
-    model_used = "none"
-    summary = None
-
-    # Try Claude first (if enabled and API key available)
+    # Try AI summarization (if enabled and API key available)
     if USE_CLAUDE_FOR_SUMMARIES and ANTHROPIC_API_KEY:
         try:
             summary, status = await route_article_summary_by_category(
@@ -8353,25 +8370,36 @@ async def generate_article_summary(scraped_content: str, title: str, ticker: str
             if status in ["Gemini", "Sonnet"]:
                 # Gemini or Claude succeeded - return immediately
                 LOG.info(f"[{ticker}] ✅ {status} generated summary successfully")
-                return summary, status  # Return actual model name (Gemini or Sonnet)
+                return summary, status
             elif status == "filtered":
                 # Article intentionally filtered by retail analysis
                 LOG.info(f"[{ticker}] 🚫 Article filtered (retail content)")
                 return None, "filtered"
-            else:  # status == "failed"
-                # Metadata validation failed BEFORE AI call (not an API failure)
+            elif status == "short_content":
+                # Article too short for AI analysis
+                content_len = len(scraped_content.strip()) if scraped_content else 0
+                LOG.warning(f"[{ticker}] ⏭️ Article too short for AI summary ({content_len} chars < 200 min)")
+                LOG.warning(f"[{ticker}]    Title: {title[:80]}...")
+                return None, "short_content"
+            elif status == "metadata_missing":
+                # Missing feed_ticker or value_chain_type for competitor/value_chain articles
                 category_name = category.upper() if category else "UNKNOWN"
-                LOG.error(f"[{ticker}] ❌ Metadata validation failed for {category_name} article")
+                LOG.error(f"[{ticker}] ❌ Metadata missing for {category_name} article")
                 LOG.error(f"[{ticker}]    Title: {title[:80]}...")
                 LOG.error(f"[{ticker}]    Missing required field: feed_ticker or value_chain_type")
                 LOG.debug(f"[{ticker}]    Available metadata keys: {list(article_metadata.keys())}")
-                LOG.debug(f"[{ticker}]    Check query at Line 15549 - are JOINs present?")
-                return None, "none"
+                return None, "metadata_missing"
+            else:  # status == "api_failed" or unknown
+                # Both AI providers failed
+                category_name = category.upper() if category else "UNKNOWN"
+                LOG.error(f"[{ticker}] ❌ AI summary failed for {category_name} article (both Gemini and Claude failed)")
+                LOG.error(f"[{ticker}]    Title: {title[:80]}...")
+                return None, "api_failed"
         except Exception as e:
             LOG.error(f"[{ticker}] ❌ Summary generation exception: {e}")
-            return None, "none"
+            return None, "api_failed"
 
-    return None, "none"
+    return None, "api_failed"
 
 def perform_ai_triage_batch(articles_by_category: Dict[str, List[Dict]], ticker: str) -> Dict[str, List[Dict]]:
     """

@@ -92,8 +92,10 @@ async def generate_gemini_article_summary_company(
             - provider: "Gemini" or "failed"
             - usage: {"input_tokens": X, "output_tokens": Y} or None
     """
-    if not gemini_api_key or not scraped_content or len(scraped_content.strip()) < 200:
+    if not gemini_api_key:
         return None, "failed", None
+    if not scraped_content or len(scraped_content.strip()) < 200:
+        return None, "short_content", None
 
     max_retries = 3
 
@@ -173,8 +175,10 @@ async def generate_gemini_article_summary_competitor(
     gemini_api_key: str
 ) -> Tuple[Optional[str], str, Optional[dict]]:
     """Generate Gemini summary for competitor article"""
-    if not gemini_api_key or not scraped_content or len(scraped_content.strip()) < 200:
+    if not gemini_api_key:
         return None, "failed", None
+    if not scraped_content or len(scraped_content.strip()) < 200:
+        return None, "short_content", None
 
     max_retries = 3
 
@@ -247,8 +251,10 @@ async def generate_gemini_article_summary_upstream(
     gemini_api_key: str
 ) -> Tuple[Optional[str], str, Optional[dict]]:
     """Generate Gemini summary for upstream supplier article"""
-    if not gemini_api_key or not scraped_content or len(scraped_content.strip()) < 200:
+    if not gemini_api_key:
         return None, "failed", None
+    if not scraped_content or len(scraped_content.strip()) < 200:
+        return None, "short_content", None
 
     max_retries = 3
 
@@ -321,8 +327,10 @@ async def generate_gemini_article_summary_downstream(
     gemini_api_key: str
 ) -> Tuple[Optional[str], str, Optional[dict]]:
     """Generate Gemini summary for downstream customer article"""
-    if not gemini_api_key or not scraped_content or len(scraped_content.strip()) < 200:
+    if not gemini_api_key:
         return None, "failed", None
+    if not scraped_content or len(scraped_content.strip()) < 200:
+        return None, "short_content", None
 
     max_retries = 3
 
@@ -395,8 +403,10 @@ async def generate_gemini_article_summary_industry(
     geographic_markets: str = ""
 ) -> Tuple[Optional[str], str, Optional[dict]]:
     """Generate Gemini summary for industry/fundamental driver article"""
-    if not gemini_api_key or not scraped_content or len(scraped_content.strip()) < 200:
+    if not gemini_api_key:
         return None, "failed", None
+    if not scraped_content or len(scraped_content.strip()) < 200:
+        return None, "short_content", None
 
     max_retries = 3
 
@@ -482,8 +492,10 @@ async def generate_claude_article_summary_company(
             - "summary: Summary text with quality JSON successfully
             - "provider: "Gemini" or "failed"
     """
-    if not anthropic_api_key or not scraped_content or len(scraped_content.strip()) < 200:
+    if not anthropic_api_key:
         return None, "failed", None
+    if not scraped_content or len(scraped_content.strip()) < 200:
+        return None, "short_content", None
 
     max_retries = 3
 
@@ -573,8 +585,10 @@ async def generate_claude_article_summary_competitor(
     http_session: aiohttp.ClientSession
 ) -> Tuple[Optional[str], str, Optional[dict]]:
     """Generate Claude summary for competitor article (fallback)"""
-    if not anthropic_api_key or not scraped_content or len(scraped_content.strip()) < 200:
+    if not anthropic_api_key:
         return None, "failed", None
+    if not scraped_content or len(scraped_content.strip()) < 200:
+        return None, "short_content", None
 
     max_retries = 3
 
@@ -664,8 +678,10 @@ async def generate_claude_article_summary_upstream(
     http_session: aiohttp.ClientSession
 ) -> Tuple[Optional[str], str, Optional[dict]]:
     """Generate Claude summary for upstream supplier article (fallback)"""
-    if not anthropic_api_key or not scraped_content or len(scraped_content.strip()) < 200:
+    if not anthropic_api_key:
         return None, "failed", None
+    if not scraped_content or len(scraped_content.strip()) < 200:
+        return None, "short_content", None
 
     max_retries = 3
 
@@ -755,8 +771,10 @@ async def generate_claude_article_summary_downstream(
     http_session: aiohttp.ClientSession
 ) -> Tuple[Optional[str], str, Optional[dict]]:
     """Generate Claude summary for downstream customer article (fallback)"""
-    if not anthropic_api_key or not scraped_content or len(scraped_content.strip()) < 200:
+    if not anthropic_api_key:
         return None, "failed", None
+    if not scraped_content or len(scraped_content.strip()) < 200:
+        return None, "short_content", None
 
     max_retries = 3
 
@@ -846,8 +864,10 @@ async def generate_claude_article_summary_industry(
     geographic_markets: str = ""
 ) -> Tuple[Optional[str], str, Optional[dict]]:
     """Generate Claude summary for industry/fundamental driver article (fallback)"""
-    if not anthropic_api_key or not scraped_content or len(scraped_content.strip()) < 200:
+    if not anthropic_api_key:
         return None, "failed", None
+    if not scraped_content or len(scraped_content.strip()) < 200:
+        return None, "short_content", None
 
     max_retries = 3
 

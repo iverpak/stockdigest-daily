@@ -30336,7 +30336,7 @@ async def update_schedule_day_api(request: Request):
 
 @APP.post("/api/schedule/update-offsets")
 async def update_schedule_offsets_api(request: Request):
-    """Update cleanup and filings offset minutes (applies to all days)"""
+    """Update cleanup offset minutes (applies to all days)"""
     body = await request.json()
     token = body.get('token')
 
@@ -30345,29 +30345,25 @@ async def update_schedule_offsets_api(request: Request):
 
     try:
         cleanup_offset = body.get('cleanup_offset_minutes')
-        filings_offset = body.get('filings_offset_minutes')
 
-        if cleanup_offset is None or filings_offset is None:
-            return {"status": "error", "message": "Both cleanup_offset_minutes and filings_offset_minutes required"}
+        if cleanup_offset is None:
+            return {"status": "error", "message": "cleanup_offset_minutes required"}
 
         if cleanup_offset < 0 or cleanup_offset > 180:
             return {"status": "error", "message": "cleanup_offset must be 0-180 minutes"}
 
-        if filings_offset < 0 or filings_offset > 180:
-            return {"status": "error", "message": "filings_offset must be 0-180 minutes"}
-
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
                 UPDATE schedule_config
-                SET cleanup_offset_minutes = %s, filings_offset_minutes = %s, updated_at = NOW()
-            """, (cleanup_offset, filings_offset))
+                SET cleanup_offset_minutes = %s, updated_at = NOW()
+            """, (cleanup_offset,))
             conn.commit()
 
-        LOG.info(f"✅ Schedule offsets updated: cleanup={cleanup_offset}min, filings={filings_offset}min")
+        LOG.info(f"✅ Schedule offsets updated: cleanup={cleanup_offset}min")
 
         return {
             "status": "success",
-            "message": f"Offsets updated: cleanup {cleanup_offset}min, filings {filings_offset}min"
+            "message": f"Cleanup offset updated: {cleanup_offset}min"
         }
 
     except Exception as e:

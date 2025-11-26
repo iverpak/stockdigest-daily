@@ -90,7 +90,7 @@ CREATE TABLE schedule_config (
 | Saturday | none | - | - | 60 min |
 | Sunday | none | - | - | 60 min |
 
-**Note:** `schedule_hourly_config` table still exists but is NOT used by the scheduler. Hourly jobs run as separate crons.
+**Note:** Hourly jobs (filings check, alerts) run as separate Render crons for memory isolation.
 
 ---
 

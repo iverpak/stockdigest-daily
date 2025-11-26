@@ -2394,31 +2394,7 @@ def ensure_schema():
                     (6, 'none',   NULL,    NULL,    60, 60)   -- Sunday
                 ON CONFLICT (day_of_week) DO NOTHING;
 
-                -- Hourly jobs configuration (filings check, alerts, backup)
-                CREATE TABLE IF NOT EXISTS schedule_hourly_config (
-                    job_type VARCHAR(50) PRIMARY KEY,  -- 'filings_check', 'alerts', 'backup'
-                    start_hour INTEGER NOT NULL,  -- Start hour in Toronto time (0-23)
-                    end_hour INTEGER NOT NULL,    -- End hour in Toronto time (0-23)
-                    run_on_half_hour BOOLEAN DEFAULT FALSE,  -- TRUE = run at :30, FALSE = run at :00
-                    enabled BOOLEAN DEFAULT TRUE,
-                    updated_at TIMESTAMPTZ DEFAULT NOW(),
-                    CONSTRAINT schedule_hourly_start_hour_check CHECK (start_hour >= 0 AND start_hour <= 23),
-                    CONSTRAINT schedule_hourly_end_hour_check CHECK (end_hour >= 0 AND end_hour <= 23)
-                );
-
-                -- Insert default hourly job configuration
-                -- filings_check: 8:30am-8:30pm (runs at :30)
-                -- alerts: 9am-9pm (runs at :00)
-                -- backup: 11pm-11pm (runs at :00, i.e., only at 11pm)
-                INSERT INTO schedule_hourly_config (job_type, start_hour, end_hour, run_on_half_hour, enabled)
-                VALUES
-                    ('filings_check', 8, 20, TRUE, TRUE),   -- 8:30am-8:30pm, runs at :30
-                    ('alerts', 9, 21, FALSE, TRUE),         -- 9am-9pm, runs at :00
-                    ('backup', 23, 23, FALSE, TRUE)         -- 11pm only, runs at :00
-                ON CONFLICT (job_type) DO NOTHING;
-
                 CREATE INDEX IF NOT EXISTS idx_schedule_config_day ON schedule_config(day_of_week);
-                CREATE INDEX IF NOT EXISTS idx_schedule_hourly_job_type ON schedule_hourly_config(job_type);
                 """)
 
                 LOG.info("✅ Complete database schema created successfully with NEW ARCHITECTURE + JOB QUEUE + BETA USERS + DAILY/WEEKLY REPORTS + SCHEDULER")
@@ -30222,7 +30198,7 @@ async def set_phase3_model_api(request: Request):
 
 @APP.get("/api/schedule/config")
 async def get_schedule_config_api(token: str = Query(...)):
-    """Get all schedule configuration (daily schedule + hourly jobs)"""
+    """Get schedule configuration for daily/weekly reports"""
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
@@ -30231,19 +30207,11 @@ async def get_schedule_config_api(token: str = Query(...)):
             # Get daily schedule config
             cur.execute("""
                 SELECT day_of_week, report_type, process_time, send_time,
-                       cleanup_offset_minutes, filings_offset_minutes
+                       cleanup_offset_minutes
                 FROM schedule_config
                 ORDER BY day_of_week
             """)
             schedule_rows = cur.fetchall()
-
-            # Get hourly jobs config
-            cur.execute("""
-                SELECT job_type, start_hour, end_hour, run_on_half_hour, enabled
-                FROM schedule_hourly_config
-                ORDER BY job_type
-            """)
-            hourly_rows = cur.fetchall()
 
         # Convert to serializable format
         day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
@@ -30255,24 +30223,12 @@ async def get_schedule_config_api(token: str = Query(...)):
                 'report_type': row['report_type'],
                 'process_time': row['process_time'].strftime('%H:%M') if row['process_time'] else None,
                 'send_time': row['send_time'].strftime('%H:%M') if row['send_time'] else None,
-                'cleanup_offset_minutes': row['cleanup_offset_minutes'],
-                'filings_offset_minutes': row['filings_offset_minutes']
-            })
-
-        hourly_jobs = []
-        for row in hourly_rows:
-            hourly_jobs.append({
-                'job_type': row['job_type'],
-                'start_hour': row['start_hour'],
-                'end_hour': row['end_hour'],
-                'run_on_half_hour': row['run_on_half_hour'],
-                'enabled': row['enabled']
+                'cleanup_offset_minutes': row['cleanup_offset_minutes']
             })
 
         return {
             "status": "success",
-            "schedule": schedule,
-            "hourly_jobs": hourly_jobs
+            "schedule": schedule
         }
 
     except Exception as e:
@@ -30368,50 +30324,6 @@ async def update_schedule_offsets_api(request: Request):
 
     except Exception as e:
         LOG.error(f"Failed to update schedule offsets: {e}")
-        return {"status": "error", "message": str(e)}
-
-
-@APP.post("/api/schedule/update-hourly-job")
-async def update_hourly_job_api(request: Request):
-    """Update hourly job configuration"""
-    body = await request.json()
-    token = body.get('token')
-
-    if not check_admin_token(token):
-        return {"status": "error", "message": "Unauthorized"}
-
-    try:
-        job_type = body.get('job_type')
-        start_hour = body.get('start_hour')
-        end_hour = body.get('end_hour')
-        enabled = body.get('enabled', True)
-
-        if job_type not in ['filings_check', 'alerts', 'backup']:
-            return {"status": "error", "message": "Invalid job_type"}
-
-        if start_hour is None or end_hour is None:
-            return {"status": "error", "message": "start_hour and end_hour required"}
-
-        if start_hour < 0 or start_hour > 23 or end_hour < 0 or end_hour > 23:
-            return {"status": "error", "message": "Hours must be 0-23"}
-
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                UPDATE schedule_hourly_config
-                SET start_hour = %s, end_hour = %s, enabled = %s, updated_at = NOW()
-                WHERE job_type = %s
-            """, (start_hour, end_hour, enabled, job_type))
-            conn.commit()
-
-        LOG.info(f"✅ Hourly job '{job_type}' updated: {start_hour}:00-{end_hour}:00, enabled={enabled}")
-
-        return {
-            "status": "success",
-            "message": f"Hourly job '{job_type}' updated"
-        }
-
-    except Exception as e:
-        LOG.error(f"Failed to update hourly job: {e}")
         return {"status": "error", "message": str(e)}
 
 
@@ -31061,38 +30973,6 @@ def get_schedule_config_for_day(day_of_week: int) -> Optional[Dict]:
         return None
 
 
-def get_hourly_job_config(job_type: str) -> Optional[Dict]:
-    """
-    Get hourly job configuration.
-
-    Args:
-        job_type: 'filings_check', 'alerts', or 'backup'
-
-    Returns:
-        Dict with: start_hour, end_hour, run_on_half_hour, enabled
-        None if job_type not found
-    """
-    try:
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                SELECT start_hour, end_hour, run_on_half_hour, enabled
-                FROM schedule_hourly_config
-                WHERE job_type = %s
-            """, (job_type,))
-            row = cur.fetchone()
-            if row:
-                return {
-                    'start_hour': row['start_hour'],
-                    'end_hour': row['end_hour'],
-                    'run_on_half_hour': row['run_on_half_hour'],
-                    'enabled': row['enabled']
-                }
-            return None
-    except Exception as e:
-        LOG.error(f"Failed to get hourly job config for {job_type}: {e}")
-        return None
-
-
 def is_within_time_window(current_time, target_time, window_minutes: int = 15) -> bool:
     """
     Check if current time is within ±window_minutes of target time.
@@ -31118,45 +30998,6 @@ def is_within_time_window(current_time, target_time, window_minutes: int = 15) -
         diff = 1440 - diff  # 1440 = minutes in a day
 
     return diff <= window_minutes
-
-
-def is_hourly_job_time(current_hour: int, current_minute: int, job_config: Dict) -> bool:
-    """
-    Check if it's time to run an hourly job.
-
-    Args:
-        current_hour: Current hour in Toronto time (0-23)
-        current_minute: Current minute (0-59)
-        job_config: Dict with start_hour, end_hour, run_on_half_hour, enabled
-
-    Returns:
-        True if job should run now
-    """
-    if not job_config or not job_config.get('enabled', True):
-        return False
-
-    start_hour = job_config['start_hour']
-    end_hour = job_config['end_hour']
-    run_on_half_hour = job_config.get('run_on_half_hour', False)
-
-    # Check if we're in the right minute window
-    # :00 jobs run when minute < 15
-    # :30 jobs run when 15 <= minute < 45
-    if run_on_half_hour:
-        if not (15 <= current_minute < 45):
-            return False
-    else:
-        if not (current_minute < 15 or current_minute >= 45):
-            return False
-
-    # Check if we're in the hour window
-    # Handle wraparound (e.g., start=22, end=2)
-    if start_hour <= end_hour:
-        # Normal case: start_hour to end_hour
-        return start_hour <= current_hour <= end_hour
-    else:
-        # Wraparound case: start_hour to midnight, then midnight to end_hour
-        return current_hour >= start_hour or current_hour <= end_hour
 
 
 def run_scheduler():

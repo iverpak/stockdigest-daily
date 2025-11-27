@@ -14841,13 +14841,17 @@ def generate_email_html_core(
             return None
 
     # Parse Phase 3 JSON (same converter as Email #3)
-    from modules.executive_summary_phase1 import convert_phase1_to_sections_dict
+    from modules.executive_summary_phase1 import convert_phase1_to_sections_dict, get_used_article_indices
     try:
         json_output = json.loads(executive_summary_text)
         sections = convert_phase1_to_sections_dict(json_output)
+        # Get indices of articles used in bullets that survived filtering
+        used_article_indices = get_used_article_indices(json_output)
+        LOG.info(f"[{ticker}] Email #3: {len(used_article_indices)} article indices used in final report")
     except json.JSONDecodeError as e:
         LOG.error(f"[{ticker}] Failed to parse Phase 3 JSON in Email #3: {e}")
         sections = {}  # Empty sections
+        used_article_indices = set()  # No filtering
 
     # NEW (Nov 2025): Filter sections based on report_type
     if report_type == 'daily':
@@ -14905,7 +14909,27 @@ def generate_email_html_core(
             articles = list(cur.fetchall())
             LOG.info(f"[{ticker}] Email #3: Fetched {len(articles)} real articles")
 
+        # Filter REAL ARTICLES to only those used in the final report (based on source_articles tracking)
+        # IMPORTANT: Filter BEFORE adding company releases, as releases are not in Phase 1 timeline
+        # The articles list is ordered by published_at DESC, matching Phase 1 timeline ordering
+        # Index 0 = first article, index 1 = second article, etc.
+        if used_article_indices and articles:
+            total_real_articles = len(articles)
+            # Keep only articles whose timeline index is in the used set
+            articles = [
+                article for idx, article in enumerate(articles)
+                if idx in used_article_indices
+            ]
+            filtered_count = total_real_articles - len(articles)
+            if filtered_count > 0:
+                LOG.info(f"[{ticker}] Email #3: Filtered {filtered_count} unused articles (showing {len(articles)} of {total_real_articles})")
+        elif articles:
+            # No source_articles tracking (backward compatibility) - show all articles
+            LOG.info(f"[{ticker}] Email #3: No source_articles tracking, showing all {len(articles)} articles")
+
         # Query company releases and map to article format
+        # Company releases are always included (not filtered by source_articles)
+        # They're not in the Phase 1 article timeline, so no index-based filtering applies
         # LEFT JOIN with sec_8k_filings to get exhibit URLs for 8-K releases
         if company_release_ids:
             cur.execute("""
@@ -14935,7 +14959,7 @@ def generate_email_html_core(
                     articles.append(article_dict)
                     releases_fetched += 1
 
-            LOG.info(f"[{ticker}] Email #3: Fetched {releases_fetched} company releases")
+            LOG.info(f"[{ticker}] Email #3: Fetched {releases_fetched} company releases (always included)")
 
         # Group all articles (real + company releases) by category
         for article in articles:

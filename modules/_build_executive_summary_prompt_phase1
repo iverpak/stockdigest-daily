@@ -14,7 +14,14 @@ You will receive articles in a UNIFIED TIMELINE, sorted newest to oldest. Each a
 
 All article summaries are already written from the target company investor perspective.
 
-Articles are provided with summaries, sources, and dates. Your job is to synthesize these articles into an executive intelligence brief.
+Articles are numbered with 0-indexed references [0], [1], [2], etc. for source tracking. You must track which articles contributed to each bullet/paragraph.
+
+Example input format:
+[0] [COMPANY] Tesla Q3 Results Exceed Expectations [reuters.com] Oct 22, 2025: Tesla delivered 462,890 vehicles...
+[1] [COMPETITOR] GM Reports Strong EV Sales [bloomberg.com] Oct 21, 2025: General Motors reported...
+[2] [INDUSTRY - EV demand] Electric Vehicle Sales Surge [wsj.com] Oct 20, 2025: US EV sales grew 15%...
+
+Your job is to synthesize these articles into an executive intelligence brief, tracking which articles informed each output.
 
 ═══════════════════════════════════════════════════════════════════════════
 AUDIENCE & PURPOSE - INSTITUTIONAL INVESTMENT RESEARCH
@@ -58,7 +65,7 @@ PHASE 1 SCOPE
 ═══════════════════════════════════════════════════════════════════════════════
 
 WHAT YOU DO:
-✓ Process all provided article summaries (typically 20-30, but could be 0-50+)
+✓ Process all provided article summaries (typically 20-40, but could be 0-80)
 ✓ Identify ALL themes (maintain 95%+ coverage - no theme left behind)
 ✓ Synthesize articles into clear, information-dense bullets
 ✓ Assign bullets to correct sections based on content type
@@ -93,6 +100,7 @@ You MUST output valid JSON with this EXACT structure:
   "sections": {
     "bottom_line": {
       "content": "string (≤150 words)",
+      "source_articles": [0, 2, 5, 8],
       "date_range": "string (consolidated date range from all inline dates in content)",
       "word_count": integer
     },
@@ -101,6 +109,7 @@ You MUST output valid JSON with this EXACT structure:
         "bullet_id": "string (lowercase topic_label with underscores, no special chars)",
         "topic_label": "string (2-5 words)",
         "content": "string (full sentence with attribution and date at end)",
+        "source_articles": [0, 3],
         "date_range": "string (date or range extracted from content, e.g., 'Nov 04' or 'Nov 04-07')",
         "filing_hints": {
           "10-K": ["Section Name 1", "Section Name 2"],
@@ -115,6 +124,7 @@ You MUST output valid JSON with this EXACT structure:
         "bullet_id": "string",
         "topic_label": "string (2-5 words)",
         "content": "string (full sentence with attribution and date at end)",
+        "source_articles": [1, 4],
         "date_range": "string (date or range extracted from content)",
         "filing_hints": {
           "10-K": ["Section Name 1", "Section Name 2"],
@@ -124,14 +134,15 @@ You MUST output valid JSON with this EXACT structure:
         "filing_keywords": ["keyword1", "keyword2", "keyword3"]
       }
     ],
-    "risk_factors": [...same structure as above with date_range...],
-    "wall_street_sentiment": [...same structure as above with date_range...],
-    "competitive_industry_dynamics": [...same structure as above with date_range...],
+    "risk_factors": [...same structure as above with source_articles and date_range...],
+    "wall_street_sentiment": [...same structure as above with source_articles and date_range...],
+    "competitive_industry_dynamics": [...same structure as above with source_articles and date_range...],
     "upcoming_catalysts": [
       {
         "bullet_id": "string",
         "topic_label": "string (event name)",
         "content": "string (date/timing - details with attribution and date at end)",
+        "source_articles": [5, 9],
         "date_range": "string (date or range extracted from content)",
         "filing_hints": {
           "10-K": ["Section Name 1", "Section Name 2"],
@@ -143,17 +154,20 @@ You MUST output valid JSON with this EXACT structure:
     ],
     "upside_scenario": {
       "content": "string (80-100 words, single paragraph)",
+      "source_articles": [0, 3, 7],
       "date_range": "string (consolidated date range from all inline dates in content)"
     },
     "downside_scenario": {
       "content": "string (single paragraph, 3-4 sentences)",
+      "source_articles": [2, 6, 11],
       "date_range": "string (consolidated date range from all inline dates in content)"
     },
     "key_variables": [
       {
         "bullet_id": "string",
         "topic_label": "string (variable name)",
-        "content": "string (description - Timeline: date/period)"
+        "content": "string (description - Timeline: date/period)",
+        "source_articles": [1, 8]
       }
     ]
   }
@@ -163,24 +177,28 @@ SECTION STRUCTURE NOTES:
 
 Bullet sections (major_developments, financial_performance, risk_factors, wall_street_sentiment, competitive_industry_dynamics, upcoming_catalysts):
 - Array of bullet objects
-- Each bullet has: bullet_id, topic_label, content, date_range, filing_hints, filing_keywords
+- Each bullet has: bullet_id, topic_label, content, source_articles, date_range, filing_hints, filing_keywords
+- source_articles REQUIRED: Array of 0-indexed article numbers from timeline that contributed to this bullet
 - filing_hints REQUIRED for all bullet sections
 - filing_keywords OPTIONAL (0-4 keywords, empty array [] if none applicable)
 - date_range REQUIRED for all bullet sections (empty string "" if no date found)
 
 Scenario sections (upside_scenario, downside_scenario):
-- Single object with content and date_range fields
+- Single object with content, source_articles, and date_range fields
+- source_articles REQUIRED: Array of 0-indexed article numbers that informed this scenario
 - No bullet_id, topic_label, or filing_hints
 - date_range consolidates all dates from content into a range
 
 Key Variables section:
 - Array of bullet objects
-- Each has: bullet_id, topic_label, content
+- Each has: bullet_id, topic_label, content, source_articles
+- source_articles REQUIRED: Array of 0-indexed article numbers that identified this variable to monitor
 - NO filing_hints (forward-looking monitoring variables, not enrichable from past filings)
 - NO date_range (forward-looking, not based on dated articles)
 
 Bottom Line section:
-- Single object with content, date_range, and word_count fields
+- Single object with content, source_articles, date_range, and word_count fields
+- source_articles REQUIRED: Array of 0-indexed article numbers synthesized in bottom line
 - date_range consolidates all dates from content into a range
 
 CRITICAL JSON REQUIREMENTS:
@@ -202,6 +220,34 @@ SECTION ORDER (must appear in this exact order):
 8. upside_scenario
 9. downside_scenario
 10. key_variables
+
+═══════════════════════════════════════════════════════════════════════════════
+SOURCE ARTICLE TRACKING
+═══════════════════════════════════════════════════════════════════════════════
+
+Every bullet and paragraph MUST include source_articles - the 0-indexed article numbers from the timeline that contributed to that content.
+
+RULES:
+- Use 0-indexed references matching the [0], [1], [2] numbering in the input timeline
+- Include ALL articles that contributed information to the bullet/paragraph
+- A single article can appear in multiple bullets if it contains multiple themes
+- Every bullet must have at least one source article (nothing in the report should be invented)
+
+TRACKING EXAMPLES:
+
+Given input articles:
+[0] [COMPANY] Tesla Q3 Results... : Delivered 462,890 vehicles, beat estimates
+[3] [COMPANY] Tesla Lowers Prices... : Model 3 now $36,990, Model Y $39,990
+[7] [INDUSTRY - EV demand] EV Sales Surge... : Industry up 15% YoY
+
+Bullet about Q3 deliveries:
+"source_articles": [0]  // Only article [0] discussed deliveries
+
+Bullet about pricing strategy:
+"source_articles": [0, 3]  // Article [0] mentioned demand, [3] had pricing details
+
+Bottom line synthesizing multiple themes:
+"source_articles": [0, 3, 7]  // All three contributed to the overview
 
 ═══════════════════════════════════════════════════════════════════════════════
 DATE EXTRACTION
@@ -614,6 +660,7 @@ Escape hatch JSON:
   "sections": {
     "bottom_line": {
       "content": "No material developments reported for the target company this period.",
+      "source_articles": [],
       "date_range": "[extract from CURRENT DATE header - e.g., 'November 23, 2025' becomes 'Nov 23']",
       "word_count": [actual count]
     },
@@ -625,10 +672,12 @@ Escape hatch JSON:
     "upcoming_catalysts": [],
     "upside_scenario": {
       "content": "No new upside catalysts discussed in recent articles.",
+      "source_articles": [],
       "date_range": ""
     },
     "downside_scenario": {
       "content": "No new downside risks discussed in recent articles.",
+      "source_articles": [],
       "date_range": ""
     },
     "key_variables": []
@@ -1132,7 +1181,8 @@ Format as bullet objects (NO filing_hints for this section):
 {
   "bullet_id": "q4_delivery_guidance",
   "topic_label": "Q4 delivery guidance",
-  "content": "Management guidance for Q4 deliveries and FY performance following Q3 record, with post-tax-credit demand sustainability as key uncertainty per earnings call - Timeline: Q4 2024 and FY2025 results per management guidance"
+  "content": "Management guidance for Q4 deliveries and FY performance following Q3 record, with post-tax-credit demand sustainability as key uncertainty per earnings call - Timeline: Q4 2024 and FY2025 results per management guidance",
+  "source_articles": [2, 8]
 }
 
 Structure:
@@ -2274,6 +2324,7 @@ Example bullet:
   "bullet_id": "bofa_upgrade",
   "topic_label": "BofA upgrade",
   "content": "BofA's Samir Khanal raised price target to $137 from $130...",
+  "source_articles": [5],
   "date_range": "Nov 08",
   "filing_hints": {
     "10-K": [],
@@ -2573,6 +2624,8 @@ NORMAL DAY EXAMPLE (20+ articles, full brief):
   "sections": {
     "bottom_line": {
       "content": "Tesla delivered 462,890 vehicles in Q3, exceeding consensus estimates of 455,000, with production reaching 469,796 units per company report October 22. Multiple analysts raised price targets ahead of Q3 earnings, with Wedbush lifting target to $600 citing AI transformation leadership. Company launched stripped-down Model 3 at $36,990 and Model Y at $39,990 in early October to stimulate demand following September 30 federal tax credit expiration. UBS maintained Sell rating citing concerns about sustainable demand post-credit, while Barclays noted shares increasingly disconnected from fundamentals with 2025 delivery forecast 1.95M units below Bloomberg consensus 2.08M. Q3 earnings scheduled October 22 after market close with focus on Q4 guidance, margin trajectory, and robotaxi expansion timeline.",
+      "source_articles": [0, 1, 3, 5, 8, 12, 15],
+      "date_range": "Oct 18-22",
       "word_count": 118
     },
     "major_developments": [
@@ -2580,6 +2633,8 @@ NORMAL DAY EXAMPLE (20+ articles, full brief):
         "bullet_id": "q3_deliveries_beat",
         "topic_label": "Q3 deliveries beat",
         "content": "Tesla delivered 462,890 vehicles in Q3 2024, exceeding consensus estimates of 455,000 and representing 6.4% increase from Q2 deliveries of 435,059 per company report; production reached 469,796 units per Bloomberg",
+        "source_articles": [0, 5],
+        "date_range": "Oct 22",
         "filing_hints": {
           "10-K": ["KEY OPERATIONAL METRICS (KPIs)", "INFRASTRUCTURE & ASSETS"],
           "10-Q": ["OPERATIONAL METRICS (QoQ & YoY)", "SEGMENT PERFORMANCE TRENDS (QoQ & YoY)"],
@@ -2591,6 +2646,8 @@ NORMAL DAY EXAMPLE (20+ articles, full brief):
         "bullet_id": "affordable_model_launch",
         "topic_label": "Affordable model launch",
         "content": "Company launched stripped-down Model 3 at $36,990 and Model Y at $39,990 in early October, removing features to lower entry price point following September 30 federal EV tax credit expiration per multiple reports (Oct 18-22)",
+        "source_articles": [3, 8],
+        "date_range": "Oct 18-22",
         "filing_hints": {
           "10-K": ["KEY PRODUCTS & SERVICES", "STRATEGIC PRIORITIES & OUTLOOK"],
           "10-Q": ["SUMMARY OF KEY CHANGES", "MANAGEMENT COMMENTARY"],
@@ -2605,10 +2662,14 @@ NORMAL DAY EXAMPLE (20+ articles, full brief):
     "competitive_industry_dynamics": [...],
     "upcoming_catalysts": [...],
     "upside_scenario": {
-      "content": "Multiple analysts raised price targets ahead of Q3 earnings, with Wedbush stating Tesla is at forefront of AI-driven transformation..."
+      "content": "Multiple analysts raised price targets ahead of Q3 earnings, with Wedbush stating Tesla is at forefront of AI-driven transformation...",
+      "source_articles": [1, 5, 12],
+      "date_range": "Oct 18-22"
     },
     "downside_scenario": {
-      "content": "Bearish analysts warned Q3 delivery strength may represent local peak..."
+      "content": "Bearish analysts warned Q3 delivery strength may represent local peak...",
+      "source_articles": [8, 15],
+      "date_range": "Oct 20-22"
     },
     "key_variables": [...]
   }

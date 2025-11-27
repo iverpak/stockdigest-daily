@@ -120,11 +120,18 @@ def _build_phase1_user_content(
             reverse=True
         )
 
-        for article in all_flagged_articles[:50]:  # Limit to 50 most recent
+        # Build timeline with sequential indices - only count articles with ai_summary
+        # No limit - process all flagged articles from triage (max ~79 based on triage caps)
+        timeline_idx = 0
+        for article in all_flagged_articles:
             title = article.get("title", "")
             ai_summary = article.get("ai_summary", "")
             domain = article.get("domain", "")
             published_at = article.get("published_at")
+
+            # Skip articles without ai_summary (safety check)
+            if not ai_summary:
+                continue
 
             # Format date with year for clarity in staleness checks
             if published_at:
@@ -135,10 +142,11 @@ def _build_phase1_user_content(
 
             category_tag = article.get("_category_tag", "[UNKNOWN]")
 
-            if ai_summary:
-                # Get domain formal name (simplified - just use domain if lookup not available)
-                source_name = domain if domain else "Unknown Source"
-                unified_timeline.append(f"• {category_tag} {title} [{source_name}] {date_str}: {ai_summary}")
+            # Get domain formal name (simplified - just use domain if lookup not available)
+            source_name = domain if domain else "Unknown Source"
+            # Use 0-indexed article numbers [0], [1], [2] for source tracking
+            unified_timeline.append(f"[{timeline_idx}] {category_tag} {title} [{source_name}] {date_str}: {ai_summary}")
+            timeline_idx += 1
 
     # Calculate report context (current date, day of week)
     current_date = datetime.now().strftime("%B %d, %Y")
@@ -551,6 +559,27 @@ def generate_executive_summary_phase1(
     return None
 
 
+def _validate_source_articles(source_articles, context: str) -> Tuple[bool, str]:
+    """
+    Validate source_articles field is array of non-negative integers.
+
+    Args:
+        source_articles: The source_articles value to validate
+        context: Description for error messages (e.g., "major_developments[0]")
+
+    Returns:
+        (is_valid, error_message)
+    """
+    if not isinstance(source_articles, list):
+        return False, f"{context} source_articles must be array"
+
+    for idx, val in enumerate(source_articles):
+        if not isinstance(val, int) or val < 0:
+            return False, f"{context} source_articles[{idx}] must be non-negative integer"
+
+    return True, ""
+
+
 def validate_phase1_json(json_output: Dict) -> Tuple[bool, str]:
     """
     Validate Phase 1 JSON matches expected schema.
@@ -558,9 +587,10 @@ def validate_phase1_json(json_output: Dict) -> Tuple[bool, str]:
     Checks:
     - "sections" key exists
     - All 10 required sections present
-    - Bullet sections have correct structure (bullet_id, topic_label, content, filing_hints)
-    - Bottom line has content + word_count
-    - Scenarios have content
+    - Bullet sections have correct structure (bullet_id, topic_label, content, source_articles, filing_hints)
+    - Bottom line has content + source_articles + word_count
+    - Scenarios have content + source_articles
+    - source_articles arrays contain valid non-negative integers
 
     Returns:
         (is_valid, error_message)
@@ -590,6 +620,11 @@ def validate_phase1_json(json_output: Dict) -> Tuple[bool, str]:
             return False, "bottom_line missing 'content'"
         if "word_count" not in bottom_line:
             return False, "bottom_line missing 'word_count'"
+        # Validate source_articles if present (optional for backward compatibility)
+        if "source_articles" in bottom_line:
+            is_valid, err = _validate_source_articles(bottom_line["source_articles"], "bottom_line")
+            if not is_valid:
+                return False, err
 
         # Validate bullet sections
         bullet_sections = [
@@ -625,6 +660,12 @@ def validate_phase1_json(json_output: Dict) -> Tuple[bool, str]:
 
                 # Empty arrays are valid (means no filing context needed)
 
+                # Validate source_articles if present (optional for backward compatibility)
+                if "source_articles" in bullet:
+                    is_valid, err = _validate_source_articles(bullet["source_articles"], f"{section_name}[{i}]")
+                    if not is_valid:
+                        return False, err
+
         # Validate key_variables (no filing_hints required)
         key_variables = sections["key_variables"]
         if not isinstance(key_variables, list):
@@ -637,6 +678,11 @@ def validate_phase1_json(json_output: Dict) -> Tuple[bool, str]:
             for field in required_fields:
                 if field not in var:
                     return False, f"key_variables[{i}] missing '{field}'"
+            # Validate source_articles if present (optional for backward compatibility)
+            if "source_articles" in var:
+                is_valid, err = _validate_source_articles(var["source_articles"], f"key_variables[{i}]")
+                if not is_valid:
+                    return False, err
 
         # Validate scenarios
         for scenario_name in ["upside_scenario", "downside_scenario"]:
@@ -645,11 +691,115 @@ def validate_phase1_json(json_output: Dict) -> Tuple[bool, str]:
                 return False, f"{scenario_name} must be object"
             if "content" not in scenario:
                 return False, f"{scenario_name} missing 'content'"
+            # Validate source_articles if present (optional for backward compatibility)
+            if "source_articles" in scenario:
+                is_valid, err = _validate_source_articles(scenario["source_articles"], scenario_name)
+                if not is_valid:
+                    return False, err
 
         return True, ""
 
     except Exception as e:
         return False, f"Validation exception: {str(e)}"
+
+
+def _should_include_bullet_in_email3(bullet: Dict, section_name: str) -> bool:
+    """
+    Determine if a bullet should be included in Email #3 (user-facing).
+
+    Filtering rules:
+    - Remove bullets with relevance = "none"
+    - Remove bullets with relevance = "indirect" AND impact = "low impact"
+    - Don't filter if fields are missing (safety)
+    - Don't filter paragraphs (bottom_line, upside, downside)
+
+    Applies to ALL bullet sections: major_developments, financial_performance,
+    risk_factors, wall_street_sentiment, competitive_industry_dynamics, upcoming_catalysts
+
+    Args:
+        bullet: Bullet dict with optional relevance/impact fields
+        section_name: Name of the section (e.g., "major_developments")
+
+    Returns:
+        True if bullet should be included, False if filtered out
+    """
+    # Don't filter paragraphs (they're not enriched with relevance/impact)
+    if section_name in ["bottom_line", "upside_scenario", "downside_scenario"]:
+        return True
+
+    # Get enrichment fields
+    relevance = bullet.get('relevance', '').lower()
+    impact = bullet.get('impact', '').lower()
+
+    # Safety: Don't filter if fields are missing
+    if not relevance or not impact:
+        return True
+
+    # Filter rule 1: relevance is "none"
+    if relevance == 'none':
+        return False
+
+    # Filter rule 2: relevance is "indirect" AND impact is "low impact"
+    if relevance == 'indirect' and impact == 'low impact':
+        return False
+
+    # Keep bullet
+    return True
+
+
+def get_used_article_indices(phase_json: Dict) -> set:
+    """
+    Collect article indices from bullets/paragraphs that pass Email #3 filtering.
+
+    This function applies the same filtering logic as convert_phase1_to_sections_dict()
+    to determine which bullets survive filtering, then collects all source_articles
+    from those surviving bullets.
+
+    Use this to filter the Source Articles section in Email #3 to only show
+    articles that actually contributed to the final report.
+
+    Args:
+        phase_json: Phase 1+2 (or Phase 2+3) merged JSON with source_articles fields
+
+    Returns:
+        Set of 0-indexed article numbers that contributed to the final report.
+        Empty set if no source_articles tracking is present.
+    """
+    used_indices = set()
+    sections = phase_json.get("sections", {})
+
+    # Bullet sections that get filtered
+    bullet_sections = [
+        "major_developments", "financial_performance", "risk_factors",
+        "wall_street_sentiment", "competitive_industry_dynamics",
+        "upcoming_catalysts", "key_variables"
+    ]
+
+    for section_name in bullet_sections:
+        section_content = sections.get(section_name, [])
+        if not isinstance(section_content, list):
+            continue
+
+        for bullet in section_content:
+            if not isinstance(bullet, dict):
+                continue
+
+            # Apply same filter as Email #3
+            if _should_include_bullet_in_email3(bullet, section_name):
+                # Collect source articles from this bullet
+                source_articles = bullet.get('source_articles', [])
+                if isinstance(source_articles, list):
+                    used_indices.update(source_articles)
+
+    # Paragraph sections (always included, no filtering)
+    for para_section in ["bottom_line", "upside_scenario", "downside_scenario"]:
+        para = sections.get(para_section, {})
+        if isinstance(para, dict):
+            source_articles = para.get('source_articles', [])
+            if isinstance(source_articles, list):
+                used_indices.update(source_articles)
+
+    return used_indices
 
 
 def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[Dict]]:
@@ -695,41 +845,6 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[Dict]]:
                 content += f" Context: {context}"
         sections["bottom_line"] = [content]
 
-    # Helper function to filter bullets for Email #3
-    def should_include_in_email3(bullet: Dict, section_name: str) -> bool:
-        """
-        Email #3 filtering:
-        - Remove bullets with relevance = "none"
-        - Remove bullets with relevance = "indirect" AND impact = "low impact"
-        - Don't filter if fields are missing (safety)
-        - Don't filter paragraphs (bottom_line, upside, downside)
-
-        Applies to ALL bullet sections: major_developments, financial_performance,
-        risk_factors, wall_street_sentiment, competitive_industry_dynamics, upcoming_catalysts
-        """
-        # Don't filter paragraphs (they're not enriched with relevance/impact)
-        if section_name in ["bottom_line", "upside_scenario", "downside_scenario"]:
-            return True
-
-        # Get enrichment fields
-        relevance = bullet.get('relevance', '').lower()
-        impact = bullet.get('impact', '').lower()
-
-        # Safety: Don't filter if fields are missing
-        if not relevance or not impact:
-            return True
-
-        # Filter rule 1: relevance is "none"
-        if relevance == 'none':
-            return False
-
-        # Filter rule 2: relevance is "indirect" AND impact is "low impact"
-        if relevance == 'indirect' and impact == 'low impact':
-            return False
-
-        # Keep bullet
-        return True
-
     # Helper function to format bullets (simple, no metadata)
     def format_bullet_simple(bullet: Dict) -> Dict:
         """Format bullet with header and content. Returns {'bullet_id': '...', 'formatted': '...'}"""
@@ -765,10 +880,10 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[Dict]]:
 
     for json_key, sections_key in section_mapping.items():
         if json_key in json_sections:
-            # Apply filter to ALL bullet sections
+            # Apply filter to ALL bullet sections (uses module-level function)
             filtered_bullets = [
                 b for b in json_sections[json_key]
-                if should_include_in_email3(b, json_key)
+                if _should_include_bullet_in_email3(b, json_key)
             ]
 
             sections[sections_key] = [
@@ -893,6 +1008,11 @@ def convert_phase1_to_enhanced_sections(phase1_json: Dict) -> Dict[str, List[Dic
             metadata_parts.append(f"Reason: {reason_val}")
 
             result += f"<br>  Metadata: {' | '.join(metadata_parts)}"
+
+        # Source articles (Phase 1 tracking)
+        source_articles = bullet.get('source_articles', [])
+        if source_articles:
+            result += f"<br>  Source Articles: {source_articles}"
 
         # Bullet ID
         result += f"<br>  ID: {bullet['bullet_id']}"

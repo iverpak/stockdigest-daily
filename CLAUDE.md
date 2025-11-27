@@ -1113,6 +1113,7 @@ StockDigest generates 3 distinct emails per ticker during the digest phase, form
   - Sentiment indicators
   - Business impact assessment
 - Executive Summary section (AI-generated overview of all flagged articles)
+- **Source Articles metadata** per bullet: `Source Articles: [0, 3, 5]` (NEW Nov 2025)
 - Sorted by priority (same algorithm as Email #1)
 **Timing:** Sent at ~95% progress (end of digest phase)
 **Key Behavior:** Generates and SAVES executive summary to database via `save_executive_summary()` (Line 1050)
@@ -1152,7 +1153,8 @@ StockDigest generates 3 distinct emails per ticker during the digest phase, form
   - Legal disclaimer box
   - Links: Terms of Service | Privacy Policy | Contact | Unsubscribe (all full URLs)
   - Copyright notice
-- Shows ONLY flagged articles (same filtering as Email #1 and #2)
+- **Source Articles section** filtered to only show articles used in surviving bullets (NEW Nov 2025)
+- Company releases always included (not filtered by source_articles)
 - NO AI analysis boxes, NO descriptions (clean presentation)
 
 **Timing:** Sent at ~97% progress (after Email #2, before GitHub commit)
@@ -1994,6 +1996,13 @@ python app.py check_filings
   - Sentence-by-sentence analysis with status badges
   - Database-driven date selection (queries for latest summary)
 
+**Source Article Tracking (NEW - Nov 27, 2025):**
+- `_validate_source_articles()` - modules/executive_summary_phase1.py (Validate source_articles arrays)
+- `_should_include_bullet_in_email3()` - modules/executive_summary_phase1.py (Filter logic for bullets)
+- `get_used_article_indices()` - modules/executive_summary_phase1.py (Collect indices from passing bullets)
+- `format_bullet_with_metadata()` - modules/executive_summary_phase1.py (Email #2 display with source_articles)
+- **Article filtering in app.py `generate_email_html_core()`** - Lines 14916-14928 (Filter Source Articles in Email #3)
+
 **Daily vs Weekly Reports (NEW - Nov 2025):**
 - `get_report_type_and_lookback()` - Line 2142 (Day-of-week detection and lookback window retrieval)
   - Returns: `('daily', 1440)` or `('weekly', 10080)` based on day of week
@@ -2054,9 +2063,9 @@ python app.py check_filings
 - Monthly: ~$47.70 (30 runs)
 - Yearly: ~$572
 
-## Executive Summary AI Prompt (v3.4)
+## Executive Summary AI Prompt (v3.5)
 
-**Latest Update:** November 2025 - Entity Tags, Retail Filter, Quality Review System
+**Latest Update:** November 2025 - Source Article Tracking, No Article Limit
 
 **Reporting Philosophy Changes:**
 - ❌ ~~"Cast a WIDE net - include rumors, unconfirmed reports, undisclosed deals"~~
@@ -2069,6 +2078,8 @@ python app.py check_filings
 - ✅ Enhanced guidance for competitive/industry dynamics
 - ✅ Better Wall Street Sentiment formatting examples
 - ✅ All explicit `{ticker}` references preserved in prompts
+- ✅ **Source article tracking** - Every bullet/paragraph includes `source_articles` array (NEW Nov 2025)
+- ✅ **No article limit** - Processes all flagged articles from triage (max ~79) (NEW Nov 2025)
 
 **Bullet Count Ranges:**
 - 🔴 Major Developments: 3-6 bullets
@@ -2114,6 +2125,49 @@ python app.py check_filings
 - Ticker badges with color coding for article categories
 - Impact-based sorting (high impact articles appear first)
 - Metadata temperature fixes (consistent AI behavior)
+
+**6. Source Article Tracking (NEW - Nov 27, 2025)**
+
+Tracks which articles contributed to each bullet/paragraph in the executive summary, enabling filtered "Source Articles" display in Email #3.
+
+**How It Works:**
+- Phase 1 AI generates `source_articles: [0, 3, 5]` for each bullet/paragraph
+- Articles are numbered `[0], [1], [2]...` in the timeline (sorted by `published_at DESC`)
+- `source_articles` field passes through Phase 2 and Phase 3 unchanged
+- Email #3 filters Source Articles to only show articles that contributed to surviving bullets
+
+**Triage Limits (Max ~79 Articles):**
+| Category | Cap per Entity | Entities | Max Total |
+|----------|---------------|----------|-----------|
+| Company | 20 | 1 | 20 |
+| Industry | 8 per keyword | 3 keywords | 24 |
+| Competitor | 5 per competitor | 3 competitors | 15 |
+| Upstream | 5 per entity | 2 entities | 10 |
+| Downstream | 5 per entity | 2 entities | 10 |
+
+**Article Limit Removed:**
+- Previously: Phase 1 limited to first 50 articles (truncated up to 29 articles)
+- Now: Processes ALL flagged articles from triage (no limit)
+- Benefit: No wasted scraping/AI work, all triaged articles analyzed
+
+**Email #3 Source Articles Filtering:**
+- Bullets filtered by Phase 2 relevance/impact (none, indirect+low) are excluded
+- `get_used_article_indices()` collects indices from surviving bullets only
+- Articles not referenced by any surviving bullet are hidden from Source Articles
+- Company releases always shown (not in Phase 1 timeline, never filtered)
+
+**Email #2 Display:**
+- Each bullet shows `Source Articles: [0, 3, 5]` in metadata section
+- Helps QA verify which articles informed each bullet
+
+**Key Functions:**
+- `_validate_source_articles()` - Validates array of non-negative integers
+- `_should_include_bullet_in_email3()` - Filter logic (relevance=none or indirect+low)
+- `get_used_article_indices()` - Collects indices from passing bullets
+- `format_bullet_with_metadata()` - Displays source_articles in Email #2
+
+**Backward Compatibility:**
+- If `source_articles` missing from JSON → empty set → no filtering (shows all articles)
 
 ### Phase 2: Scenario Context Enrichment (October 2025)
 
@@ -2212,8 +2266,9 @@ python app.py check_filings
 **Three-Phase Architecture (UPDATED):**
 
 **Phase 1: Article Theme Extraction**
-- Input: Article summaries by category
-- Output: JSON with 10 sections (bullets have: bullet_id, topic_label, content, filing_hints)
+- Input: Article summaries by category (all flagged articles, no 50-article limit)
+- Output: JSON with 10 sections (bullets have: bullet_id, topic_label, content, source_articles, filing_hints)
+- **source_articles**: Array of 0-indexed article numbers from timeline that contributed to each bullet/paragraph
 - Scope: Articles ONLY
 
 **Phase 2: Filing Context Enrichment**

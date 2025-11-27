@@ -13264,7 +13264,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
 
         # Save Email #1 snapshot to database (for admin dashboard preview)
         # Skip saving for test runs - only save production runs
-        if mode != 'test':
+        if mode != 'test' and articles_by_ticker:
             # Email #1 is always single-ticker, so safe to use first key
             ticker = list(articles_by_ticker.keys())[0]
             try:
@@ -13287,6 +13287,7 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
 
     except Exception as e:
         LOG.error(f"Enhanced quick intelligence email failed: {e}")
+        LOG.error(f"Email #1 traceback: {traceback.format_exc()}")
         return False
 
 
@@ -21122,7 +21123,8 @@ async def cron_ingest(
         LOG.info("=== PHASE 2: PURE AI TRIAGE ===")
         memory_monitor.take_snapshot("PHASE2_START")
         triage_results = {}
-        
+        flagged_articles = []  # Initialize before loop to prevent undefined variable if articles_by_ticker is empty
+
         for ticker in articles_by_ticker.keys():
             LOG.info(f"Running pure AI triage for {ticker}")
             memory_monitor.take_snapshot(f"TRIAGE_START_{ticker}")
@@ -21292,15 +21294,18 @@ async def cron_ingest(
         
     except Exception as e:
         # CRITICAL ERROR HANDLING WITH MEMORY SNAPSHOT
-        LOG.error(f"CRITICAL ERROR in cron_ingest: {str(e)}")
+        # Add ticker context for debugging concurrent jobs
+        ticker_context = tickers[0] if tickers and len(tickers) == 1 else str(tickers)
+        LOG.error(f"[{ticker_context}] CRITICAL ERROR in cron_ingest: {str(e)}")
+        LOG.error(f"[{ticker_context}] Traceback: {traceback.format_exc()}")
         memory_monitor.take_snapshot("CRITICAL_ERROR")
-        
+
         # Get detailed memory info at crash
         current_memory = memory_monitor.get_memory_info()
         tracemalloc_info = memory_monitor.get_tracemalloc_top(20)
-        
-        LOG.error(f"MEMORY AT CRASH: {current_memory}")
-        LOG.error(f"TOP MEMORY ALLOCATIONS AT CRASH: {tracemalloc_info}")
+
+        LOG.error(f"[{ticker_context}] MEMORY AT CRASH: {current_memory}")
+        LOG.error(f"[{ticker_context}] TOP MEMORY ALLOCATIONS AT CRASH: {tracemalloc_info}")
         
         # Emergency cleanup
         try:

@@ -2399,10 +2399,22 @@ def ensure_schema():
 
                 LOG.info("✅ Complete database schema created successfully with NEW ARCHITECTURE + JOB QUEUE + BETA USERS + DAILY/WEEKLY REPORTS + SCHEDULER")
 
+            except Exception as e:
+                # If DDL fails, rollback to clear the aborted transaction state
+                # This allows us to release the advisory lock in finally block
+                LOG.error(f"❌ Schema DDL failed: {e}")
+                conn.rollback()
+                raise
             finally:
                 # STEP 4: CRITICAL - Always release the advisory lock
-                cur.execute("SELECT pg_advisory_unlock(%s)", (SCHEMA_LOCK_ID,))
-                LOG.info("🔓 Schema initialization lock released")
+                # Note: Advisory locks are connection-level, not transaction-level
+                # We must release before connection returns to pool
+                try:
+                    cur.execute("SELECT pg_advisory_unlock(%s)", (SCHEMA_LOCK_ID,))
+                    LOG.info("🔓 Schema initialization lock released")
+                except Exception as unlock_error:
+                    # If unlock fails (shouldn't happen after rollback), log but don't mask original error
+                    LOG.warning(f"⚠️ Failed to release schema lock (non-fatal): {unlock_error}")
 
 # Helper Functions for New Schema
 def insert_article_if_new(url_hash: str, url: str, title: str, description: str,

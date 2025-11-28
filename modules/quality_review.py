@@ -463,7 +463,17 @@ def review_executive_summary_quality(
         errors_by_severity = {"CRITICAL": 0, "SERIOUS": 0, "MINOR": 0}
 
         for section in result_json.get("sections", []):
+            # Defensive: skip None sections from Gemini response
+            if section is None:
+                LOG.warning(f"[{ticker}] ⚠️ Phase 1 parsing: Skipping None section in Gemini response")
+                continue
+
             for sentence in section.get("sentences", []):
+                # Defensive: skip None sentences from Gemini response
+                if sentence is None:
+                    LOG.warning(f"[{ticker}] ⚠️ Phase 1 parsing: Skipping None sentence in section={section.get('section_name', 'unknown')}")
+                    continue
+
                 total_sentences += 1
                 status = sentence.get("status")
                 severity = sentence.get("severity")
@@ -1343,6 +1353,11 @@ def generate_bullet_centric_review_email_html(
 
     # Now render each section bullet-by-bullet with all 4 phases
     for section in p1_sections:
+        # Defensive: skip None sections
+        if section is None:
+            LOG.warning(f"[{ticker}] ⚠️ Email generation: Skipping None section in p1_sections")
+            continue
+
         section_name = section.get("section_name", "unknown")
         display_name = section_names.get(section_name, section_name.upper())
         sentences = section.get("sentences", [])
@@ -1364,6 +1379,11 @@ def generate_bullet_centric_review_email_html(
 
             # Render all sentences for the paragraph
             for sentence in sentences:
+                # Defensive: skip None sentences
+                if sentence is None:
+                    LOG.warning(f"[{ticker}] ⚠️ Email generation: Skipping None sentence in section={section_name}")
+                    continue
+
                 text = sentence.get("text", "")
                 status = (sentence.get("status") or "").lower()
                 error_type = sentence.get("error_type")
@@ -1675,6 +1695,11 @@ def generate_bullet_centric_review_email_html(
         else:
             # Bullet sections: render each bullet separately with all 4 phases
             for sentence in sentences:
+                # Defensive: skip None sentences
+                if sentence is None:
+                    LOG.warning(f"[{ticker}] ⚠️ Email generation: Skipping None sentence in section={section_name}")
+                    continue
+
                 bullet_id = sentence.get("bullet_id", "")
                 topic_label = sentence.get("topic_label", "Bullet")
                 text = sentence.get("text", "")

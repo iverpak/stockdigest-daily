@@ -14296,6 +14296,41 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
 
         return text
 
+    def style_sentiment_badges(html: str) -> str:
+        """
+        Replace sentiment words with color-coded badges in HTML.
+
+        Targets sentiment words that appear in bullet headers after the • separator.
+        Pattern: • Bullish</strong> → • <span style="...">Bullish</span></strong>
+
+        Colors (Tailwind palette - 100 bg / 600-700 text for contrast):
+        - Bullish: green (#d1fae5 bg, #059669 text)
+        - Bearish: red (#fee2e2 bg, #dc2626 text)
+        - Mixed: amber (#fef3c7 bg, #d97706 text)
+        - Neutral: gray (#e5e7eb bg, #4b5563 text)
+
+        Badge styling: 11px font, 600 weight, 2px 6px padding, 3px border-radius
+        """
+        import re
+
+        SENTIMENT_STYLES = {
+            'Bullish': 'background:#d1fae5;color:#059669;',
+            'Bearish': 'background:#fee2e2;color:#dc2626;',
+            'Mixed': 'background:#fef3c7;color:#d97706;',
+            'Neutral': 'background:#e5e7eb;color:#4b5563;',
+        }
+
+        BASE_STYLE = 'font-size:11px;font-weight:600;padding:2px 6px;border-radius:3px;'
+
+        for sentiment, colors in SENTIMENT_STYLES.items():
+            # Match: • Sentiment</strong> (sentiment at end of header before closing tag)
+            # This ensures we only style sentiment in headers, not in body content
+            pattern = f'• {sentiment}</strong>'
+            styled_badge = f'• <span style="{colors}{BASE_STYLE}">{sentiment}</span></strong>'
+            html = html.replace(pattern, styled_badge)
+
+        return html
+
     def build_section(title: str, content: List, use_bullets: bool = True, bold_labels: bool = False, context_only: bool = False) -> str:
         """Build section with consistent styling
 
@@ -14324,6 +14359,8 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
 
                 # Apply label bolding if requested (bullets never use context_only)
                 processed_item = bold_bullet_labels(text, context_only=False) if bold_labels else text
+                # Apply sentiment badge styling (color-coded Bullish/Bearish/Mixed/Neutral)
+                processed_item = style_sentiment_badges(processed_item)
                 bullet_html += f'<li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;">{processed_item}</li>'
 
             return f'''
@@ -14617,16 +14654,6 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
             is_paywalled = is_paywall_article(article.get('domain', ''))
             paywall_badge = ' <span style="font-size: 10px; color: #ef4444; font-weight: 600; margin-left: 4px;">PAYWALL</span>' if is_paywalled else ''
 
-            # Check if article is new (< 24 hours)
-            is_new = False
-            if article.get('published_at'):
-                published_at = article['published_at']
-                if published_at.tzinfo is None:
-                    published_at = published_at.replace(tzinfo=timezone.utc)
-                age_hours = (datetime.now(timezone.utc) - published_at).total_seconds() / 3600
-                is_new = age_hours < 24
-            new_badge = '🆕 ' if is_new else ''
-
             # Star for FLAGGED + QUALITY articles
             domain = article.get('domain', '')
             is_quality = domain.lower() in [
@@ -14661,7 +14688,7 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
 
             article_links += f'''
                 <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                    <a href="{article.get('resolved_url', '#')}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{tag_html}{new_badge}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
+                    <a href="{article.get('resolved_url', '#')}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{tag_html}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
                     <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">{domain_name} • {date_str}</div>
                 </div>
             '''
@@ -14690,15 +14717,6 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
             is_paywalled = is_paywall_article(article.get('domain', ''))
             paywall_badge = ' <span style="font-size: 10px; color: #ef4444; font-weight: 600; margin-left: 4px;">PAYWALL</span>' if is_paywalled else ''
 
-            is_new = False
-            if article.get('published_at'):
-                published_at = article['published_at']
-                if published_at.tzinfo is None:
-                    published_at = published_at.replace(tzinfo=timezone.utc)
-                age_hours = (datetime.now(timezone.utc) - published_at).total_seconds() / 3600
-                is_new = age_hours < 24
-            new_badge = '🆕 ' if is_new else ''
-
             domain = article.get('domain', '')
             is_quality = domain.lower() in [
                 'wsj.com', 'bloomberg.com', 'reuters.com', 'ft.com', 'barrons.com',
@@ -14717,7 +14735,7 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
 
             upstream_html += f'''
                 <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                    <a href="{article.get('resolved_url', '#')}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{tag_html}{new_badge}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
+                    <a href="{article.get('resolved_url', '#')}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{tag_html}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
                     <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">{domain_name} • {date_str}</div>
                 </div>
             '''
@@ -14734,15 +14752,6 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
         for article in downstream_articles:
             is_paywalled = is_paywall_article(article.get('domain', ''))
             paywall_badge = ' <span style="font-size: 10px; color: #ef4444; font-weight: 600; margin-left: 4px;">PAYWALL</span>' if is_paywalled else ''
-
-            is_new = False
-            if article.get('published_at'):
-                published_at = article['published_at']
-                if published_at.tzinfo is None:
-                    published_at = published_at.replace(tzinfo=timezone.utc)
-                age_hours = (datetime.now(timezone.utc) - published_at).total_seconds() / 3600
-                is_new = age_hours < 24
-            new_badge = '🆕 ' if is_new else ''
 
             domain = article.get('domain', '')
             is_quality = domain.lower() in [
@@ -14762,7 +14771,7 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
 
             downstream_html += f'''
                 <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                    <a href="{article.get('resolved_url', '#')}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{tag_html}{new_badge}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
+                    <a href="{article.get('resolved_url', '#')}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{tag_html}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
                     <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">{domain_name} • {date_str}</div>
                 </div>
             '''

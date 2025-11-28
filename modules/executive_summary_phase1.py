@@ -848,8 +848,8 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[Dict]]:
     # Helper function to format bullets (simple, no metadata)
     def format_bullet_simple(bullet: Dict) -> Dict:
         """Format bullet with header and content. Returns {'bullet_id': '...', 'formatted': '...'}"""
-        # Use shared utility for header
-        header = format_bullet_header(bullet)
+        # Use shared utility for header (hide reason in Email #3 user-facing emails)
+        header = format_bullet_header(bullet, show_reason=False)
 
         # Use integrated content if available (Phase 3), fall back to Phase 1 + Phase 2 separately
         if bullet.get('content_integrated'):

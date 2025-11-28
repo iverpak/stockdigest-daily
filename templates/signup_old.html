@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Weavara - Beta Sign Up</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 50%, #3b82f6 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 600px;
+            width: 100%;
+            background: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
+            padding: 40px 32px;
+            text-align: center;
+            color: #ffffff;
+        }
+
+        .logo {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            letter-spacing: -0.5px;
+        }
+
+        .tagline {
+            font-size: 16px;
+            opacity: 0.9;
+            font-weight: 500;
+        }
+
+        .beta-badge {
+            display: inline-block;
+            background: rgba(255, 255, 255, 0.2);
+            color: #ffffff;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-top: 12px;
+            letter-spacing: 1px;
+        }
+
+        .content {
+            padding: 40px 32px;
+        }
+
+        .intro {
+            margin-bottom: 32px;
+        }
+
+        .intro h2 {
+            font-size: 24px;
+            color: #1e40af;
+            margin-bottom: 16px;
+            font-weight: 700;
+        }
+
+        .intro p {
+            font-size: 15px;
+            color: #374151;
+            line-height: 1.6;
+            margin-bottom: 12px;
+        }
+
+        .features {
+            background: #eff6ff;
+            border-left: 4px solid #1e40af;
+            padding: 16px 20px;
+            border-radius: 6px;
+            margin-bottom: 32px;
+        }
+
+        .features h3 {
+            font-size: 14px;
+            color: #1e40af;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 12px;
+            font-weight: 700;
+        }
+
+        .features ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        .features li {
+            font-size: 14px;
+            color: #374151;
+            padding: 6px 0;
+            padding-left: 24px;
+            position: relative;
+        }
+
+        .features li:before {
+            content: "✓";
+            position: absolute;
+            left: 0;
+            color: #1e40af;
+            font-weight: 700;
+            font-size: 16px;
+        }
+
+        .form-group {
+            margin-bottom: 24px;
+        }
+
+        label {
+            display: block;
+            font-size: 14px;
+            font-weight: 600;
+            color: #1e40af;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        input {
+            width: 100%;
+            padding: 12px 16px;
+            font-size: 15px;
+            border: 2px solid #e5e7eb;
+            border-radius: 6px;
+            transition: all 0.2s;
+            font-family: inherit;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: #1e40af;
+            box-shadow: 0 0 0 3px rgba(30, 64, 175, 0.1);
+        }
+
+        /* CHECKBOX FOR TERMS - NEW */
+        .checkbox-group {
+            margin-bottom: 24px;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: auto;
+            margin-top: 2px;
+            flex-shrink: 0;
+            cursor: pointer;
+        }
+
+        .checkbox-group label {
+            font-size: 13px;
+            color: #374151;
+            font-weight: 400;
+            text-transform: none;
+            letter-spacing: normal;
+            line-height: 1.5;
+            margin: 0;
+            cursor: pointer;
+        }
+
+        .checkbox-group label a {
+            color: #1e40af;
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .checkbox-group label a:hover {
+            text-decoration: underline;
+        }
+
+        .ticker-inputs {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+        }
+
+        .ticker-wrapper {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .ticker-input {
+            text-align: center;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+
+        .ticker-feedback {
+            font-size: 11px;
+            margin-top: 4px;
+            min-height: 32px;
+            transition: all 0.2s;
+            line-height: 1.3;
+        }
+
+        .suggestion-btn {
+            display: inline-block;
+            margin-top: 4px;
+            padding: 3px 8px;
+            background: #f59e0b;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 10px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+
+        .suggestion-btn:hover {
+            background: #d97706;
+        }
+
+        .help-text {
+            font-size: 12px;
+            color: #6b7280;
+            margin-top: 6px;
+        }
+
+        .submit-btn {
+            width: 100%;
+            padding: 16px;
+            background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
+            color: #ffffff;
+            font-size: 16px;
+            font-weight: 700;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            letter-spacing: 0.5px;
+        }
+
+        .submit-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(30, 64, 175, 0.3);
+        }
+
+        .submit-btn:active:not(:disabled) {
+            transform: translateY(0);
+        }
+
+        .submit-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .footer {
+            background: #f8f9fa;
+            padding: 24px 32px;
+            border-top: 1px solid #e5e7eb;
+        }
+
+        .footer p {
+            font-size: 12px;
+            color: #6b7280;
+            line-height: 1.5;
+            margin-bottom: 8px;
+        }
+
+        /* FOOTER LINKS - NEW */
+        .footer-links {
+            margin-top: 12px;
+            text-align: center;
+        }
+
+        .footer-links a {
+            font-size: 12px;
+            color: #1e40af;
+            text-decoration: none;
+            margin: 0 10px;
+        }
+
+        .footer-links a:hover {
+            text-decoration: underline;
+        }
+
+        @media (max-width: 600px) {
+            .header {
+                padding: 32px 24px;
+            }
+
+            .logo {
+                font-size: 28px;
+            }
+
+            .content {
+                padding: 32px 24px;
+            }
+
+            .ticker-inputs {
+                grid-template-columns: 1fr;
+            }
+
+            .footer {
+                padding: 20px 24px;
+            }
+
+            .footer-links a {
+                display: block;
+                margin: 6px 0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">Weavara</div>
+            <div class="tagline">Stock Intelligence Delivered Daily</div>
+            <div class="beta-badge">BETA ACCESS</div>
+        </div>
+
+        <div class="content">
+            <div class="intro">
+                <h2>Get AI-Powered Stock Intelligence</h2>
+                <p>Track up to 3 stocks and receive a comprehensive daily digest every morning between 7-9 AM.</p>
+                <p>We analyze news, industry trends, and competitor activity so you don't have to.</p>
+            </div>
+
+            <div class="features">
+                <h3>What You'll Get</h3>
+                <ul>
+                    <li>Daily executive summaries of major developments</li>
+                    <li>Financial performance highlights and risk analysis</li>
+                    <li>Wall Street sentiment and competitive dynamics</li>
+                    <li>Curated articles from quality sources</li>
+                    <li>Support for all US and Canadian tickers</li>
+                </ul>
+            </div>
+
+            <form id="signup-form">
+                <div class="form-group">
+                    <label>Your Name</label>
+                    <input type="text" id="name" placeholder="John Smith" required>
+                </div>
+
+                <div class="form-group">
+                    <label>Email Address</label>
+                    <input type="email" id="email" placeholder="john@example.com" required>
+                </div>
+
+                <div class="form-group">
+                    <label>Your 3 Tickers</label>
+                    <div class="ticker-inputs">
+                        <div class="ticker-wrapper">
+                            <input type="text" id="ticker1" class="ticker-input" placeholder="AAPL" maxlength="10" required>
+                            <div id="ticker1-feedback" class="ticker-feedback"></div>
+                        </div>
+                        <div class="ticker-wrapper">
+                            <input type="text" id="ticker2" class="ticker-input" placeholder="MSFT" maxlength="10" required>
+                            <div id="ticker2-feedback" class="ticker-feedback"></div>
+                        </div>
+                        <div class="ticker-wrapper">
+                            <input type="text" id="ticker3" class="ticker-input" placeholder="GOOGL" maxlength="10" required>
+                            <div id="ticker3-feedback" class="ticker-feedback"></div>
+                        </div>
+                    </div>
+                    <div class="help-text">Supports all US and Canadian stock tickers</div>
+                </div>
+
+                <!-- TERMS ACCEPTANCE CHECKBOX - NEW -->
+                <div class="checkbox-group">
+                    <input type="checkbox" id="terms-checkbox" required>
+                    <label for="terms-checkbox">
+                        I agree to the <a href="/terms-of-service" target="_blank">Terms of Service</a> and <a href="/privacy-policy" target="_blank">Privacy Policy</a>. I understand this service is for informational purposes only and does not constitute investment advice.
+                    </label>
+                </div>
+
+                <button type="submit" class="submit-btn" id="submit-btn">JOIN BETA</button>
+            </form>
+        </div>
+
+        <div class="footer">
+            <p>This is a beta version. Your feedback helps us improve.</p>
+            <p>Reports are for informational purposes only and do not constitute investment advice.</p>
+
+            <!-- FOOTER LINKS - NEW -->
+            <div class="footer-links">
+                <a href="/terms-of-service">Terms of Service</a>
+                <a href="/privacy-policy">Privacy Policy</a>
+                <a href="mailto:weavara.research@gmail.com">Contact</a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Store validation state for each ticker
+        const tickerValidation = {
+            ticker1: null,
+            ticker2: null,
+            ticker3: null
+        };
+
+        // Debounce function to avoid API spam
+        function debounce(func, wait) {
+            let timeout;
+            return function(...args) {
+                clearTimeout(timeout);
+                timeout = setTimeout(() => func.apply(this, args), wait);
+            };
+        }
+
+        // Validate ticker with suggestion support
+        async function validateTicker(inputId, feedbackId) {
+            const input = document.getElementById(inputId);
+            const feedback = document.getElementById(feedbackId);
+            const ticker = input.value.trim().toUpperCase();
+
+            if (ticker.length === 0) {
+                feedback.innerHTML = '';
+                input.style.borderColor = '#e5e7eb';
+                tickerValidation[inputId] = null;
+                return;
+            }
+
+            // Show loading state
+            feedback.innerHTML = '<span style="color: #6b7280;">Checking...</span>';
+
+            try {
+                const response = await fetch(`/api/validate-ticker?ticker=${encodeURIComponent(ticker)}`);
+                const data = await response.json();
+
+                if (data.valid) {
+                    // ✓ Valid ticker
+                    feedback.innerHTML = `
+                        <span style="color: #059669; font-weight: 600;">
+                            ✓ ${data.company_name}
+                        </span>
+                    `;
+                    input.style.borderColor = '#059669';
+                    tickerValidation[inputId] = data.ticker;
+
+                } else if (data.suggestion) {
+                    // ⚠ Suggestion available
+                    feedback.innerHTML = `
+                        <span style="color: #f59e0b; font-weight: 600;">
+                            ${data.suggestion.message}<br>
+                            <button
+                                class="suggestion-btn"
+                                onclick="acceptSuggestion('${inputId}', '${feedbackId}', '${data.suggestion.ticker}')"
+                            >
+                                Use ${data.suggestion.ticker}
+                            </button>
+                        </span>
+                    `;
+                    input.style.borderColor = '#f59e0b';
+                    tickerValidation[inputId] = null;
+
+                } else {
+                    // ✗ Invalid ticker
+                    feedback.innerHTML = `
+                        <span style="color: #dc2626; font-weight: 600;">
+                            ✗ ${data.message}
+                        </span>
+                    `;
+                    input.style.borderColor = '#dc2626';
+                    tickerValidation[inputId] = null;
+                }
+            } catch (error) {
+                feedback.innerHTML = '<span style="color: #dc2626;">Validation error</span>';
+                input.style.borderColor = '#dc2626';
+                tickerValidation[inputId] = null;
+            }
+        }
+
+        // Accept suggestion and re-validate
+        function acceptSuggestion(inputId, feedbackId, suggestedTicker) {
+            const input = document.getElementById(inputId);
+            input.value = suggestedTicker;
+            validateTicker(inputId, feedbackId);
+        }
+
+        // Attach validation to each ticker input
+        document.addEventListener('DOMContentLoaded', () => {
+            ['ticker1', 'ticker2', 'ticker3'].forEach(inputId => {
+                const input = document.getElementById(inputId);
+                const feedbackId = `${inputId}-feedback`;
+
+                // Debounced validation (500ms delay)
+                const debouncedValidate = debounce(() => {
+                    validateTicker(inputId, feedbackId);
+                }, 500);
+
+                input.addEventListener('input', debouncedValidate);
+            });
+        });
+
+        // Form submission
+        document.getElementById('signup-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const submitBtn = document.getElementById('submit-btn');
+            const originalText = submitBtn.textContent;
+
+            // Check terms checkbox
+            const termsCheckbox = document.getElementById('terms-checkbox');
+            if (!termsCheckbox.checked) {
+                alert('Please agree to the Terms of Service and Privacy Policy to continue.');
+                return;
+            }
+
+            // Check all tickers are valid
+            const allValid = ['ticker1', 'ticker2', 'ticker3'].every(id => tickerValidation[id] !== null);
+
+            if (!allValid) {
+                alert('Please ensure all tickers are validated before submitting.');
+                return;
+            }
+
+            // Disable button and show loading
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'JOINING...';
+
+            // Get form data
+            const formData = {
+                name: document.getElementById('name').value.trim(),
+                email: document.getElementById('email').value.trim().toLowerCase(),
+                ticker1: tickerValidation.ticker1,
+                ticker2: tickerValidation.ticker2,
+                ticker3: tickerValidation.ticker3
+            };
+
+            try {
+                const response = await fetch('/api/beta-signup', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(formData)
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.status === 'success') {
+                    // Show success message
+                    document.querySelector('.content').innerHTML = `
+                        <div style="text-align: center; padding: 60px 20px;">
+                            <div style="font-size: 64px; margin-bottom: 24px;">✅</div>
+                            <h2 style="color: #1e40af; margin-bottom: 16px; font-size: 28px;">Welcome to Weavara Beta!</h2>
+                            <p style="color: #374151; font-size: 18px; line-height: 1.6; max-width: 500px; margin: 0 auto;">
+                                You'll receive your first daily digest tomorrow morning between 7-9 AM.
+                            </p>
+                            <div style="background: #eff6ff; padding: 20px; border-radius: 8px; margin-top: 24px; max-width: 500px; margin-left: auto; margin-right: auto;">
+                                <p style="color: #1e40af; font-size: 14px; margin: 0;">
+                                    <strong>Email:</strong> ${formData.email}
+                                </p>
+                                <p style="color: #1e40af; font-size: 14px; margin: 12px 0 0 0;">
+                                    <strong>Tracking:</strong>
+                                </p>
+                                <ul style="list-style: none; padding: 0; margin: 8px 0 0 0; color: #1e40af; font-size: 14px;">
+                                    ${data.tickers.map(t => `<li style="margin: 4px 0;">• ${t.ticker} (${t.company})</li>`).join('')}
+                                </ul>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    alert(data.message || 'Something went wrong. Please try again.');
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = originalText;
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Network error. Please check your connection and try again.');
+                submitBtn.disabled = false;
+                submitBtn.textContent = originalText;
+            }
+        });
+    </script>
+</body>
+</html>

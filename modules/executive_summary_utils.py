@@ -11,17 +11,22 @@ import re
 from typing import Dict, List, Optional
 
 
-def format_bullet_header(bullet: Dict) -> str:
+def format_bullet_header(bullet: Dict, show_reason: bool = True) -> str:
     """
     Universal bullet formatter - adapts based on available fields.
 
     Formats:
-    - With entity + sentiment: **[Market] Topic • Bullish (supply constraint)**
+    - With entity + sentiment + reason: **[Market] Topic • Bullish (supply constraint)**
+    - With entity + sentiment (no reason): **[Market] Topic • Bullish**
     - With sentiment only: **Topic • Bullish (supply constraint)**
     - Without sentiment: **Topic**
 
     Args:
         bullet: Bullet dict with topic_label, and optionally entity/sentiment/reason
+        show_reason: If True, include reason in parentheses after sentiment.
+                     If False, show only sentiment without reason.
+                     Default True for backward compatibility (Email #2 shows all metadata).
+                     Email #3 passes False to hide reason from user-facing emails.
 
     Returns:
         Formatted header string (bolded with markdown **)
@@ -35,9 +40,12 @@ def format_bullet_header(bullet: Dict) -> str:
         header = f"[{bullet['entity']}] {header}"
 
     # Add sentiment/reason if present (all sections except Key Variables/Catalysts)
-    if bullet.get('sentiment') and bullet.get('reason'):
+    if bullet.get('sentiment'):
         sentiment_cap = bullet['sentiment'].title()  # Bullish, Bearish, Neutral, Mixed
-        header = f"{header} • {sentiment_cap} ({bullet['reason']})"
+        if show_reason and bullet.get('reason'):
+            header = f"{header} • {sentiment_cap} ({bullet['reason']})"
+        else:
+            header = f"{header} • {sentiment_cap}"
 
     return f"**{header}**"
 

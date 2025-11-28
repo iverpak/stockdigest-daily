@@ -4,7 +4,21 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Privacy Policy - Weavara</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
     <style>
+        :root {
+            --ink: #0a0f1c;
+            --ink-light: #1a2234;
+            --ink-muted: #4a5568;
+            --paper: #fafbfc;
+            --paper-warm: #f7f6f3;
+            --accent: #1e40af;
+            --accent-light: #3b82f6;
+            --border: #e2e4e9;
+        }
+
         * {
             margin: 0;
             padding: 0;
@@ -12,79 +26,95 @@
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background: #f8f9fa;
-            color: #374151;
+            font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--paper);
+            color: var(--ink);
             line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
         }
 
-        .header {
-            background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
-            padding: 24px 20px;
-            color: #ffffff;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        /* ========== NAVIGATION ========== */
+        nav {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 100;
+            background: rgba(250, 251, 252, 0.92);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border);
+            padding: 0 24px;
         }
 
-        .header-content {
-            max-width: 900px;
+        .nav-inner {
+            max-width: 1200px;
             margin: 0 auto;
             display: flex;
             align-items: center;
             justify-content: space-between;
+            height: 64px;
         }
 
         .logo {
+            font-family: 'DM Serif Display', serif;
             font-size: 24px;
-            font-weight: 700;
+            color: var(--ink);
+            text-decoration: none;
             letter-spacing: -0.5px;
         }
 
         .nav-link {
-            color: rgba(255, 255, 255, 0.9);
+            color: var(--ink-muted);
             text-decoration: none;
             font-size: 14px;
             font-weight: 500;
-            transition: opacity 0.2s;
+            transition: color 0.2s;
         }
 
         .nav-link:hover {
-            opacity: 0.8;
+            color: var(--ink);
+        }
+
+        /* ========== MAIN CONTENT ========== */
+        .content-wrapper {
+            padding: 104px 24px 40px;
+            max-width: 800px;
+            margin: 0 auto;
         }
 
         .container {
-            max-width: 900px;
-            margin: 40px auto;
             background: #ffffff;
-            border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+            border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
             padding: 48px;
         }
 
         h1 {
-            font-size: 32px;
-            color: #1e40af;
+            font-family: 'DM Serif Display', serif;
+            font-size: 36px;
+            color: var(--ink);
             margin-bottom: 8px;
-            font-weight: 700;
+            letter-spacing: -0.5px;
         }
 
         .last-updated {
             font-size: 14px;
-            color: #6b7280;
+            color: var(--ink-muted);
             margin-bottom: 32px;
         }
 
         h2 {
             font-size: 20px;
-            color: #1e40af;
-            margin-top: 32px;
+            color: var(--ink);
+            margin-top: 36px;
             margin-bottom: 12px;
-            font-weight: 700;
+            font-weight: 600;
         }
 
         h3 {
             font-size: 16px;
-            color: #475569;
-            margin-top: 20px;
+            color: var(--ink-light);
+            margin-top: 24px;
             margin-bottom: 8px;
             font-weight: 600;
         }
@@ -92,6 +122,8 @@
         p {
             margin-bottom: 16px;
             font-size: 15px;
+            color: var(--ink-muted);
+            line-height: 1.7;
         }
 
         ul {
@@ -102,65 +134,118 @@
         li {
             margin-bottom: 8px;
             font-size: 15px;
+            color: var(--ink-muted);
+            line-height: 1.7;
+        }
+
+        li strong {
+            color: var(--ink);
+        }
+
+        a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
         }
 
         .highlight-box {
             background: #eff6ff;
-            border-left: 4px solid #1e40af;
+            border-left: 4px solid var(--accent);
             padding: 16px 20px;
             margin: 24px 0;
-            border-radius: 4px;
+            border-radius: 0 8px 8px 0;
+        }
+
+        .highlight-box p {
+            color: var(--ink);
         }
 
         table {
             width: 100%;
             border-collapse: collapse;
             margin: 20px 0;
+            border-radius: 8px;
+            overflow: hidden;
         }
 
         th, td {
             text-align: left;
-            padding: 12px;
-            border-bottom: 1px solid #e5e7eb;
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--border);
         }
 
         th {
             background: #eff6ff;
-            color: #1e40af;
+            color: var(--accent);
             font-weight: 600;
             font-size: 14px;
         }
 
         td {
             font-size: 14px;
+            color: var(--ink-muted);
         }
 
-        .footer {
-            max-width: 900px;
-            margin: 0 auto 40px auto;
-            text-align: center;
-            padding: 24px 20px;
+        td strong {
+            color: var(--ink);
+        }
+
+        /* ========== FOOTER ========== */
+        footer {
+            background: var(--paper-warm);
+            padding: 40px 24px;
+            border-top: 1px solid var(--border);
+        }
+
+        .footer-inner {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .footer-logo {
+            font-family: 'DM Serif Display', serif;
+            font-size: 20px;
+            color: var(--ink);
         }
 
         .footer-links {
-            font-size: 13px;
-            color: #6b7280;
+            display: flex;
+            gap: 24px;
         }
 
         .footer-links a {
-            color: #1e40af;
+            color: var(--ink-muted);
             text-decoration: none;
-            margin: 0 12px;
+            font-size: 14px;
         }
 
         .footer-links a:hover {
-            text-decoration: underline;
+            color: var(--ink);
         }
 
+        .footer-disclaimer {
+            max-width: 1200px;
+            margin: 20px auto 0;
+            font-size: 12px;
+            color: var(--ink-muted);
+            text-align: center;
+        }
+
+        /* ========== RESPONSIVE ========== */
         @media (max-width: 768px) {
+            .content-wrapper {
+                padding: 84px 16px 24px;
+            }
+
             .container {
-                margin: 20px;
                 padding: 32px 24px;
+                border-radius: 8px;
             }
 
             h1 {
@@ -176,203 +261,223 @@
             }
 
             th, td {
-                padding: 8px;
+                padding: 10px 12px;
+            }
+
+            .footer-inner {
+                flex-direction: column;
+                gap: 20px;
+            }
+
+            .footer-links {
+                flex-wrap: wrap;
+                justify-content: center;
             }
         }
     </style>
 </head>
 <body>
-    <div class="header">
-        <div class="header-content">
-            <div class="logo">Weavara</div>
+    <!-- Navigation -->
+    <nav>
+        <div class="nav-inner">
+            <a href="/" class="logo">Weavara</a>
             <a href="/" class="nav-link">← Back to Home</a>
         </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="content-wrapper">
+        <div class="container">
+            <h1>Privacy Policy</h1>
+            <p class="last-updated">Last Updated: October 7, 2025</p>
+
+            <p>Weavara ("we," "us," or "our") is committed to protecting your privacy. This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you use our service.</p>
+
+            <div class="highlight-box">
+                <p style="margin: 0;"><strong>Quick Summary:</strong> We collect your name, email, and ticker preferences to send you daily stock digests. We don't sell your data. You can delete your account anytime by contacting us.</p>
+            </div>
+
+            <h2>1. Information We Collect</h2>
+
+            <h3>1.1 Information You Provide</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Data Type</th>
+                        <th>Purpose</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Name</strong></td>
+                        <td>To personalize your experience</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Email Address</strong></td>
+                        <td>To deliver daily digests and service communications</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Stock Tickers</strong></td>
+                        <td>To customize your news digest (up to 3 tickers)</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>1.2 Automatically Collected Information</h3>
+            <p>When you use Weavara, we may automatically collect:</p>
+            <ul>
+                <li><strong>Usage Data:</strong> Which articles you click, email open rates, time spent reading</li>
+                <li><strong>Device Information:</strong> Browser type, operating system, IP address (for security)</li>
+                <li><strong>Email Interaction:</strong> Whether you opened emails, clicked links (via standard email tracking)</li>
+            </ul>
+
+            <h3>1.3 Information We Do NOT Collect</h3>
+            <ul>
+                <li>Financial account information or brokerage credentials</li>
+                <li>Social Security numbers or government IDs</li>
+                <li>Payment information (service is currently free during beta)</li>
+                <li>Location data beyond IP-based country/region</li>
+            </ul>
+
+            <h2>2. How We Use Your Information</h2>
+            <p>We use the information we collect to:</p>
+            <ul>
+                <li><strong>Provide the Service:</strong> Generate and deliver personalized daily stock digests</li>
+                <li><strong>Improve the Service:</strong> Analyze usage patterns to enhance features and content quality</li>
+                <li><strong>Communicate:</strong> Send service updates, respond to inquiries, and provide customer support</li>
+                <li><strong>Security:</strong> Detect fraud, abuse, and security issues</li>
+                <li><strong>Legal Compliance:</strong> Comply with applicable laws and regulations</li>
+            </ul>
+
+            <h2>3. How We Share Your Information</h2>
+
+            <h3>3.1 We Do NOT Sell Your Data</h3>
+            <p>We will never sell, rent, or trade your personal information to third parties for marketing purposes.</p>
+
+            <h3>3.2 Service Providers</h3>
+            <p>We may share your information with third-party service providers who help us operate the service:</p>
+            <ul>
+                <li><strong>Email Service:</strong> We use email delivery services to send digests (e.g., SendGrid, AWS SES)</li>
+                <li><strong>Hosting:</strong> Our service is hosted on cloud platforms (e.g., Render, AWS)</li>
+                <li><strong>Analytics:</strong> We may use analytics tools to understand usage patterns</li>
+                <li><strong>AI Services:</strong> We use OpenAI or similar services to generate content summaries</li>
+            </ul>
+            <p>These providers are contractually obligated to protect your data and use it only for providing services to us.</p>
+
+            <h3>3.3 Legal Requirements</h3>
+            <p>We may disclose your information if required by law, court order, or government request, or to protect our rights, property, or safety.</p>
+
+            <h2>4. Data Security</h2>
+            <p>We implement reasonable security measures to protect your information, including:</p>
+            <ul>
+                <li>Encrypted connections (HTTPS/TLS) for all data transmission</li>
+                <li>Secure database storage with access controls</li>
+                <li>Regular security updates and monitoring</li>
+                <li>Limited employee access to personal data</li>
+            </ul>
+            <p><strong>However,</strong> no system is 100% secure. We cannot guarantee absolute security of your data.</p>
+
+            <h2>5. Data Retention</h2>
+            <p>We retain your information for as long as your account is active or as needed to provide the service. Specifically:</p>
+            <ul>
+                <li><strong>Account Data:</strong> Retained until you request deletion</li>
+                <li><strong>Email Digests:</strong> Historical digests may be stored for up to 90 days</li>
+                <li><strong>Usage Logs:</strong> Retained for up to 12 months for security and analytics</li>
+            </ul>
+
+            <h2>6. Your Rights and Choices</h2>
+
+            <h3>6.1 Access and Update</h3>
+            <p>You can request access to or correction of your personal information by contacting us at weavara.research@gmail.com.</p>
+
+            <h3>6.2 Delete Your Account</h3>
+            <p>You can request deletion of your account and personal information by emailing us. We will delete your data within 30 days, except where we are required to retain it for legal purposes.</p>
+
+            <h3>6.3 Unsubscribe</h3>
+            <p>You can unsubscribe from daily digests at any time by:</p>
+            <ul>
+                <li>Clicking the "Unsubscribe" link in any email</li>
+                <li>Contacting us at weavara.research@gmail.com</li>
+            </ul>
+
+            <h3>6.4 Marketing Communications</h3>
+            <p>During beta, we may occasionally send service updates or feature announcements. You can opt out of these by contacting us.</p>
+
+            <h2>7. Children's Privacy</h2>
+            <p>Weavara is not intended for users under 18 years of age. We do not knowingly collect personal information from children. If we learn we have collected data from a child under 18, we will delete it immediately.</p>
+
+            <h2>8. International Users</h2>
+            <p>Weavara is operated in Canada. If you access the service from outside this jurisdiction, your information may be transferred to, stored, and processed in Canada. By using the service, you consent to this transfer.</p>
+
+            <h3>GDPR (European Users)</h3>
+            <p>If you are in the European Economic Area, you have additional rights under GDPR:</p>
+            <ul>
+                <li><strong>Right to Access:</strong> Request a copy of your personal data</li>
+                <li><strong>Right to Rectification:</strong> Correct inaccurate data</li>
+                <li><strong>Right to Erasure:</strong> Request deletion of your data</li>
+                <li><strong>Right to Data Portability:</strong> Receive your data in a structured format</li>
+                <li><strong>Right to Object:</strong> Object to processing of your data</li>
+            </ul>
+            <p>To exercise these rights, contact us at weavara.research@gmail.com.</p>
+
+            <h3>CCPA (California Users)</h3>
+            <p>If you are a California resident, you have rights under the California Consumer Privacy Act (CCPA):</p>
+            <ul>
+                <li>Right to know what personal information we collect and how we use it</li>
+                <li>Right to delete your personal information</li>
+                <li>Right to opt-out of sale of personal information (we do not sell data)</li>
+                <li>Right to non-discrimination for exercising your rights</li>
+            </ul>
+
+            <h3>PIPEDA (Canadian Users)</h3>
+            <p>Weavara complies with Canada's Personal Information Protection and Electronic Documents Act (PIPEDA). Canadian users have the right to access their personal information and request corrections. Contact us at weavara.research@gmail.com to exercise these rights.</p>
+
+            <h2>9. Cookies and Tracking</h2>
+            <p>We use minimal tracking technologies:</p>
+            <ul>
+                <li><strong>Essential Cookies:</strong> Required for the website to function (e.g., session cookies)</li>
+                <li><strong>Analytics:</strong> We may use cookies to understand how users interact with our site</li>
+                <li><strong>Email Tracking:</strong> We track email opens and link clicks to improve our service</li>
+            </ul>
+            <p>You can disable cookies in your browser settings, but this may affect functionality.</p>
+
+            <h2>10. Third-Party Links</h2>
+            <p>Our digests contain links to third-party news articles and websites. We are not responsible for the privacy practices of these external sites. Please review their privacy policies before providing any information.</p>
+
+            <h2>11. Changes to This Privacy Policy</h2>
+            <p>We may update this Privacy Policy from time to time. When we make material changes, we will:</p>
+            <ul>
+                <li>Update the "Last Updated" date at the top</li>
+                <li>Notify users via email</li>
+                <li>Post a notice on our website</li>
+            </ul>
+            <p>Continued use of the service after changes constitutes acceptance of the updated Privacy Policy.</p>
+
+            <h2>12. Contact Us</h2>
+            <div class="highlight-box">
+                <p style="margin: 0 0 8px 0;"><strong>Questions about this Privacy Policy?</strong></p>
+                <p style="margin: 0;">Email: weavara.research@gmail.com<br>Website: weavara.io</p>
+            </div>
+
+            <h2>13. Data Protection Officer</h2>
+            <p>If you have concerns about how we handle your data, you can contact us at the email above. For European users, you also have the right to lodge a complaint with your local data protection authority.</p>
+        </div>
     </div>
 
-    <div class="container">
-        <h1>Privacy Policy</h1>
-        <p class="last-updated">Last Updated: October 7, 2025</p>
-
-        <p>Weavara ("we," "us," or "our") is committed to protecting your privacy. This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you use our service.</p>
-
-        <div class="highlight-box">
-            <p style="margin: 0;"><strong>Quick Summary:</strong> We collect your name, email, and ticker preferences to send you daily stock digests. We don't sell your data. You can delete your account anytime by contacting us.</p>
+    <!-- Footer -->
+    <footer>
+        <div class="footer-inner">
+            <div class="footer-logo">Weavara</div>
+            <div class="footer-links">
+                <a href="/">Home</a>
+                <a href="/terms-of-service">Terms of Service</a>
+                <a href="/privacy-policy">Privacy Policy</a>
+                <a href="mailto:weavara.research@gmail.com">Contact</a>
+            </div>
         </div>
-
-        <h2>1. Information We Collect</h2>
-
-        <h3>1.1 Information You Provide</h3>
-        <table>
-            <thead>
-                <tr>
-                    <th>Data Type</th>
-                    <th>Purpose</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr>
-                    <td><strong>Name</strong></td>
-                    <td>To personalize your experience</td>
-                </tr>
-                <tr>
-                    <td><strong>Email Address</strong></td>
-                    <td>To deliver daily digests and service communications</td>
-                </tr>
-                <tr>
-                    <td><strong>Stock Tickers</strong></td>
-                    <td>To customize your news digest (up to 3 tickers)</td>
-                </tr>
-            </tbody>
-        </table>
-
-        <h3>1.2 Automatically Collected Information</h3>
-        <p>When you use Weavara, we may automatically collect:</p>
-        <ul>
-            <li><strong>Usage Data:</strong> Which articles you click, email open rates, time spent reading</li>
-            <li><strong>Device Information:</strong> Browser type, operating system, IP address (for security)</li>
-            <li><strong>Email Interaction:</strong> Whether you opened emails, clicked links (via standard email tracking)</li>
-        </ul>
-
-        <h3>1.3 Information We Do NOT Collect</h3>
-        <ul>
-            <li>Financial account information or brokerage credentials</li>
-            <li>Social Security numbers or government IDs</li>
-            <li>Payment information (service is currently free during beta)</li>
-            <li>Location data beyond IP-based country/region</li>
-        </ul>
-
-        <h2>2. How We Use Your Information</h2>
-        <p>We use the information we collect to:</p>
-        <ul>
-            <li><strong>Provide the Service:</strong> Generate and deliver personalized daily stock digests</li>
-            <li><strong>Improve the Service:</strong> Analyze usage patterns to enhance features and content quality</li>
-            <li><strong>Communicate:</strong> Send service updates, respond to inquiries, and provide customer support</li>
-            <li><strong>Security:</strong> Detect fraud, abuse, and security issues</li>
-            <li><strong>Legal Compliance:</strong> Comply with applicable laws and regulations</li>
-        </ul>
-
-        <h2>3. How We Share Your Information</h2>
-
-        <h3>3.1 We Do NOT Sell Your Data</h3>
-        <p>We will never sell, rent, or trade your personal information to third parties for marketing purposes.</p>
-
-        <h3>3.2 Service Providers</h3>
-        <p>We may share your information with third-party service providers who help us operate the service:</p>
-        <ul>
-            <li><strong>Email Service:</strong> We use email delivery services to send digests (e.g., SendGrid, AWS SES)</li>
-            <li><strong>Hosting:</strong> Our service is hosted on cloud platforms (e.g., Render, AWS)</li>
-            <li><strong>Analytics:</strong> We may use analytics tools to understand usage patterns</li>
-            <li><strong>AI Services:</strong> We use OpenAI or similar services to generate content summaries</li>
-        </ul>
-        <p>These providers are contractually obligated to protect your data and use it only for providing services to us.</p>
-
-        <h3>3.3 Legal Requirements</h3>
-        <p>We may disclose your information if required by law, court order, or government request, or to protect our rights, property, or safety.</p>
-
-        <h2>4. Data Security</h2>
-        <p>We implement reasonable security measures to protect your information, including:</p>
-        <ul>
-            <li>Encrypted connections (HTTPS/TLS) for all data transmission</li>
-            <li>Secure database storage with access controls</li>
-            <li>Regular security updates and monitoring</li>
-            <li>Limited employee access to personal data</li>
-        </ul>
-        <p><strong>However,</strong> no system is 100% secure. We cannot guarantee absolute security of your data.</p>
-
-        <h2>5. Data Retention</h2>
-        <p>We retain your information for as long as your account is active or as needed to provide the service. Specifically:</p>
-        <ul>
-            <li><strong>Account Data:</strong> Retained until you request deletion</li>
-            <li><strong>Email Digests:</strong> Historical digests may be stored for up to 90 days</li>
-            <li><strong>Usage Logs:</strong> Retained for up to 12 months for security and analytics</li>
-        </ul>
-
-        <h2>6. Your Rights and Choices</h2>
-
-        <h3>6.1 Access and Update</h3>
-        <p>You can request access to or correction of your personal information by contacting us at weavara.research@gmail.com.</p>
-
-        <h3>6.2 Delete Your Account</h3>
-        <p>You can request deletion of your account and personal information by emailing us. We will delete your data within 30 days, except where we are required to retain it for legal purposes.</p>
-
-        <h3>6.3 Unsubscribe</h3>
-        <p>You can unsubscribe from daily digests at any time by:</p>
-        <ul>
-            <li>Clicking the "Unsubscribe" link in any email</li>
-            <li>Contacting us at weavara.research@gmail.com</li>
-        </ul>
-
-        <h3>6.4 Marketing Communications</h3>
-        <p>During beta, we may occasionally send service updates or feature announcements. You can opt out of these by contacting us.</p>
-
-        <h2>7. Children's Privacy</h2>
-        <p>Weavara is not intended for users under 18 years of age. We do not knowingly collect personal information from children. If we learn we have collected data from a child under 18, we will delete it immediately.</p>
-
-        <h2>8. International Users</h2>
-        <p>Weavara is operated in Canada. If you access the service from outside this jurisdiction, your information may be transferred to, stored, and processed in Canada. By using the service, you consent to this transfer.</p>
-
-        <h3>GDPR (European Users)</h3>
-        <p>If you are in the European Economic Area, you have additional rights under GDPR:</p>
-        <ul>
-            <li><strong>Right to Access:</strong> Request a copy of your personal data</li>
-            <li><strong>Right to Rectification:</strong> Correct inaccurate data</li>
-            <li><strong>Right to Erasure:</strong> Request deletion of your data</li>
-            <li><strong>Right to Data Portability:</strong> Receive your data in a structured format</li>
-            <li><strong>Right to Object:</strong> Object to processing of your data</li>
-        </ul>
-        <p>To exercise these rights, contact us at weavara.research@gmail.com.</p>
-
-        <h3>CCPA (California Users)</h3>
-        <p>If you are a California resident, you have rights under the California Consumer Privacy Act (CCPA):</p>
-        <ul>
-            <li>Right to know what personal information we collect and how we use it</li>
-            <li>Right to delete your personal information</li>
-            <li>Right to opt-out of sale of personal information (we do not sell data)</li>
-            <li>Right to non-discrimination for exercising your rights</li>
-        </ul>
-
-        <h3>PIPEDA (Canadian Users)</h3>
-        <p>Weavara complies with Canada's Personal Information Protection and Electronic Documents Act (PIPEDA). Canadian users have the right to access their personal information and request corrections. Contact us at weavara.research@gmail.com to exercise these rights.</p>
-
-        <h2>9. Cookies and Tracking</h2>
-        <p>We use minimal tracking technologies:</p>
-        <ul>
-            <li><strong>Essential Cookies:</strong> Required for the website to function (e.g., session cookies)</li>
-            <li><strong>Analytics:</strong> We may use cookies to understand how users interact with our site</li>
-            <li><strong>Email Tracking:</strong> We track email opens and link clicks to improve our service</li>
-        </ul>
-        <p>You can disable cookies in your browser settings, but this may affect functionality.</p>
-
-        <h2>10. Third-Party Links</h2>
-        <p>Our digests contain links to third-party news articles and websites. We are not responsible for the privacy practices of these external sites. Please review their privacy policies before providing any information.</p>
-
-        <h2>11. Changes to This Privacy Policy</h2>
-        <p>We may update this Privacy Policy from time to time. When we make material changes, we will:</p>
-        <ul>
-            <li>Update the "Last Updated" date at the top</li>
-            <li>Notify users via email</li>
-            <li>Post a notice on our website</li>
-        </ul>
-        <p>Continued use of the service after changes constitutes acceptance of the updated Privacy Policy.</p>
-
-        <h2>12. Contact Us</h2>
-        <div class="highlight-box">
-            <p style="margin: 0 0 8px 0;"><strong>Questions about this Privacy Policy?</strong></p>
-            <p style="margin: 0;">Email: weavara.research@gmail.com<br>Website: weavara.io</p>
+        <div class="footer-disclaimer">
+            Reports are for informational purposes only and do not constitute investment advice. © 2025 Weavara. All rights reserved.
         </div>
-
-        <h2>13. Data Protection Officer</h2>
-        <p>If you have concerns about how we handle your data, you can contact us at the email above. For European users, you also have the right to lodge a complaint with your local data protection authority.</p>
-    </div>
-
-    <div class="footer">
-        <div class="footer-links">
-            <a href="/">Home</a>
-            <a href="/terms-of-service">Terms of Service</a>
-            <a href="/privacy-policy">Privacy Policy</a>
-            <a href="mailto:weavara.research@gmail.com">Contact</a>
-        </div>
-        <p style="margin-top: 12px; font-size: 12px; color: #9ca3af;">© 2025 Weavara. All rights reserved.</p>
-    </div>
+    </footer>
 </body>
 </html>

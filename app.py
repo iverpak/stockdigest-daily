@@ -916,6 +916,7 @@ SPAM_DOMAINS = {
     # AI slop / low-quality aggregators (Nov 2025)
     "meyka.com", "www.meyka.com",  # Unknown/suspicious finance domain
     "ad-hoc-news.de", "www.ad-hoc-news.de",  # German aggregator, republishes content
+    "setenews.com", "www.setenews.com",  # Low-quality aggregator
 }
 
 QUALITY_DOMAINS = {

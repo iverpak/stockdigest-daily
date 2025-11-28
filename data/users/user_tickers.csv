@@ -1,4 +1,6 @@
 name,email,ticker1,ticker2,ticker3
+IV Top2,stockdigest.research@gmail.com,TSM,BRK-B,LLY
+IV Top1,stockdigest.research@gmail.com,GOOGL,MSFT,AVGO
 IV Telecommunications,stockdigest.research@gmail.com,VZ,LBRDK,SHEN
 IV Communication Services,stockdigest.research@gmail.com,META,NXST,YELP
 IV Utilities,stockdigest.research@gmail.com,NEE,AES,NWE
@@ -12,5 +14,4 @@ IV Healthcare,stockdigest.research@gmail.com,UNH,HOLX,TMDX
 IV Financials,stockdigest.research@gmail.com,JPM,HBAN,BANF
 Ilia Verpakhovski3,stockdigest.research@gmail.com,NVDA,TLN,TSLA
 IV Technology,stockdigest.research@gmail.com,AAPL,PLTR,SMCI
-Ilia Verpakhovski3,quantbrief.research@gmail.com,DNN,QBTS,LAC
 Ilia Verpakhovski2,stockdigest.research@gmail.com,CORZ,F,JPM

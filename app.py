@@ -31696,31 +31696,14 @@ def process_hourly_alerts():
 
         LOG.info(f"Found {len(users)} active beta users")
 
-        # Step 2: Deduplicate tickers across all users
-        ticker_to_users = {}  # {ticker: [user_emails]}
-        user_tickers = {}  # {user_email: [ticker1, ticker2, ticker3]}
-
+        # Step 2: Deduplicate tickers across all users (admin-only consolidated email)
+        unique_tickers = set()
         for user in users:
-            email = user['email']
             tickers = [user['ticker1'], user['ticker2'], user['ticker3']]
             tickers = [t for t in tickers if t]  # Remove None values
+            unique_tickers.update(tickers)
 
-            # Merge tickers for duplicate emails (instead of overwriting)
-            if email not in user_tickers:
-                user_tickers[email] = []
-            user_tickers[email].extend(tickers)
-
-            for ticker in tickers:
-                if ticker not in ticker_to_users:
-                    ticker_to_users[ticker] = []
-                if email not in ticker_to_users[ticker]:
-                    ticker_to_users[ticker].append(email)
-
-        # Deduplicate tickers for each email (in case same ticker appears in multiple user rows)
-        for email in user_tickers:
-            user_tickers[email] = list(set(user_tickers[email]))
-
-        unique_tickers = list(ticker_to_users.keys())
+        unique_tickers = list(unique_tickers)
         LOG.info(f"Processing {len(unique_tickers)} unique tickers: {', '.join(unique_tickers)}")
 
         # Step 3: Process RSS feeds for unique tickers CONCURRENTLY
@@ -31811,40 +31794,36 @@ def process_hourly_alerts():
 
         LOG.info(f"📅 Time window: {start_time_est.strftime('%I:%M %p')} to {end_time_est.strftime('%I:%M %p')} EST (operator: {operator})")
 
-        # Step 4: For each user, query cumulative articles and send email
-        for user_email, tickers in user_tickers.items():
-            try:
-                LOG.info(f"[{user_email}] Generating hourly alert for tickers: {', '.join(tickers)}")
+        # Step 4: Query ALL articles for all unique tickers (one consolidated admin email)
+        try:
+            LOG.info(f"Generating consolidated hourly alert for {len(unique_tickers)} tickers: {', '.join(unique_tickers)}")
 
-                # Query articles ingested in the current time window (incremental, not cumulative)
-                with db() as conn, conn.cursor() as cur:
-                    # Build query with dynamic operator (">=" for first run, ">" for subsequent)
-                    query = f"""
-                        SELECT DISTINCT ON (a.id)
-                            a.id, a.title, a.url, a.resolved_url, a.domain, a.published_at,
-                            ta.ticker, tf.category, f.search_keyword, f.feed_ticker, tf.value_chain_type
-                        FROM articles a
-                        JOIN ticker_articles ta ON a.id = ta.article_id
-                        JOIN ticker_feeds tf ON ta.feed_id = tf.feed_id AND ta.ticker = tf.ticker
-                        JOIN feeds f ON ta.feed_id = f.id
-                        WHERE ta.ticker = ANY(%s)
-                        AND a.created_at {operator} %s
-                        AND a.created_at <= %s
-                        AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
-                        ORDER BY a.id, a.published_at DESC
-                    """
-                    cur.execute(query, (tickers, start_time_utc, end_time_utc))
+            # Query articles ingested in the current time window
+            with db() as conn, conn.cursor() as cur:
+                query = f"""
+                    SELECT DISTINCT ON (a.id)
+                        a.id, a.title, a.url, a.resolved_url, a.domain, a.published_at,
+                        ta.ticker, tf.category, f.search_keyword, f.feed_ticker, tf.value_chain_type
+                    FROM articles a
+                    JOIN ticker_articles ta ON a.id = ta.article_id
+                    JOIN ticker_feeds tf ON ta.feed_id = tf.feed_id AND ta.ticker = tf.ticker
+                    JOIN feeds f ON ta.feed_id = f.id
+                    WHERE ta.ticker = ANY(%s)
+                    AND a.created_at {operator} %s
+                    AND a.created_at <= %s
+                    AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
+                    ORDER BY a.id, a.published_at DESC
+                """
+                cur.execute(query, (unique_tickers, start_time_utc, end_time_utc))
+                articles = cur.fetchall()
 
-                    articles = cur.fetchall()
+            # Sort articles newest to oldest (jumbled across tickers)
+            articles = sorted(articles, key=lambda x: x['published_at'], reverse=True)
 
-                # Sort articles newest to oldest (jumbled across tickers)
-                articles = sorted(articles, key=lambda x: x['published_at'], reverse=True)
-
-                if not articles:
-                    LOG.info(f"[{user_email}] No articles found, skipping email")
-                    continue
-
-                LOG.info(f"[{user_email}] Found {len(articles)} cumulative articles")
+            if not articles:
+                LOG.info("No articles found for any tickers, skipping email")
+            else:
+                LOG.info(f"Found {len(articles)} total articles across {len(unique_tickers)} tickers")
 
                 # Build article data for template
                 article_data = []
@@ -31894,14 +31873,10 @@ def process_hourly_alerts():
                 # Generate email HTML using template
                 hour_str = now_est.strftime('%I:%M %p').lstrip('0')  # "3:00 PM"
                 current_time_str = f"{now_est.strftime('%B %d, %Y')} • {hour_str} EST"
-                tickers_str = ', '.join(tickers)
+                tickers_str = ', '.join(unique_tickers)
 
                 # Next alert time (next hour, or "Tomorrow 9 AM" if after 10 PM)
                 next_alert_time = "Tomorrow 9:00 AM EST" if current_hour >= 22 else f"{(current_hour + 1) % 12 or 12}:00 {'PM' if current_hour >= 11 else 'AM'} EST"
-
-                # Get or create unsubscribe token
-                unsubscribe_token = get_or_create_unsubscribe_token(user_email)
-                unsubscribe_url = f"https://weavara.io/unsubscribe?token={unsubscribe_token}"
 
                 html = templates.TemplateResponse("email_hourly_alert.html", {
                     "request": {},  # Dummy request for Jinja2
@@ -31911,29 +31886,18 @@ def process_hourly_alerts():
                     "hour_str": hour_str,
                     "articles": article_data,
                     "next_alert_time": next_alert_time,
-                    "unsubscribe_url": unsubscribe_url
+                    "unsubscribe_url": "#"  # Placeholder - admin-only email
                 }).body.decode('utf-8')
 
-                # Send email
+                # Send to admin ONLY - same pattern as Email #1 and #2
                 subject = f"Hourly Alerts: {tickers_str} ({len(article_data)} articles) - {hour_str} EST"
+                send_email(subject=subject, html_body=html, to=DIGEST_TO)
+                LOG.info(f"✅ Hourly alert sent to {DIGEST_TO} ({len(article_data)} articles)")
 
-                send_success = send_email(
-                    subject=subject,
-                    html_body=html,
-                    to=user_email,
-                    bcc=os.getenv("ADMIN_EMAIL")  # BCC admin
-                )
-
-                if send_success:
-                    LOG.info(f"✅ [{user_email}] Hourly alert sent ({len(article_data)} articles)")
-                else:
-                    LOG.error(f"❌ [{user_email}] Failed to send hourly alert")
-
-            except Exception as e:
-                LOG.error(f"❌ [{user_email}] Error generating hourly alert: {e}")
-                import traceback
-                LOG.error(traceback.format_exc())
-                continue
+        except Exception as e:
+            LOG.error(f"❌ Error generating hourly alert: {e}")
+            import traceback
+            LOG.error(traceback.format_exc())
 
         LOG.info(f"✅ Hourly alerts processing complete at {now_est.strftime('%I:%M %p')} EST")
 

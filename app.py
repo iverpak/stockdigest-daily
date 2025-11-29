@@ -3734,9 +3734,10 @@ def get_stock_data_fmp(ticker: str) -> Optional[Dict]:
     """
     Fetch financial data from FMP (Financial Modeling Prep) as PRIMARY source.
 
-    Uses two endpoints:
-    - /v3/quote/{ticker}: Current price, daily change, market cap
+    Uses three endpoints:
+    - /v3/quote/{ticker}: Current price, daily change, market cap, 52-week range, volume
     - /v3/stock-price-change/{ticker}: Pre-calculated YTD return
+    - /v3/key-metrics-ttm/{ticker}: Enterprise Value
 
     Returns dict with financial_* keys matching yfinance format, or None on failure.
     """
@@ -3747,7 +3748,7 @@ def get_stock_data_fmp(ticker: str) -> Optional[Dict]:
     try:
         LOG.info(f"📊 Fetching stock data from FMP for {ticker}")
 
-        # Get quote data (price, daily change)
+        # Get quote data (price, daily change, market cap, 52-week range, volume)
         quote_url = f"https://financialmodelingprep.com/api/v3/quote/{ticker}"
         quote_resp = requests.get(quote_url, params={"apikey": FMP_API_KEY}, timeout=10)
 
@@ -3777,6 +3778,18 @@ def get_stock_data_fmp(ticker: str) -> Optional[Dict]:
             if change_data and len(change_data) > 0:
                 ytd_return = change_data[0].get('ytd')
 
+        # Get Enterprise Value from key-metrics-ttm endpoint
+        enterprise_value = None
+        try:
+            metrics_url = f"https://financialmodelingprep.com/api/v3/key-metrics-ttm/{ticker}"
+            metrics_resp = requests.get(metrics_url, params={"apikey": FMP_API_KEY}, timeout=10)
+            if metrics_resp.status_code == 200:
+                metrics_data = metrics_resp.json()
+                if metrics_data and len(metrics_data) > 0:
+                    enterprise_value = metrics_data[0].get('enterpriseValueTTM')
+        except Exception as e:
+            LOG.warning(f"FMP key-metrics-ttm failed for {ticker}: {e}")
+
         # Build financial data dict (matching yfinance format)
         daily_change = quote.get('changesPercentage')
 
@@ -3786,9 +3799,11 @@ def get_stock_data_fmp(ticker: str) -> Optional[Dict]:
             'financial_yesterday_return_pct': float(daily_change) if daily_change is not None else None,
             'financial_ytd_return_pct': float(ytd_return) if ytd_return is not None else None,
             'financial_market_cap': float(quote.get('marketCap')) if quote.get('marketCap') else None,
-            'financial_enterprise_value': None,  # Not in quote endpoint
+            'financial_enterprise_value': float(enterprise_value) if enterprise_value else None,
             'financial_volume': float(quote.get('volume')) if quote.get('volume') else None,
             'financial_avg_volume': float(quote.get('avgVolume')) if quote.get('avgVolume') else None,
+            'financial_year_high': float(quote.get('yearHigh')) if quote.get('yearHigh') else None,
+            'financial_year_low': float(quote.get('yearLow')) if quote.get('yearLow') else None,
             'financial_analyst_target': None,
             'financial_analyst_range_low': None,
             'financial_analyst_range_high': None,
@@ -4070,6 +4085,10 @@ def get_stock_context(ticker: str, retries: int = 3, timeout: int = 10) -> Optio
             volume = info.get('volume')
             avg_volume = info.get('averageVolume')
 
+            # Get 52-week range
+            year_high = info.get('fiftyTwoWeekHigh')
+            year_low = info.get('fiftyTwoWeekLow')
+
             # Get analyst data
             target_mean = info.get('targetMeanPrice')
             target_low = info.get('targetLowPrice')
@@ -4092,6 +4111,8 @@ def get_stock_context(ticker: str, retries: int = 3, timeout: int = 10) -> Optio
                 'financial_enterprise_value': float(enterprise_value) if enterprise_value else None,
                 'financial_volume': float(volume) if volume else None,
                 'financial_avg_volume': float(avg_volume) if avg_volume else None,
+                'financial_year_high': float(year_high) if year_high else None,
+                'financial_year_low': float(year_low) if year_low else None,
                 'financial_analyst_target': float(target_mean) if target_mean else None,
                 'financial_analyst_range_low': float(target_low) if target_low else None,
                 'financial_analyst_range_high': float(target_high) if target_high else None,
@@ -13457,38 +13478,43 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
 
         html.append(f"<div class='ticker-section'>")
 
-        # Add financial context box if data is current (only in final email)
-        today_str = datetime.now(pytz.timezone('America/Toronto')).strftime('%Y-%m-%d')
-        if config and config.get("financial_snapshot_date") == today_str:
+        # Fetch live financial data (FMP primary → yfinance fallback)
+        # No Polygon fallback here since it doesn't have the metrics we need
+        live_stock_data = get_stock_context(ticker)
+
+        if live_stock_data:
             html.append("<div style='background:#f5f5f5; padding:12px; margin:16px 0; font-size:13px; border-left:3px solid #0066cc;'>")
-            html.append(f"<div style='font-weight:bold; margin-bottom:6px;'>📊 Market Context (as of {config.get('financial_snapshot_date')})</div>")
+            html.append(f"<div style='font-weight:bold; margin-bottom:6px;'>📊 Market Context (Live)</div>")
 
-            # Line 1: Price and returns
-            price = f"${config.get('financial_last_price', 0):.2f}" if config.get('financial_last_price') else "N/A"
-            price_chg = format_financial_percent(config.get('financial_price_change_pct')) or "N/A"
-            yesterday_ret = format_financial_percent(config.get('financial_yesterday_return_pct')) or "N/A"
-            ytd_ret = format_financial_percent(config.get('financial_ytd_return_pct')) or "N/A"
-            html.append(f"<div>Last Stock Price: {price} ({price_chg}) | Yesterday: {yesterday_ret} | YTD: {ytd_ret}</div>")
+            # Build 4-metric line: Market Cap | EV | Daily Volume (Xx Avg) | 52-Week Range
+            metrics_parts = []
 
-            # Line 2: Market cap and enterprise value
-            mcap = format_financial_number(config.get('financial_market_cap')) or "N/A"
-            ev = format_financial_number(config.get('financial_enterprise_value')) or "N/A"
-            html.append(f"<div>Market Cap: {mcap} | Enterprise Value: {ev}</div>")
+            # Market Cap
+            mcap = format_financial_number(live_stock_data.get('financial_market_cap'))
+            metrics_parts.append(f"Market Cap: {mcap}" if mcap else "Market Cap: N/A")
 
-            # Line 3: Volume
-            vol = format_financial_volume(config.get('financial_volume')) or "N/A"
-            avg_vol = format_financial_volume(config.get('financial_avg_volume')) or "N/A"
-            html.append(f"<div>Volume: {vol} yesterday / {avg_vol} avg</div>")
+            # Enterprise Value
+            ev = format_financial_number(live_stock_data.get('financial_enterprise_value'))
+            metrics_parts.append(f"EV: {ev}" if ev else "EV: N/A")
 
-            # Line 4: Analyst data (if available)
-            if config.get('financial_analyst_target'):
-                target = f"${config.get('financial_analyst_target'):.2f}"
-                low = f"${config.get('financial_analyst_range_low'):.2f}" if config.get('financial_analyst_range_low') else "N/A"
-                high = f"${config.get('financial_analyst_range_high'):.2f}" if config.get('financial_analyst_range_high') else "N/A"
-                count = config.get('financial_analyst_count', 0)
-                rec = config.get('financial_analyst_recommendation', 'N/A')
-                html.append(f"<div>Analysts: {target} target (range {low}-{high}, {count} analysts, {rec})</div>")
+            # Daily Volume with relative multiplier
+            volume = live_stock_data.get('financial_volume')
+            avg_volume = live_stock_data.get('financial_avg_volume')
+            if volume and avg_volume and avg_volume > 0:
+                rel_vol = volume / avg_volume
+                metrics_parts.append(f"Daily Volume: {rel_vol:.1f}x Avg")
+            else:
+                metrics_parts.append("Daily Volume: N/A")
 
+            # 52-Week Range
+            year_high = live_stock_data.get('financial_year_high')
+            year_low = live_stock_data.get('financial_year_low')
+            if year_high and year_low:
+                metrics_parts.append(f"52-Week: ${year_low:.2f} - ${year_high:.2f}")
+            else:
+                metrics_parts.append("52-Week: N/A")
+
+            html.append(f"<div>{' | '.join(metrics_parts)}</div>")
             html.append("</div>")
 
         html.append(f"<h2>🎯 Target Company: {company_name} ({ticker})</h2>")

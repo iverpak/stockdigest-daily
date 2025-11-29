@@ -1995,7 +1995,7 @@ def ensure_schema():
                     company_name VARCHAR(255),
                     release_type VARCHAR(50) NOT NULL,  -- '8k' or 'fmp_press_release'
                     filing_date DATE NOT NULL,
-                    report_title VARCHAR(200),  -- From JSON metadata.report_title
+                    report_title TEXT,  -- From JSON metadata.report_title (TEXT for long titles)
 
                     -- Source tracking
                     source_id INTEGER,  -- Links to sec_8k_filings.id or press_releases.id

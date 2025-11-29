@@ -1069,17 +1069,17 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
     ────────────────────────────────────────────────────────────────────────────────
     Phase 1+2 (Original):
     Content from Phase 1 articles with Phase 2 context appended.
-      Impact: high | Sentiment: bullish | Relevance: direct
-      Filing hints: 10-K (Section A, B)
-      Source articles: [0, 3, 5]
 
     Phase 3 (Integrated):
     Content with Phase 2 context woven inline.
 
-    Deduplication: ✅ PRIMARY
-      Absorbs: major_dev_3, risk_2
-      Theme: Intel supply chain transition
-      Proposed Edit: "Consolidated content..."
+    Metadata:
+      Entity: N/A | Relevance: direct | Impact: high | Sentiment: bullish | Reason: xxx
+      Filing hints: 10-K (Section A, B)
+      Source Articles: [0, 3, 5]
+
+    Deduplication:
+      status: unique ✅
     ────────────────────────────────────────────────────────────────────────────────
 
     Args:
@@ -1115,7 +1115,7 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
         result = "<strong>Phase 1+2 (Original):</strong><br>"
         result += content_p12
         if context:
-            result += f" <em>Context: {context}</em>"
+            result += f"<br>Context: {context}"
 
         if content_p3:
             result += "<br><br><strong>Phase 3 (Integrated):</strong><br>"
@@ -1125,7 +1125,7 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
 
     # Helper function to format bullets with full QA display
     def format_bullet_with_dedup(bullet: Dict) -> Dict:
-        """Format bullet showing Phase 1+2, Phase 3, and deduplication info."""
+        """Format bullet showing Phase 1+2, Phase 3, Metadata, and Deduplication."""
         # Header line
         header = format_bullet_header(bullet)
 
@@ -1139,23 +1139,33 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
         content_p12 = bullet.get('content', '')
         result += content_p12
 
-        # Add Phase 2 context if present
+        # Add Phase 2 context if present (same styling as content - not grey/italic)
         context = bullet.get('context', '')
         if context:
-            result += f"<br><em style='color: #666;'>Context: {context}</em>"
+            result += f"<br>Context: {context}"
 
-        # Metadata line
+        # Phase 3 (Integrated)
+        content_p3 = bullet.get('content_integrated', '')
+        if content_p3:
+            result += "<br><br><strong>Phase 3 (Integrated):</strong><br>"
+            result += content_p3
+
+        # Metadata section (consistent styling - not smaller font)
+        result += "<br><br><strong>Metadata:</strong>"
+
+        # Entity, Relevance, Impact, Sentiment, Reason on one line
         metadata_parts = []
-        if bullet.get('impact'):
-            metadata_parts.append(f"Impact: {bullet['impact']}")
-        if bullet.get('sentiment'):
-            metadata_parts.append(f"Sentiment: {bullet['sentiment']}")
-        if bullet.get('relevance'):
-            metadata_parts.append(f"Relevance: {bullet['relevance']}")
-        if bullet.get('reason'):
-            metadata_parts.append(f"Reason: {bullet['reason']}")
-        if metadata_parts:
-            result += f"<br><span style='color: #888; font-size: 11px;'>  {' | '.join(metadata_parts)}</span>"
+        entity_val = bullet.get('entity', 'N/A')
+        metadata_parts.append(f"Entity: {entity_val}")
+        relevance_val = bullet.get('relevance', 'N/A')
+        metadata_parts.append(f"Relevance: {relevance_val}")
+        impact_val = bullet.get('impact', 'N/A')
+        metadata_parts.append(f"Impact: {impact_val}")
+        sentiment_val = bullet.get('sentiment', 'N/A')
+        metadata_parts.append(f"Sentiment: {sentiment_val}")
+        reason_val = bullet.get('reason', 'N/A')
+        metadata_parts.append(f"Reason: {reason_val}")
+        result += f"<br>  {' | '.join(metadata_parts)}"
 
         # Filing hints
         hints = bullet.get("filing_hints", {})
@@ -1164,47 +1174,48 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
             if sections_list:
                 hint_parts.append(f"{filing_type} ({', '.join(sections_list)})")
         if hint_parts:
-            result += f"<br><span style='color: #888; font-size: 11px;'>  Filing hints: {'; '.join(hint_parts)}</span>"
+            result += f"<br>  Filing hints: {'; '.join(hint_parts)}"
+        else:
+            result += "<br>  Filing hints: N/A"
+
+        # Filing keywords
+        keywords = bullet.get("filing_keywords", [])
+        if keywords:
+            result += f"<br>  Filing keywords: {json.dumps(keywords)}"
 
         # Source articles
         source_articles = bullet.get('source_articles', [])
-        if source_articles:
-            result += f"<br><span style='color: #888; font-size: 11px;'>  Source articles: {source_articles}</span>"
+        result += f"<br>  Source Articles: {source_articles if source_articles else 'N/A'}"
 
-        # Phase 3 (Integrated)
-        content_p3 = bullet.get('content_integrated', '')
-        if content_p3:
-            result += "<br><br><strong>Phase 3 (Integrated):</strong><br>"
-            result += content_p3
+        # Bullet ID
+        result += f"<br>  ID: {bullet.get('bullet_id', 'N/A')}"
 
-        # Deduplication info
+        # Deduplication section (show all variables with their values)
         dedup = bullet.get('deduplication', {'status': 'unique'})
         status = dedup.get('status', 'unique')
 
-        result += "<br><br><strong>Deduplication:</strong> "
+        result += "<br><br><strong>Deduplication:</strong>"
 
         if status == 'unique':
-            result += "<span style='color: #28a745;'>✅ UNIQUE</span>"
+            result += "<br>  status: unique <span style='color: #28a745;'>✅</span>"
         elif status == 'primary':
-            result += "<span style='color: #007bff;'>✅ PRIMARY</span>"
+            result += "<br>  status: primary <span style='color: #007bff;'>✅</span>"
             absorbs = dedup.get('absorbs', [])
-            if absorbs:
-                result += f"<br><span style='color: #666; font-size: 11px;'>  Absorbs: {', '.join(absorbs)}</span>"
+            result += f"<br>  absorbs: {absorbs}"
             theme = dedup.get('shared_theme', '')
-            if theme:
-                result += f"<br><span style='color: #666; font-size: 11px;'>  Theme: {theme}</span>"
+            result += f"<br>  shared_theme: \"{theme}\""
             proposed = dedup.get('proposed_edit', '')
             if proposed:
-                result += f"<br><span style='color: #666; font-size: 11px;'>  Proposed Edit:</span>"
-                result += f"<br><div style='background: #f8f9fa; padding: 8px; border-left: 3px solid #007bff; margin: 5px 0; font-size: 12px;'>{proposed}</div>"
+                result += f"<br>  proposed_edit:"
+                result += f"<br><div style='background: #f8f9fa; padding: 8px; border-left: 3px solid #007bff; margin: 5px 0 5px 20px;'>{proposed}</div>"
+            else:
+                result += "<br>  proposed_edit: N/A"
         elif status == 'duplicate':
-            result += "<span style='color: #dc3545;'>❌ DUPLICATE</span>"
+            result += "<br>  status: duplicate <span style='color: #dc3545;'>❌</span>"
             absorbed_by = dedup.get('absorbed_by', '')
-            if absorbed_by:
-                result += f"<br><span style='color: #666; font-size: 11px;'>  Absorbed by: {absorbed_by}</span>"
+            result += f"<br>  absorbed_by: \"{absorbed_by}\""
             theme = dedup.get('shared_theme', '')
-            if theme:
-                result += f"<br><span style='color: #666; font-size: 11px;'>  Theme: {theme}</span>"
+            result += f"<br>  shared_theme: \"{theme}\""
 
         result += "</div>"
 
@@ -1245,7 +1256,7 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
             result = "<strong>Phase 1+2 (Original):</strong><br>"
             result += content_p12
             if context:
-                result += f"<br><em style='color: #666;'>Context: {context}</em>"
+                result += f"<br>Context: {context}"
 
             if content_p3:
                 result += "<br><br><strong>Phase 3 (Integrated):</strong><br>"

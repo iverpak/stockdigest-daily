@@ -13310,7 +13310,8 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
 async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int,
                               show_ai_analysis: bool = True, show_descriptions: bool = True,
                               flagged_article_ids: List[int] = None,
-                              existing_summaries: Dict[str, Dict[str, str]] = None) -> str:
+                              existing_summaries: Dict[str, Dict[str, str]] = None,
+                              phase3_json: Dict = None) -> str:
     """Enhanced digest with metadata display removed but keeping all badges/emojis
 
     Args:
@@ -13322,6 +13323,8 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
         existing_summaries: Optional pre-generated summaries (for regenerate workflow).
                            If provided, skips summary generation and uses these instead.
                            Format: {ticker: {"ai_analysis_summary": "...", "model_used": "..."}}
+        phase3_json: Optional Phase 3 merged JSON (for post-Phase-3 Email #2 with deduplication).
+                    If provided, uses convert_phase3_to_email2_sections instead of convert_phase1_to_enhanced_sections.
     """
 
     # CRITICAL FIX: Split value_chain into upstream/downstream BEFORE executive summary generation
@@ -13493,13 +13496,15 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
 
         html.append(f"<h2>🎯 Target Company: {company_name} ({ticker})</h2>")
 
-        # Display executive summary (Claude primary, OpenAI fallback)
-        openai_summary = openai_summaries.get(ticker, {}).get("ai_analysis_summary", "")
-        model_used = openai_summaries.get(ticker, {}).get("model_used", "AI")  # Get Phase 1 model
+        # Display executive summary
+        # NEW (Nov 2025): If phase3_json provided, use Phase 3 format with deduplication
+        # Otherwise fall back to Phase 1+2 format
+        if phase3_json:
+            # Phase 3 format with deduplication info
+            from modules.executive_summary_phase1 import convert_phase3_to_email2_sections
 
-        if openai_summary:
-            # Fetch Phase 2 model info from database if available
-            phase2_model = None
+            # Fetch model info from database
+            models_display = "Phase 1+2+3"
             try:
                 with db() as conn, conn.cursor() as cur:
                     cur.execute("""
@@ -13510,33 +13515,69 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
                     result = cur.fetchone()
                     if result and result.get('ai_models'):
                         ai_models = result['ai_models']
-                        phase2_model = ai_models.get('phase2') if isinstance(ai_models, dict) else None
+                        if isinstance(ai_models, dict):
+                            p1 = ai_models.get('phase1', 'N/A')
+                            p2 = ai_models.get('phase2', 'N/A')
+                            p3 = ai_models.get('phase3', 'N/A')
+                            models_display = f"Phase 1: {p1} | Phase 2: {p2} | Phase 3: {p3}"
             except Exception as e:
-                LOG.warning(f"[{ticker}] Could not fetch Phase 2 model info: {e}")
-
-            # Build model display string
-            models_display = f"Phase 1: {model_used}"
-            if phase2_model:
-                models_display += f" | Phase 2: {phase2_model}"
+                LOG.warning(f"[{ticker}] Could not fetch model info: {e}")
 
             html.append("<div class='company-summary'>")
-            html.append(f"<div class='summary-title'>📰 Executive Summary - {models_display}</div>")
+            html.append(f"<div class='summary-title'>📰 Executive Summary (with Deduplication) - {models_display}</div>")
             html.append("<div class='summary-content'>")
 
-            # Parse Phase 1 JSON and show FULL structure (filing hints + topic labels)
-            from modules.executive_summary_phase1 import convert_phase1_to_enhanced_sections
-            try:
-                json_output = json.loads(openai_summary)
-                sections = convert_phase1_to_enhanced_sections(json_output)
-            except json.JSONDecodeError as e:
-                LOG.error(f"[{ticker}] Failed to parse Phase 1 JSON in Email #2: {e}")
-                sections = {}  # Empty sections, show error in email
-
+            sections = convert_phase3_to_email2_sections(phase3_json)
             summary_html = build_executive_summary_html(sections, strip_emojis=False)
             html.append(summary_html)
 
             html.append("</div>")
             html.append("</div>")
+        else:
+            # Legacy Phase 1+2 format (no deduplication)
+            openai_summary = openai_summaries.get(ticker, {}).get("ai_analysis_summary", "")
+            model_used = openai_summaries.get(ticker, {}).get("model_used", "AI")  # Get Phase 1 model
+
+            if openai_summary:
+                # Fetch Phase 2 model info from database if available
+                phase2_model = None
+                try:
+                    with db() as conn, conn.cursor() as cur:
+                        cur.execute("""
+                            SELECT ai_models FROM executive_summaries
+                            WHERE ticker = %s AND summary_date = CURRENT_DATE
+                            ORDER BY generated_at DESC LIMIT 1
+                        """, (ticker,))
+                        result = cur.fetchone()
+                        if result and result.get('ai_models'):
+                            ai_models = result['ai_models']
+                            phase2_model = ai_models.get('phase2') if isinstance(ai_models, dict) else None
+                except Exception as e:
+                    LOG.warning(f"[{ticker}] Could not fetch Phase 2 model info: {e}")
+
+                # Build model display string
+                models_display = f"Phase 1: {model_used}"
+                if phase2_model:
+                    models_display += f" | Phase 2: {phase2_model}"
+
+                html.append("<div class='company-summary'>")
+                html.append(f"<div class='summary-title'>📰 Executive Summary - {models_display}</div>")
+                html.append("<div class='summary-content'>")
+
+                # Parse Phase 1 JSON and show FULL structure (filing hints + topic labels)
+                from modules.executive_summary_phase1 import convert_phase1_to_enhanced_sections
+                try:
+                    json_output = json.loads(openai_summary)
+                    sections = convert_phase1_to_enhanced_sections(json_output)
+                except json.JSONDecodeError as e:
+                    LOG.error(f"[{ticker}] Failed to parse Phase 1 JSON in Email #2: {e}")
+                    sections = {}  # Empty sections, show error in email
+
+                summary_html = build_executive_summary_html(sections, strip_emojis=False)
+                html.append(summary_html)
+
+                html.append("</div>")
+                html.append("</div>")
 
         # NOTE: value_chain was already split into upstream/downstream at function start (line 20310)
         # This code kept for backward compatibility and debugging visibility
@@ -13994,7 +14035,8 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
             "content_scraping_stats": content_stats,
             "recipient": DIGEST_TO,
             "html": html,  # Return HTML for later use
-            "subject": subject  # Return subject for later use
+            "subject": subject,  # Return subject for later use
+            "articles_by_ticker": articles_by_ticker  # NEW (Nov 2025): Return for Phase 3 Email #2 generation
         }
 
     # Save Email #2 snapshot to database (for admin dashboard preview)
@@ -18170,43 +18212,42 @@ async def process_ticker_job(job: dict):
                             if success:
                                 LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 3 content saved to database")
 
-                                # NEW (Nov 2025): Generate and send Email #2 with Phase 3 + deduplication info
+                                # NEW (Nov 2025): Generate and send FULL Email #2 with Phase 3 + deduplication info
+                                # Uses build_enhanced_digest_html with phase3_json to get articles list + metadata header
                                 try:
-                                    from modules.executive_summary_phase1 import convert_phase3_to_email2_sections
-                                    # build_executive_summary_html is defined in app.py, no import needed
+                                    LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Generating full Email #2 with Phase 3 deduplication info...")
 
-                                    LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Generating Email #2 with Phase 3 deduplication info...")
+                                    # Get articles_by_ticker from digest result (returned when send_email_enabled=False)
+                                    articles_by_ticker = digest_result.get('articles_by_ticker', {}) if digest_result else {}
 
-                                    # Convert Phase 3 JSON to Email #2 format
-                                    email2_sections = convert_phase3_to_email2_sections(phase3_merged_json)
-                                    email2_summary_html = build_executive_summary_html(email2_sections, strip_emojis=False)
+                                    if not articles_by_ticker:
+                                        LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No articles_by_ticker in digest result, falling back to simple Email #2")
+                                        # Fallback to simple format if articles not available
+                                        from modules.executive_summary_phase1 import convert_phase3_to_email2_sections
+                                        email2_sections = convert_phase3_to_email2_sections(phase3_merged_json)
+                                        email2_summary_html = build_executive_summary_html(email2_sections, strip_emojis=False)
+                                        ticker_config = get_ticker_config(ticker)
+                                        company_name = ticker_config.get('company_name', ticker) if ticker_config else ticker
+                                        email2_html = f"<html><body><h1>📊 QA Content Review: {company_name} ({ticker})</h1><div>{email2_summary_html}</div></body></html>"
+                                    else:
+                                        # Full Email #2 with articles list, metadata header, financial context, AND Phase 3 executive summary
+                                        days = int(minutes / 60 / 24) if minutes >= 1440 else 1
+                                        email2_html = await build_enhanced_digest_html(
+                                            articles_by_ticker=articles_by_ticker,
+                                            period_days=days,
+                                            show_ai_analysis=True,
+                                            show_descriptions=True,
+                                            flagged_article_ids=flagged_article_ids,
+                                            existing_summaries=None,  # Not needed when using phase3_json
+                                            phase3_json=phase3_merged_json  # NEW: Use Phase 3 format with deduplication
+                                        )
 
-                                    # Build full Email #2 HTML
-                                    config = get_ticker_config(ticker)
-                                    company_name = config.get('company_name', ticker) if config else ticker
+                                    # Build subject
+                                    ticker_config = get_ticker_config(ticker)
+                                    company_name = ticker_config.get('company_name', ticker) if ticker_config else ticker
                                     report_label = "(WEEKLY)" if report_type == 'weekly' else "(DAILY)"
-                                    email2_subject = f"QA Content Review {report_label}: {company_name} ({ticker}) - with Phase 3 Deduplication"
-
-                                    # Simple Email #2 wrapper HTML
-                                    email2_html = f"""
-                                    <html>
-                                    <head>
-                                    <style>
-                                        body {{ font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; line-height: 1.6; color: #333; }}
-                                        h1 {{ color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }}
-                                        h2 {{ color: #34495e; margin-top: 25px; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; }}
-                                        .summary-box {{ background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }}
-                                    </style>
-                                    </head>
-                                    <body>
-                                    <h1>📊 QA Content Review: {company_name} ({ticker})</h1>
-                                    <p><strong>Report Type:</strong> {report_type.upper()} | <strong>Includes:</strong> Phase 1+2+3 with Deduplication</p>
-                                    <div class='summary-box'>
-                                    {email2_summary_html}
-                                    </div>
-                                    </body>
-                                    </html>
-                                    """
+                                    total_articles = digest_result.get('articles', 0) if digest_result else 0
+                                    email2_subject = f"QA Content Review {report_label}: {company_name} ({ticker}) - {total_articles} articles analyzed"
 
                                     # Save Email #2 to database
                                     if mode != 'test':
@@ -18223,7 +18264,7 @@ async def process_ticker_job(job: dict):
                                     # Send Email #2
                                     email2_success = send_email(email2_subject, email2_html)
                                     if email2_success:
-                                        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #2 sent with Phase 3 deduplication info")
+                                        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #2 sent with Phase 3 deduplication + articles list")
                                     else:
                                         LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Email #2 send failed")
 
@@ -18369,48 +18410,46 @@ async def process_ticker_job(job: dict):
                             if success:
                                 LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 3 content saved to database")
 
-                                # NEW (Nov 2025): Generate and send Email #2 with Phase 3 + deduplication info (TEST MODE)
+                                # NEW (Nov 2025): Generate and send FULL Email #2 with Phase 3 + deduplication info (TEST MODE)
                                 try:
-                                    from modules.executive_summary_phase1 import convert_phase3_to_email2_sections
-                                    # build_executive_summary_html is defined in app.py, no import needed
+                                    LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Generating full Email #2 with Phase 3 deduplication info (test mode)...")
 
-                                    LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Generating Email #2 with Phase 3 deduplication info (test mode)...")
+                                    # Get articles_by_ticker from digest result (returned when send_email_enabled=False)
+                                    articles_by_ticker = digest_result.get('articles_by_ticker', {}) if digest_result else {}
 
-                                    # Convert Phase 3 JSON to Email #2 format
-                                    email2_sections = convert_phase3_to_email2_sections(phase3_merged_json)
-                                    email2_summary_html = build_executive_summary_html(email2_sections, strip_emojis=False)
+                                    if not articles_by_ticker:
+                                        LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No articles_by_ticker in digest result, falling back to simple Email #2 (test mode)")
+                                        # Fallback to simple format if articles not available
+                                        from modules.executive_summary_phase1 import convert_phase3_to_email2_sections
+                                        email2_sections = convert_phase3_to_email2_sections(phase3_merged_json)
+                                        email2_summary_html = build_executive_summary_html(email2_sections, strip_emojis=False)
+                                        ticker_config = get_ticker_config(ticker)
+                                        company_name = ticker_config.get('company_name', ticker) if ticker_config else ticker
+                                        email2_html = f"<html><body><h1>📊 QA Content Review (TEST): {company_name} ({ticker})</h1><div>{email2_summary_html}</div></body></html>"
+                                    else:
+                                        # Full Email #2 with articles list, metadata header, financial context, AND Phase 3 executive summary
+                                        days = int(minutes / 60 / 24) if minutes >= 1440 else 1
+                                        email2_html = await build_enhanced_digest_html(
+                                            articles_by_ticker=articles_by_ticker,
+                                            period_days=days,
+                                            show_ai_analysis=True,
+                                            show_descriptions=True,
+                                            flagged_article_ids=flagged_article_ids,
+                                            existing_summaries=None,  # Not needed when using phase3_json
+                                            phase3_json=phase3_merged_json  # NEW: Use Phase 3 format with deduplication
+                                        )
 
-                                    # Build full Email #2 HTML
-                                    config = get_ticker_config(ticker)
-                                    company_name = config.get('company_name', ticker) if config else ticker
+                                    # Build subject
+                                    ticker_config = get_ticker_config(ticker)
+                                    company_name = ticker_config.get('company_name', ticker) if ticker_config else ticker
                                     report_label = "(WEEKLY)" if report_type == 'weekly' else "(DAILY)"
-                                    email2_subject = f"QA Content Review {report_label}: {company_name} ({ticker}) - with Phase 3 Deduplication (TEST)"
-
-                                    # Simple Email #2 wrapper HTML
-                                    email2_html = f"""
-                                    <html>
-                                    <head>
-                                    <style>
-                                        body {{ font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; line-height: 1.6; color: #333; }}
-                                        h1 {{ color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }}
-                                        h2 {{ color: #34495e; margin-top: 25px; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; }}
-                                        .summary-box {{ background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }}
-                                    </style>
-                                    </head>
-                                    <body>
-                                    <h1>📊 QA Content Review (TEST): {company_name} ({ticker})</h1>
-                                    <p><strong>Report Type:</strong> {report_type.upper()} | <strong>Includes:</strong> Phase 1+2+3 with Deduplication</p>
-                                    <div class='summary-box'>
-                                    {email2_summary_html}
-                                    </div>
-                                    </body>
-                                    </html>
-                                    """
+                                    total_articles = digest_result.get('articles', 0) if digest_result else 0
+                                    email2_subject = f"QA Content Review {report_label}: {company_name} ({ticker}) - {total_articles} articles (TEST)"
 
                                     # Send Email #2 (test mode - no database save)
                                     email2_success = send_email(email2_subject, email2_html)
                                     if email2_success:
-                                        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #2 sent with Phase 3 deduplication info (test mode)")
+                                        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #2 sent with Phase 3 deduplication + articles list (test mode)")
                                     else:
                                         LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Email #2 send failed (test mode)")
 
@@ -29146,48 +29185,36 @@ async def regenerate_email_api(request: Request):
                     if success:
                         LOG.info(f"✅ [{ticker}] Phase 3 content saved to database")
 
-                        # NEW (Nov 2025): Generate and send Email #2 with Phase 3 + deduplication info (REGEN)
+                        # NEW (Nov 2025): Generate and send FULL Email #2 with Phase 3 + deduplication info (REGEN)
                         try:
-                            from modules.executive_summary_phase1 import convert_phase3_to_email2_sections
-                            # build_executive_summary_html is defined in app.py, no import needed
+                            LOG.info(f"[{ticker}] 📧 Generating full Email #2 with Phase 3 deduplication info (regen)...")
 
-                            LOG.info(f"[{ticker}] 📧 Generating Email #2 with Phase 3 deduplication info (regen)...")
+                            # Build articles_by_ticker from categories (already available in regenerate flow)
+                            articles_by_ticker = {ticker: categories}
 
-                            # Convert Phase 3 JSON to Email #2 format
-                            email2_sections = convert_phase3_to_email2_sections(phase3_merged_json)
-                            email2_summary_html = build_executive_summary_html(email2_sections, strip_emojis=False)
+                            # Full Email #2 with articles list, metadata header, financial context, AND Phase 3 executive summary
+                            days = int(hours / 24) if hours >= 24 else 1
+                            email2_html = await build_enhanced_digest_html(
+                                articles_by_ticker=articles_by_ticker,
+                                period_days=days,
+                                show_ai_analysis=True,
+                                show_descriptions=True,
+                                flagged_article_ids=flagged_article_ids,
+                                existing_summaries=None,  # Not needed when using phase3_json
+                                phase3_json=phase3_merged_json  # NEW: Use Phase 3 format with deduplication
+                            )
 
-                            # Build full Email #2 HTML
-                            config = get_ticker_config(ticker)
-                            company_name = config.get('company_name', ticker) if config else ticker
+                            # Build subject
+                            ticker_config = get_ticker_config(ticker)
+                            company_name = ticker_config.get('company_name', ticker) if ticker_config else ticker
                             report_label = "(WEEKLY)" if report_type == 'weekly' else "(DAILY)"
-                            email2_subject = f"QA Content Review (Regenerated) {report_label}: {company_name} ({ticker}) - with Phase 3 Deduplication"
-
-                            # Simple Email #2 wrapper HTML
-                            email2_html = f"""
-                            <html>
-                            <head>
-                            <style>
-                                body {{ font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; line-height: 1.6; color: #333; }}
-                                h1 {{ color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }}
-                                h2 {{ color: #34495e; margin-top: 25px; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; }}
-                                .summary-box {{ background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }}
-                            </style>
-                            </head>
-                            <body>
-                            <h1>📊 QA Content Review (Regenerated): {company_name} ({ticker})</h1>
-                            <p><strong>Report Type:</strong> {report_type.upper()} | <strong>Includes:</strong> Phase 1+2+3 with Deduplication</p>
-                            <div class='summary-box'>
-                            {email2_summary_html}
-                            </div>
-                            </body>
-                            </html>
-                            """
+                            total_articles = len(flagged_article_ids)
+                            email2_subject = f"QA Content Review (Regenerated) {report_label}: {company_name} ({ticker}) - {total_articles} articles"
 
                             # Send Email #2
                             email2_success = send_email(email2_subject, email2_html)
                             if email2_success:
-                                LOG.info(f"✅ [{ticker}] Email #2 sent with Phase 3 deduplication info (regen)")
+                                LOG.info(f"✅ [{ticker}] Email #2 sent with Phase 3 deduplication + articles list (regen)")
                             else:
                                 LOG.warning(f"⚠️ [{ticker}] Email #2 send failed (regen)")
 

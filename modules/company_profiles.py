@@ -11,6 +11,7 @@ import PyPDF2
 import logging
 import traceback
 import os
+import time
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 import pytz
@@ -1056,6 +1057,41 @@ def extract_8k_html_content(exhibit_url: str) -> str:
 # GEMINI AI PROFILE GENERATION
 # ==============================================================================
 
+def _validate_10k_output(profile_markdown: str, tokens_out: int, ticker: str) -> tuple:
+    """
+    Validate Gemini 10-K output for deformed patterns.
+
+    Deformed outputs have:
+    - Massive trailing whitespace (garbage)
+    - Incomplete sections (< 14 of 18 expected)
+    - Low token count (< 8000)
+    - Short content length (< 40000 chars)
+
+    Returns:
+        (is_valid: bool, reason: str)
+    """
+    stripped = profile_markdown.rstrip()
+    content_len = len(stripped)
+    total_len = len(profile_markdown)
+    trailing_len = total_len - content_len
+    trailing_pct = (trailing_len / total_len * 100) if total_len > 0 else 0
+    section_count = profile_markdown.count('## ')
+
+    # Thresholds based on healthy 10-K analysis:
+    # - Healthy: 0% trailing, 18 sections, 12K-20K tokens, 52K-82K chars
+    # - Deformed: 98%+ trailing, 5-8 sections, 2K-6K tokens, 8K-22K chars
+    if trailing_pct > 5:
+        return False, f"trailing_whitespace={trailing_pct:.1f}%"
+    if section_count < 14:
+        return False, f"sections={section_count}/18"
+    if tokens_out < 8000:
+        return False, f"tokens={tokens_out}"
+    if content_len < 40000:
+        return False, f"content_len={content_len}"
+
+    return True, "valid"
+
+
 def generate_sec_filing_profile_with_gemini(
     ticker: str,
     content: str,
@@ -1338,10 +1374,46 @@ def generate_sec_filing_profile_with_gemini(
             'token_count_output': response.usage_metadata.candidates_token_count if hasattr(response, 'usage_metadata') else 0
         }
 
+        # ====================================================================
+        # 10-K DEFORMED OUTPUT DETECTION + RETRY (10-K only)
+        # ====================================================================
+        if filing_type == '10-K':
+            is_valid, reason = _validate_10k_output(profile_markdown, metadata['token_count_output'], ticker)
+
+            if not is_valid:
+                LOG.warning(f"[{ticker}] ⚠️ DEFORMED 10-K detected: {reason}")
+                LOG.warning(f"[{ticker}] ⏳ Waiting 10 seconds before retry...")
+                time.sleep(10)
+
+                LOG.info(f"[{ticker}] 🔄 Retrying Gemini 10-K generation (attempt 2/2)...")
+
+                retry_start = datetime.now()
+                retry_response = model.generate_content(full_prompt, generation_config=generation_config)
+                retry_end = datetime.now()
+
+                profile_markdown = retry_response.text
+                retry_tokens_out = retry_response.usage_metadata.candidates_token_count if hasattr(retry_response, 'usage_metadata') else 0
+
+                # Update metadata with retry info
+                metadata['token_count_output'] = retry_tokens_out
+                metadata['generation_time_seconds'] += int((retry_end - retry_start).total_seconds())
+
+                is_valid_retry, retry_reason = _validate_10k_output(profile_markdown, retry_tokens_out, ticker)
+
+                if not is_valid_retry:
+                    LOG.error(f"[{ticker}] ❌ RETRY FAILED - 10-K still deformed: {retry_reason}")
+                    LOG.error(f"[{ticker}] ❌ 10-K GENERATION FAILED - No valid output after 2 attempts")
+                    return None
+
+                LOG.info(f"[{ticker}] ✅ Retry successful - 10-K now valid")
+
+        # Always strip trailing whitespace before returning
+        profile_markdown = profile_markdown.rstrip()
+
         word_count = len(profile_markdown.split())
         LOG.info(f"✅ Generated {filing_type} profile for {ticker}")
         LOG.info(f"   Length: {len(profile_markdown):,} chars (~{word_count:,} words)")
-        LOG.info(f"   Time: {generation_time}s")
+        LOG.info(f"   Time: {metadata['generation_time_seconds']}s")
         LOG.info(f"   Tokens: {metadata['token_count_input']:,} in, {metadata['token_count_output']:,} out")
 
         return {

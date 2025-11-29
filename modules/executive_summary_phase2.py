@@ -1247,16 +1247,16 @@ def merge_phase3_with_phase2(phase2_json: Dict, phase3_json: Dict) -> Dict:
     Merge Phase 3 integrated content back into Phase 2 JSON using bullet_id matching.
 
     Phase 2 has: All metadata (impact, sentiment, reason, entity, date_range, filing_hints, context (original))
-    Phase 3 has: Only bullet_id, topic_label, content (integrated)
+    Phase 3 has: bullet_id, topic_label, content (integrated), deduplication (status, absorbs/absorbed_by, etc.)
 
-    Result: Phase 2 metadata + Phase 3 integrated content
+    Result: Phase 2 metadata + Phase 3 integrated content + deduplication info
 
     Args:
         phase2_json: Phase 1+2 merged JSON with all metadata
-        phase3_json: Phase 3 output with integrated content only
+        phase3_json: Phase 3 output with integrated content and deduplication
 
     Returns:
-        Final merged JSON with Phase 2 metadata + Phase 3 integrated content
+        Final merged JSON with Phase 2 metadata + Phase 3 integrated content + deduplication
     """
     import copy
 
@@ -1281,15 +1281,25 @@ def merge_phase3_with_phase2(phase2_json: Dict, phase3_json: Dict) -> Dict:
 
         # Build lookup by bullet_id from Phase 3
         phase3_bullets = phase3_json.get("sections", {}).get(section_name, [])
-        phase3_map = {b['bullet_id']: b for b in phase3_bullets}
+        phase3_map = {b['bullet_id']: b for b in phase3_bullets if 'bullet_id' in b}
 
         # Overlay integrated content onto Phase 2 bullets
         phase2_bullets = merged["sections"][section_name]
         for bullet in phase2_bullets:
-            bullet_id = bullet['bullet_id']
-            if bullet_id in phase3_map:
+            bullet_id = bullet.get('bullet_id')
+            if bullet_id and bullet_id in phase3_map:
+                phase3_bullet = phase3_map[bullet_id]
+
                 # Add integrated content as new field (preserve Phase 1 content and Phase 2 context for Quality Review)
-                bullet['content_integrated'] = phase3_map[bullet_id]['content']
+                bullet['content_integrated'] = phase3_bullet.get('content', '')
+
+                # Add deduplication field if present (new Nov 2025)
+                if 'deduplication' in phase3_bullet:
+                    bullet['deduplication'] = phase3_bullet['deduplication']
+                else:
+                    # Default to unique if no deduplication field (backward compatibility)
+                    bullet['deduplication'] = {'status': 'unique'}
+
                 # Don't delete content or context - needed for Quality Review verification
 
     # Scenarios (bottom_line, upside_scenario, downside_scenario)
@@ -1302,3 +1312,100 @@ def merge_phase3_with_phase2(phase2_json: Dict, phase3_json: Dict) -> Dict:
                 # Don't delete content or context - needed for Quality Review verification
 
     return merged
+
+
+def apply_deduplication(phase3_merged_json: Dict) -> Dict:
+    """
+    Apply deduplication decisions from Phase 3 for Email #3 output.
+
+    This function:
+    1. Removes bullets marked as 'duplicate' (absorbed elsewhere)
+    2. For 'primary' bullets, uses proposed_edit if available (otherwise content_integrated)
+    3. Merges source_articles arrays from absorbed bullets into primary
+    4. Returns clean JSON ready for Email #3 rendering
+
+    Args:
+        phase3_merged_json: Phase 3 merged JSON with deduplication metadata
+
+    Returns:
+        Deduplicated JSON with duplicates removed and primaries consolidated
+    """
+    import copy
+    import logging
+
+    LOG = logging.getLogger(__name__)
+
+    # Deep copy to avoid modifying original
+    result = copy.deepcopy(phase3_merged_json)
+
+    # Bullet sections to process
+    bullet_sections = [
+        "major_developments",
+        "financial_performance",
+        "risk_factors",
+        "wall_street_sentiment",
+        "competitive_industry_dynamics",
+        "upcoming_catalysts",
+        "key_variables"
+    ]
+
+    # First pass: Build lookup of all bullets by bullet_id for source_articles merging
+    all_bullets = {}
+    for section_name in bullet_sections:
+        bullets = result.get("sections", {}).get(section_name, [])
+        for bullet in bullets:
+            bullet_id = bullet.get('bullet_id')
+            if bullet_id:
+                all_bullets[bullet_id] = bullet
+
+    # Track stats
+    duplicates_removed = 0
+    primaries_consolidated = 0
+
+    # Second pass: Apply deduplication
+    for section_name in bullet_sections:
+        if section_name not in result.get("sections", {}):
+            continue
+
+        bullets = result["sections"][section_name]
+        consolidated = []
+
+        for bullet in bullets:
+            dedup = bullet.get('deduplication', {'status': 'unique'})
+            status = dedup.get('status', 'unique')
+
+            if status == 'duplicate':
+                # Skip - this bullet is absorbed elsewhere
+                duplicates_removed += 1
+                LOG.debug(f"Removing duplicate bullet: {bullet.get('bullet_id')} (absorbed by {dedup.get('absorbed_by')})")
+                continue
+
+            if status == 'primary':
+                primaries_consolidated += 1
+
+                # Use proposed_edit if available, otherwise fall back to content_integrated
+                proposed_edit = dedup.get('proposed_edit', '')
+                if proposed_edit:
+                    bullet['content_integrated'] = proposed_edit
+                    LOG.debug(f"Using proposed_edit for primary bullet: {bullet.get('bullet_id')}")
+
+                # Merge source_articles from absorbed bullets
+                absorbed_ids = dedup.get('absorbs', [])
+                if absorbed_ids:
+                    primary_sources = set(bullet.get('source_articles', []))
+                    for absorbed_id in absorbed_ids:
+                        absorbed_bullet = all_bullets.get(absorbed_id, {})
+                        absorbed_sources = absorbed_bullet.get('source_articles', [])
+                        primary_sources.update(absorbed_sources)
+                    # Sort for consistent output
+                    bullet['source_articles'] = sorted(list(primary_sources))
+                    LOG.debug(f"Merged source_articles for {bullet.get('bullet_id')}: {bullet['source_articles']}")
+
+            # Add bullet to consolidated list (unique or primary)
+            consolidated.append(bullet)
+
+        result["sections"][section_name] = consolidated
+
+    LOG.info(f"Deduplication applied: {duplicates_removed} duplicates removed, {primaries_consolidated} primaries consolidated")
+
+    return result

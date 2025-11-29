@@ -284,6 +284,83 @@ Never remove facts to "shorten" - bullets have no length limit.
 Formula: Bullet output = Phase 1 (full) + Phase 2 (filtered for relevance) - redundant connectors
 
 ═══════════════════════════════════════════════════════════════════════════
+CROSS-SECTION DEDUPLICATION
+═══════════════════════════════════════════════════════════════════════════
+
+After context integration, check for duplicate bullets across ALL sections.
+
+WHAT IS A DUPLICATE?
+Two bullets are duplicates if they report the SAME NEWS from articles.
+
+CRITICAL: Compare ONLY the "content" field (Phase 1 article data).
+DO NOT include in comparison:
+- "context" field (Phase 2 filing data - legitimately differs)
+- Metadata fields (impact, sentiment, reason, entity, filing_hints)
+
+Phase 2 context is supplementary filing data. Two bullets about the same news
+may have different filing excerpts attached - they are still duplicates.
+
+FACT EXTRACTION (from "content" field only):
+- Numbers: percentages, dollar amounts, counts, dates, timeframes
+- Named entities: people, companies, products, agencies
+- Events: announcements, deals, actions, regulatory filings
+- Direct quotes: exact phrases in quotation marks
+
+OVERLAP TEST:
+If >50% of Phase 1 content facts appear in both bullets → DUPLICATE
+
+HIERARCHY FOR SELECTING PRIMARY:
+When duplicates found, the bullet in the FIRST matching section wins:
+
+1. Wall Street Sentiment (analyst ratings, price targets, commentary)
+2. Upcoming Catalysts (scheduled future events)
+3. Financial Performance (financial/operational metrics)
+4. Major Developments (company as actor or target)
+5. Competitive/Industry Dynamics (competitor, value chain, industry trends)
+6. Risk Factors (forward-looking concerns not covered above)
+
+The bullet in the higher-priority section (lower number) becomes PRIMARY.
+All others become DUPLICATES.
+
+CONSOLIDATION (for proposed_edit):
+When creating proposed_edit for a PRIMARY bullet:
+
+1. Combine unique Phase 1 facts from primary + absorbed bullet(s)
+2. Review ALL bullets' "context" fields
+3. Select the best context to integrate:
+   - Prefer quantified context (specific numbers, percentages)
+   - Prefer context directly relevant to the news theme
+   - If complementary, include both; if overlapping, keep more specific
+4. Output contains: Consolidated Phase 1 facts + best Phase 2 context
+5. Do NOT add new information - only use facts from the bullets' "content" and "context" fields
+
+EXEMPT FROM DEDUPLICATION:
+- bottom_line
+- upside_scenario
+- downside_scenario
+
+OUTPUT FORMAT FOR DEDUPLICATION:
+Add "deduplication" field to each bullet in bullet sections:
+
+Unique (no duplicates found):
+"deduplication": {"status": "unique"}
+
+Primary (absorbs duplicates):
+"deduplication": {
+  "status": "primary",
+  "absorbs": ["bullet_id_1", "bullet_id_2"],
+  "shared_theme": "brief theme description",
+  "proposed_edit": "consolidated content with best context integrated"
+}
+
+Duplicate (absorbed by another):
+"deduplication": {
+  "status": "duplicate",
+  "absorbed_by": "primary_bullet_id",
+  "shared_theme": "brief theme description"
+}
+
+═══════════════════════════════════════════════════════════════════════════
 LENGTH ENFORCEMENT (Scenarios ONLY: Bottom Line/Upside/Downside)
 ═══════════════════════════════════════════════════════════════════════════
 
@@ -357,7 +434,8 @@ JSON OUTPUT STRUCTURE
       {
         "bullet_id": "q3_earnings_beat",
         "topic_label": "Q3 earnings beat",
-        "content": "Integrated paragraph (Phase 1 facts + Phase 2 context woven)"
+        "content": "Integrated paragraph (Phase 1 facts + Phase 2 context woven)",
+        "deduplication": {"status": "unique"}
       }
     ],
     "financial_performance": [...],
@@ -375,7 +453,8 @@ JSON OUTPUT STRUCTURE
       {
         "bullet_id": "q4_guidance",
         "topic_label": "Q4 guidance",
-        "content": "Integrated content"
+        "content": "Integrated content",
+        "deduplication": {"status": "unique"}
       }
     ]
   }
@@ -421,7 +500,7 @@ Before outputting, verify:
 □ 3 integration rules applied (parenthetical limit, relevance upfront, consolidated attribution)
 □ SCENARIO VALIDATION completed (removed unsupported claims from Bottom Line/Upside/Downside)
 □ Length limits enforced (Bottom Line ≤150, Scenarios 80-160)
-□ Only bullet_id, topic_label, content in output (no metadata fields)
+□ Only bullet_id, topic_label, content, deduplication in output (no other metadata fields)
 □ All 10 sections present
 □ Valid JSON (parseable by json.loads())
 □ All filing dates PRESERVED (per Oct 15 call, per Q3 10-Q, per 10-K remain in content)
@@ -430,3 +509,6 @@ Before outputting, verify:
 □ Scenarios connect facts from different bullets/themes
 □ Absolute numbers have denominators when available
 □ Growth claims show historical baseline when relevant
+□ DEDUPLICATION completed (all bullet sections have deduplication field with status)
+□ PRIMARY bullets have proposed_edit with consolidated content from absorbed bullets
+□ DUPLICATE bullets have absorbed_by pointing to the primary bullet_id

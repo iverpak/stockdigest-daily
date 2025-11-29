@@ -13735,7 +13735,8 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
                                                show_descriptions: bool = True,
                                                flagged_article_ids: List[int] = None,
                                                mode: str = 'daily',
-                                               report_type: str = 'daily') -> Dict[str, Dict[str, List[Dict]]]:
+                                               report_type: str = 'daily',
+                                               send_email_enabled: bool = True) -> Dict[str, Dict[str, List[Dict]]]:
     """Email #2: Content QA - Fetch categorized articles for digest with ticker-specific AI analysis (NEW Nov 2025: report_type for subject labels)
 
     Args:
@@ -13746,6 +13747,7 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
         flagged_article_ids: If provided, only fetch articles with these IDs (from triage)
         mode: 'daily' or 'test' mode
         report_type: 'daily' or 'weekly' for subject line labeling (NEW Nov 2025)
+        send_email_enabled: If False, skip Email #2 sending (Nov 2025: for new post-Phase-3 workflow)
     """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
 
@@ -13964,6 +13966,36 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
     # NEW (Nov 2025): Add report_type label to subject
     report_label = "(WEEKLY)" if report_type == 'weekly' else "(DAILY)"
     subject = f"QA Content Review {report_label}: {ticker_list} - {total_articles} articles analyzed"
+
+    # NEW (Nov 2025): Skip Email #2 sending if disabled (post-Phase-3 workflow sends it later)
+    if not send_email_enabled:
+        LOG.info(f"[{tickers}] Email #2 sending disabled - will be sent after Phase 3")
+        # Still collect stats for return value
+        category_counts = {"company": 0, "industry": 0, "competitor": 0, "value_chain": 0, "upstream": 0, "downstream": 0}
+        content_stats = {"scraped": 0, "failed": 0, "skipped": 0, "ai_summaries": 0}
+        for ticker_cats in articles_by_ticker.values():
+            for cat, arts in ticker_cats.items():
+                category_counts[cat] = category_counts.get(cat, 0) + len(arts)
+                for art in arts:
+                    if art.get('scraped_content'):
+                        content_stats['scraped'] += 1
+                    elif art.get('scraping_failed'):
+                        content_stats['failed'] += 1
+                    else:
+                        content_stats['skipped'] += 1
+                    if art.get('ai_summary'):
+                        content_stats['ai_summaries'] += 1
+
+        return {
+            "status": "skipped",  # Indicates email was not sent (will be sent later)
+            "articles": total_articles,
+            "tickers": list(articles_by_ticker.keys()),
+            "by_category": category_counts,
+            "content_scraping_stats": content_stats,
+            "recipient": DIGEST_TO,
+            "html": html,  # Return HTML for later use
+            "subject": subject  # Return subject for later use
+        }
 
     # Save Email #2 snapshot to database (for admin dashboard preview)
     # Skip saving for test runs - only save production runs
@@ -14855,12 +14887,17 @@ def generate_email_html_core(
 
     # Parse Phase 3 JSON (same converter as Email #3)
     from modules.executive_summary_phase1 import convert_phase1_to_sections_dict, get_used_article_indices
+    from modules.executive_summary_phase2 import apply_deduplication
     try:
         json_output = json.loads(executive_summary_text)
+
+        # NEW (Nov 2025): Apply deduplication - removes duplicate bullets and uses proposed_edit for primaries
+        json_output = apply_deduplication(json_output)
+
         sections = convert_phase1_to_sections_dict(json_output)
         # Get indices of articles used in bullets that survived filtering
         used_article_indices = get_used_article_indices(json_output)
-        LOG.info(f"[{ticker}] Email #3: {len(used_article_indices)} article indices used in final report")
+        LOG.info(f"[{ticker}] Email #3: {len(used_article_indices)} article indices used in final report (after deduplication)")
     except json.JSONDecodeError as e:
         LOG.error(f"[{ticker}] Failed to parse Phase 3 JSON in Email #3: {e}")
         sections = {}  # Empty sections
@@ -15800,7 +15837,8 @@ async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_a
         if not fetch_digest_func:
             raise RuntimeError("fetch_digest_articles_with_enhanced_content not yet defined")
 
-        LOG.info(f"[JOB {job_id}] Calling fetch_digest (will send Stock Intelligence Email) for {ticker}...")
+        # NEW (Nov 2025): Disable Email #2 sending here - it will be sent after Phase 3 with deduplication info
+        LOG.info(f"[JOB {job_id}] Calling fetch_digest (Email #2 deferred to after Phase 3) for {ticker}...")
         if flagged_article_ids:
             LOG.info(f"[JOB {job_id}] Filtering to {len(flagged_article_ids)} flagged articles from triage")
 
@@ -15811,10 +15849,11 @@ async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_a
             show_descriptions=True,
             flagged_article_ids=flagged_article_ids,
             mode=mode,
-            report_type=report_type  # NEW: Pass report_type for Email #2 subject label
+            report_type=report_type,
+            send_email_enabled=False  # NEW: Defer Email #2 to after Phase 3
         )
 
-        LOG.info(f"[JOB {job_id}] fetch_digest completed for {ticker} - Email sent: {result.get('status') == 'sent'}")
+        LOG.info(f"[JOB {job_id}] fetch_digest completed for {ticker} - Phase 1+2 summary generated (Email #2 deferred)")
         return result
 
     except Exception as e:
@@ -18131,6 +18170,69 @@ async def process_ticker_job(job: dict):
                             if success:
                                 LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 3 content saved to database")
 
+                                # NEW (Nov 2025): Generate and send Email #2 with Phase 3 + deduplication info
+                                try:
+                                    from modules.executive_summary_phase1 import convert_phase3_to_email2_sections
+                                    # build_executive_summary_html is defined in app.py, no import needed
+
+                                    LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Generating Email #2 with Phase 3 deduplication info...")
+
+                                    # Convert Phase 3 JSON to Email #2 format
+                                    email2_sections = convert_phase3_to_email2_sections(phase3_merged_json)
+                                    email2_summary_html = build_executive_summary_html(email2_sections, strip_emojis=False)
+
+                                    # Build full Email #2 HTML
+                                    config = get_ticker_config(ticker)
+                                    company_name = config.get('company_name', ticker) if config else ticker
+                                    report_label = "(WEEKLY)" if report_type == 'weekly' else "(DAILY)"
+                                    email2_subject = f"QA Content Review {report_label}: {company_name} ({ticker}) - with Phase 3 Deduplication"
+
+                                    # Simple Email #2 wrapper HTML
+                                    email2_html = f"""
+                                    <html>
+                                    <head>
+                                    <style>
+                                        body {{ font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; line-height: 1.6; color: #333; }}
+                                        h1 {{ color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }}
+                                        h2 {{ color: #34495e; margin-top: 25px; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; }}
+                                        .summary-box {{ background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }}
+                                    </style>
+                                    </head>
+                                    <body>
+                                    <h1>📊 QA Content Review: {company_name} ({ticker})</h1>
+                                    <p><strong>Report Type:</strong> {report_type.upper()} | <strong>Includes:</strong> Phase 1+2+3 with Deduplication</p>
+                                    <div class='summary-box'>
+                                    {email2_summary_html}
+                                    </div>
+                                    </body>
+                                    </html>
+                                    """
+
+                                    # Save Email #2 to database
+                                    if mode != 'test':
+                                        with db() as conn, conn.cursor() as cur:
+                                            cur.execute("""
+                                                INSERT INTO email_queue (ticker, email_2_html, created_at)
+                                                VALUES (%s, %s, NOW())
+                                                ON CONFLICT (ticker) DO UPDATE
+                                                SET email_2_html = EXCLUDED.email_2_html,
+                                                    updated_at = NOW()
+                                            """, (ticker, email2_html))
+                                        LOG.debug(f"[{ticker}] Saved Email #2 snapshot to database")
+
+                                    # Send Email #2
+                                    email2_success = send_email(email2_subject, email2_html)
+                                    if email2_success:
+                                        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #2 sent with Phase 3 deduplication info")
+                                    else:
+                                        LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Email #2 send failed")
+
+                                except Exception as e:
+                                    LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Email #2 generation failed: {e}")
+                                    import traceback
+                                    LOG.error(f"[{ticker}] Stacktrace: {traceback.format_exc()}")
+                                    # Continue to Email #3 even if Email #2 fails
+
                                 # Queue Email #3 (user-facing) for 8:30 AM send
                                 if not recipients:
                                     LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No recipients for Email #3, skipping queue save")
@@ -18266,6 +18368,57 @@ async def process_ticker_job(job: dict):
 
                             if success:
                                 LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 3 content saved to database")
+
+                                # NEW (Nov 2025): Generate and send Email #2 with Phase 3 + deduplication info (TEST MODE)
+                                try:
+                                    from modules.executive_summary_phase1 import convert_phase3_to_email2_sections
+                                    # build_executive_summary_html is defined in app.py, no import needed
+
+                                    LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Generating Email #2 with Phase 3 deduplication info (test mode)...")
+
+                                    # Convert Phase 3 JSON to Email #2 format
+                                    email2_sections = convert_phase3_to_email2_sections(phase3_merged_json)
+                                    email2_summary_html = build_executive_summary_html(email2_sections, strip_emojis=False)
+
+                                    # Build full Email #2 HTML
+                                    config = get_ticker_config(ticker)
+                                    company_name = config.get('company_name', ticker) if config else ticker
+                                    report_label = "(WEEKLY)" if report_type == 'weekly' else "(DAILY)"
+                                    email2_subject = f"QA Content Review {report_label}: {company_name} ({ticker}) - with Phase 3 Deduplication (TEST)"
+
+                                    # Simple Email #2 wrapper HTML
+                                    email2_html = f"""
+                                    <html>
+                                    <head>
+                                    <style>
+                                        body {{ font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; line-height: 1.6; color: #333; }}
+                                        h1 {{ color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }}
+                                        h2 {{ color: #34495e; margin-top: 25px; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; }}
+                                        .summary-box {{ background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }}
+                                    </style>
+                                    </head>
+                                    <body>
+                                    <h1>📊 QA Content Review (TEST): {company_name} ({ticker})</h1>
+                                    <p><strong>Report Type:</strong> {report_type.upper()} | <strong>Includes:</strong> Phase 1+2+3 with Deduplication</p>
+                                    <div class='summary-box'>
+                                    {email2_summary_html}
+                                    </div>
+                                    </body>
+                                    </html>
+                                    """
+
+                                    # Send Email #2 (test mode - no database save)
+                                    email2_success = send_email(email2_subject, email2_html)
+                                    if email2_success:
+                                        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #2 sent with Phase 3 deduplication info (test mode)")
+                                    else:
+                                        LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Email #2 send failed (test mode)")
+
+                                except Exception as e:
+                                    LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Email #2 generation failed (test mode): {e}")
+                                    import traceback
+                                    LOG.error(f"[{ticker}] Stacktrace: {traceback.format_exc()}")
+                                    # Continue to Email #3 even if Email #2 fails
 
                                 # Send Email #3 (Stock Intelligence) immediately to admin (test mode)
                                 LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #3 (Stock Intelligence) to admin (test mode)...")
@@ -28928,56 +29081,7 @@ async def regenerate_email_api(request: Request):
         hours = 168  # Always use 7 days for regeneration
         LOG.info(f"[{ticker}] Using fixed hours={hours} for regeneration (matches production)")
 
-        # Step 7.5: Generate and send Email #2 (Content QA) using pre-generated executive summary
-        LOG.info(f"[{ticker}] 📧 Generating Email #2 (Content QA) with regenerated executive summary")
-        try:
-            # Fetch executive summary from database (just saved in step 6)
-            with db() as conn, conn.cursor() as cur:
-                cur.execute("""
-                    SELECT summary_text, ai_provider
-                    FROM executive_summaries
-                    WHERE ticker = %s AND summary_date = CURRENT_DATE
-                    ORDER BY generated_at DESC LIMIT 1
-                """, (ticker,))
-                exec_summary_row = cur.fetchone()
-
-            if exec_summary_row and exec_summary_row['summary_text']:
-                # Prepare summaries in format expected by HTML builder
-                existing_summaries = {
-                    ticker: {
-                        "ai_analysis_summary": exec_summary_row['summary_text'],
-                        "model_used": exec_summary_row['ai_provider']
-                    }
-                }
-
-                # Build Email #2 HTML with pre-generated summary (no redundant generation)
-                days = int(hours / 24) if hours >= 24 else 1
-                articles_by_ticker = {ticker: categories}  # From step 4 (line 28451-28463)
-
-                email2_html = await build_enhanced_digest_html(
-                    articles_by_ticker=articles_by_ticker,
-                    period_days=days,
-                    show_ai_analysis=True,
-                    show_descriptions=True,
-                    flagged_article_ids=flagged_article_ids,
-                    existing_summaries=existing_summaries  # Use pre-generated summary (skips generation)
-                )
-
-                # Send Email #2 with "(Regenerated)" and report type in subject
-                config = get_ticker_config(ticker)
-                company_name = config.get("company_name", ticker) if config else ticker
-                report_label = "(WEEKLY)" if report_type == 'weekly' else "(DAILY)"
-                email2_subject = f"QA Content Review (Regenerated) {report_label}: {company_name} ({ticker}) - {len(flagged_article_ids)} articles analyzed"
-
-                send_email(email2_subject, email2_html)
-                LOG.info(f"✅ [{ticker}] Email #2 (Content QA) sent successfully")
-            else:
-                LOG.warning(f"[{ticker}] No executive summary found in database, skipping Email #2")
-
-        except Exception as e:
-            LOG.error(f"[{ticker}] ❌ Failed to generate/send Email #2: {e}")
-            LOG.error(f"Stacktrace: {traceback.format_exc()}")
-            LOG.info(f"[{ticker}] Continuing with Email #3 generation despite Email #2 failure")
+        # NOTE (Nov 2025): Email #2 moved to AFTER Phase 3 for deduplication consistency
 
         admin_email = os.getenv("ADMIN_EMAIL")
 
@@ -29041,6 +29145,57 @@ async def regenerate_email_api(request: Request):
 
                     if success:
                         LOG.info(f"✅ [{ticker}] Phase 3 content saved to database")
+
+                        # NEW (Nov 2025): Generate and send Email #2 with Phase 3 + deduplication info (REGEN)
+                        try:
+                            from modules.executive_summary_phase1 import convert_phase3_to_email2_sections
+                            # build_executive_summary_html is defined in app.py, no import needed
+
+                            LOG.info(f"[{ticker}] 📧 Generating Email #2 with Phase 3 deduplication info (regen)...")
+
+                            # Convert Phase 3 JSON to Email #2 format
+                            email2_sections = convert_phase3_to_email2_sections(phase3_merged_json)
+                            email2_summary_html = build_executive_summary_html(email2_sections, strip_emojis=False)
+
+                            # Build full Email #2 HTML
+                            config = get_ticker_config(ticker)
+                            company_name = config.get('company_name', ticker) if config else ticker
+                            report_label = "(WEEKLY)" if report_type == 'weekly' else "(DAILY)"
+                            email2_subject = f"QA Content Review (Regenerated) {report_label}: {company_name} ({ticker}) - with Phase 3 Deduplication"
+
+                            # Simple Email #2 wrapper HTML
+                            email2_html = f"""
+                            <html>
+                            <head>
+                            <style>
+                                body {{ font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; line-height: 1.6; color: #333; }}
+                                h1 {{ color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }}
+                                h2 {{ color: #34495e; margin-top: 25px; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; }}
+                                .summary-box {{ background-color: #f0f8ff; padding: 15px; margin: 15px 0; border-radius: 8px; border-left: 4px solid #3498db; }}
+                            </style>
+                            </head>
+                            <body>
+                            <h1>📊 QA Content Review (Regenerated): {company_name} ({ticker})</h1>
+                            <p><strong>Report Type:</strong> {report_type.upper()} | <strong>Includes:</strong> Phase 1+2+3 with Deduplication</p>
+                            <div class='summary-box'>
+                            {email2_summary_html}
+                            </div>
+                            </body>
+                            </html>
+                            """
+
+                            # Send Email #2
+                            email2_success = send_email(email2_subject, email2_html)
+                            if email2_success:
+                                LOG.info(f"✅ [{ticker}] Email #2 sent with Phase 3 deduplication info (regen)")
+                            else:
+                                LOG.warning(f"⚠️ [{ticker}] Email #2 send failed (regen)")
+
+                        except Exception as e:
+                            LOG.error(f"❌ [{ticker}] Email #2 generation failed (regen): {e}")
+                            import traceback
+                            LOG.error(f"[{ticker}] Stacktrace: {traceback.format_exc()}")
+                            # Continue to Email #3 even if Email #2 fails
 
                         # Generate Email #3 HTML and queue it
                         LOG.info(f"[{ticker}] 💾 Generating and queueing Email #3...")

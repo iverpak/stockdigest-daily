@@ -1057,3 +1057,203 @@ def convert_phase1_to_enhanced_sections(phase1_json: Dict) -> Dict[str, List[Dic
     sections = add_dates_to_email_sections(sections, phase1_json)
 
     return sections
+
+
+def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]]:
+    """
+    Convert Phase 3 merged JSON to Email #2 QA format with deduplication display.
+
+    NEW FORMAT (Nov 2025):
+    ────────────────────────────────────────────────────────────────────────────────
+    [bullet_id] Topic Label • Sentiment (reason)
+    ────────────────────────────────────────────────────────────────────────────────
+    Phase 1+2 (Original):
+    Content from Phase 1 articles with Phase 2 context appended.
+      Impact: high | Sentiment: bullish | Relevance: direct
+      Filing hints: 10-K (Section A, B)
+      Source articles: [0, 3, 5]
+
+    Phase 3 (Integrated):
+    Content with Phase 2 context woven inline.
+
+    Deduplication: ✅ PRIMARY
+      Absorbs: major_dev_3, risk_2
+      Theme: Intel supply chain transition
+      Proposed Edit: "Consolidated content..."
+    ────────────────────────────────────────────────────────────────────────────────
+
+    Args:
+        phase3_json: Phase 3 merged JSON (Phase 1+2 metadata + Phase 3 integrated + deduplication)
+
+    Returns:
+        sections dict: {section_name: [{'bullet_id': '...', 'formatted': '...'}, ...]}
+    """
+    from modules.executive_summary_utils import format_bullet_header, add_dates_to_email_sections
+
+    sections = {
+        "bottom_line": [],
+        "major_developments": [],
+        "financial_operational": [],
+        "risk_factors": [],
+        "wall_street": [],
+        "competitive_industry": [],
+        "upcoming_catalysts": [],
+        "upside_scenario": [],
+        "downside_scenario": [],
+        "key_variables": []
+    }
+
+    json_sections = phase3_json.get("sections", {})
+
+    # Bottom Line (paragraph section - no deduplication)
+    if "bottom_line" in json_sections:
+        bl = json_sections["bottom_line"]
+        content_p12 = bl.get("content", "")
+        context = bl.get("context", "")
+        content_p3 = bl.get("content_integrated", "")
+
+        result = "<strong>Phase 1+2 (Original):</strong><br>"
+        result += content_p12
+        if context:
+            result += f" <em>Context: {context}</em>"
+
+        if content_p3:
+            result += "<br><br><strong>Phase 3 (Integrated):</strong><br>"
+            result += content_p3
+
+        sections["bottom_line"] = [result]
+
+    # Helper function to format bullets with full QA display
+    def format_bullet_with_dedup(bullet: Dict) -> Dict:
+        """Format bullet showing Phase 1+2, Phase 3, and deduplication info."""
+        # Header line
+        header = format_bullet_header(bullet)
+
+        # Build result with separator
+        result = f"<div style='border-top: 1px solid #ddd; padding-top: 10px; margin-top: 10px;'>"
+        result += f"<strong>[{bullet.get('bullet_id', 'N/A')}]</strong> {header}"
+        result += "<hr style='border: none; border-top: 1px dashed #ccc; margin: 8px 0;'>"
+
+        # Phase 1+2 (Original)
+        result += "<strong>Phase 1+2 (Original):</strong><br>"
+        content_p12 = bullet.get('content', '')
+        result += content_p12
+
+        # Add Phase 2 context if present
+        context = bullet.get('context', '')
+        if context:
+            result += f"<br><em style='color: #666;'>Context: {context}</em>"
+
+        # Metadata line
+        metadata_parts = []
+        if bullet.get('impact'):
+            metadata_parts.append(f"Impact: {bullet['impact']}")
+        if bullet.get('sentiment'):
+            metadata_parts.append(f"Sentiment: {bullet['sentiment']}")
+        if bullet.get('relevance'):
+            metadata_parts.append(f"Relevance: {bullet['relevance']}")
+        if bullet.get('reason'):
+            metadata_parts.append(f"Reason: {bullet['reason']}")
+        if metadata_parts:
+            result += f"<br><span style='color: #888; font-size: 11px;'>  {' | '.join(metadata_parts)}</span>"
+
+        # Filing hints
+        hints = bullet.get("filing_hints", {})
+        hint_parts = []
+        for filing_type, sections_list in hints.items():
+            if sections_list:
+                hint_parts.append(f"{filing_type} ({', '.join(sections_list)})")
+        if hint_parts:
+            result += f"<br><span style='color: #888; font-size: 11px;'>  Filing hints: {'; '.join(hint_parts)}</span>"
+
+        # Source articles
+        source_articles = bullet.get('source_articles', [])
+        if source_articles:
+            result += f"<br><span style='color: #888; font-size: 11px;'>  Source articles: {source_articles}</span>"
+
+        # Phase 3 (Integrated)
+        content_p3 = bullet.get('content_integrated', '')
+        if content_p3:
+            result += "<br><br><strong>Phase 3 (Integrated):</strong><br>"
+            result += content_p3
+
+        # Deduplication info
+        dedup = bullet.get('deduplication', {'status': 'unique'})
+        status = dedup.get('status', 'unique')
+
+        result += "<br><br><strong>Deduplication:</strong> "
+
+        if status == 'unique':
+            result += "<span style='color: #28a745;'>✅ UNIQUE</span>"
+        elif status == 'primary':
+            result += "<span style='color: #007bff;'>✅ PRIMARY</span>"
+            absorbs = dedup.get('absorbs', [])
+            if absorbs:
+                result += f"<br><span style='color: #666; font-size: 11px;'>  Absorbs: {', '.join(absorbs)}</span>"
+            theme = dedup.get('shared_theme', '')
+            if theme:
+                result += f"<br><span style='color: #666; font-size: 11px;'>  Theme: {theme}</span>"
+            proposed = dedup.get('proposed_edit', '')
+            if proposed:
+                result += f"<br><span style='color: #666; font-size: 11px;'>  Proposed Edit:</span>"
+                result += f"<br><div style='background: #f8f9fa; padding: 8px; border-left: 3px solid #007bff; margin: 5px 0; font-size: 12px;'>{proposed}</div>"
+        elif status == 'duplicate':
+            result += "<span style='color: #dc3545;'>❌ DUPLICATE</span>"
+            absorbed_by = dedup.get('absorbed_by', '')
+            if absorbed_by:
+                result += f"<br><span style='color: #666; font-size: 11px;'>  Absorbed by: {absorbed_by}</span>"
+            theme = dedup.get('shared_theme', '')
+            if theme:
+                result += f"<br><span style='color: #666; font-size: 11px;'>  Theme: {theme}</span>"
+
+        result += "</div>"
+
+        return {
+            'bullet_id': bullet.get('bullet_id', ''),
+            'formatted': result
+        }
+
+    # All bullet sections
+    section_mapping = {
+        "major_developments": "major_developments",
+        "financial_performance": "financial_operational",
+        "risk_factors": "risk_factors",
+        "wall_street_sentiment": "wall_street",
+        "competitive_industry_dynamics": "competitive_industry",
+        "upcoming_catalysts": "upcoming_catalysts",
+        "key_variables": "key_variables"
+    }
+
+    for json_key, sections_key in section_mapping.items():
+        if json_key in json_sections:
+            sections[sections_key] = [
+                format_bullet_with_dedup(b)
+                for b in json_sections[json_key]
+            ]
+
+    # Scenarios (paragraph sections - no deduplication)
+    for json_key, sections_key in [
+        ("upside_scenario", "upside_scenario"),
+        ("downside_scenario", "downside_scenario")
+    ]:
+        if json_key in json_sections:
+            scenario = json_sections[json_key]
+            content_p12 = scenario.get("content", "")
+            context = scenario.get("context", "")
+            content_p3 = scenario.get("content_integrated", "")
+
+            result = "<strong>Phase 1+2 (Original):</strong><br>"
+            result += content_p12
+            if context:
+                result += f"<br><em style='color: #666;'>Context: {context}</em>"
+
+            if content_p3:
+                result += "<br><br><strong>Phase 3 (Integrated):</strong><br>"
+                result += content_p3
+
+            sections[sections_key] = [result]
+
+    # Add dates to all sections using bullet_id matching
+    sections = add_dates_to_email_sections(sections, phase3_json)
+
+    return sections

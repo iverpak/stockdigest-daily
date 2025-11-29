@@ -11,7 +11,17 @@ import re
 from typing import Dict, List, Optional
 
 
-def format_bullet_header(bullet: Dict, show_reason: bool = True) -> str:
+# Sections where sentiment tags are hidden in Email #3 (user-facing)
+# These sections have self-evident sentiment or re-labeling adds confusion/risk
+HIDE_SENTIMENT_SECTIONS = {
+    'risk_factors',           # Risks are inherently negative; bullish/bearish is confusing
+    'wall_street_sentiment',  # Analyst opinions ARE sentiment; redundant to re-label
+    'upcoming_catalysts',     # Future events; sentiment doesn't apply cleanly
+    'financial_performance',  # Results speak for themselves; "beat" = bullish is obvious
+}
+
+
+def format_bullet_header(bullet: Dict, show_reason: bool = True, section_name: str = None) -> str:
     """
     Universal bullet formatter - adapts based on available fields.
 
@@ -27,6 +37,9 @@ def format_bullet_header(bullet: Dict, show_reason: bool = True) -> str:
                      If False, show only sentiment without reason.
                      Default True for backward compatibility (Email #2 shows all metadata).
                      Email #3 passes False to hide reason from user-facing emails.
+        section_name: If provided, used to determine whether to show sentiment.
+                      Sections in HIDE_SENTIMENT_SECTIONS will not display sentiment tags.
+                      Default None shows sentiment (backward compatible for Email #2).
 
     Returns:
         Formatted header string (bolded with markdown **)
@@ -39,8 +52,11 @@ def format_bullet_header(bullet: Dict, show_reason: bool = True) -> str:
     if bullet.get('entity'):
         header = f"[{bullet['entity']}] {header}"
 
-    # Add sentiment/reason if present (all sections except Key Variables/Catalysts)
-    if bullet.get('sentiment'):
+    # Determine if sentiment should be shown for this section
+    show_sentiment = section_name not in HIDE_SENTIMENT_SECTIONS if section_name else True
+
+    # Add sentiment/reason if present and allowed for this section
+    if show_sentiment and bullet.get('sentiment'):
         sentiment_cap = bullet['sentiment'].title()  # Bullish, Bearish, Neutral, Mixed
         if show_reason and bullet.get('reason'):
             header = f"{header} • {sentiment_cap} ({bullet['reason']})"

@@ -846,10 +846,11 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[Dict]]:
         sections["bottom_line"] = [content]
 
     # Helper function to format bullets (simple, no metadata)
-    def format_bullet_simple(bullet: Dict) -> Dict:
+    def format_bullet_simple(bullet: Dict, section_name: str) -> Dict:
         """Format bullet with header and content. Returns {'bullet_id': '...', 'formatted': '...'}"""
         # Use shared utility for header (hide reason in Email #3 user-facing emails)
-        header = format_bullet_header(bullet, show_reason=False)
+        # Pass section_name to control sentiment display (hidden for some sections)
+        header = format_bullet_header(bullet, show_reason=False, section_name=section_name)
 
         # Use integrated content if available (Phase 3), fall back to Phase 1 + Phase 2 separately
         if bullet.get('content_integrated'):
@@ -887,7 +888,7 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[Dict]]:
             ]
 
             sections[sections_key] = [
-                format_bullet_simple(b)
+                format_bullet_simple(b, json_key)
                 for b in filtered_bullets
             ]
 

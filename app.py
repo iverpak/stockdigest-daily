@@ -1456,16 +1456,11 @@ def ensure_schema():
                 existing_core_tables = result[0] if isinstance(result, tuple) else result['count']
 
                 if existing_core_tables == 3:
-                    # OPTIMIZATION (Nov 2025): Skip DDL if core schema exists
-                    # During rolling deployments, old instance may hold locks on tables
-                    # Running ALTER TABLE causes 30s lock timeout and startup failure
-                    # DDL is only needed for fresh databases or schema migrations
-                    LOG.info("✅ Core schema exists - skipping DDL (optimization for rolling deploys)")
-                    return  # Early exit - schema is already set up
+                    LOG.info("✅ Core schema exists - running idempotent DDL for completeness")
                 else:
                     LOG.info("🔧 Core tables missing - creating full schema...")
 
-                # STEP 3: Execute DDL (only runs for fresh databases now)
+                # STEP 3: Execute DDL (idempotent - safe to run multiple times)
                 cur.execute("""
                     -- Articles table: ticker-agnostic content storage
                 CREATE TABLE IF NOT EXISTS articles (

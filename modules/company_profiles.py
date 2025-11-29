@@ -1382,13 +1382,23 @@ def generate_sec_filing_profile_with_gemini(
 
             if not is_valid:
                 LOG.warning(f"[{ticker}] ⚠️ DEFORMED 10-K detected: {reason}")
-                LOG.warning(f"[{ticker}] ⏳ Waiting 10 seconds before retry...")
+                LOG.warning(f"[{ticker}] ⏳ Waiting 10 seconds before retry with truncated input...")
                 time.sleep(10)
 
-                LOG.info(f"[{ticker}] 🔄 Retrying Gemini 10-K generation (attempt 2/2)...")
+                # Build truncated prompt for retry (~300K tokens instead of 400K)
+                truncated_content = content[:1200000]  # ~300K tokens
+                LOG.info(f"[{ticker}] 🔄 Retrying Gemini 10-K generation (attempt 2/2) with truncated input ({len(truncated_content):,} chars)...")
+
+                retry_prompt = prompt_template.format(
+                    company_name=company_name,
+                    ticker=ticker,
+                    filing_date=filing_date or f"{fiscal_year}-12-31",
+                    fiscal_year_end=f"{fiscal_year}-12-31",
+                    full_10k_text=truncated_content
+                )
 
                 retry_start = datetime.now()
-                retry_response = model.generate_content(full_prompt, generation_config=generation_config)
+                retry_response = model.generate_content(retry_prompt, generation_config=generation_config)
                 retry_end = datetime.now()
 
                 profile_markdown = retry_response.text
@@ -1396,6 +1406,7 @@ def generate_sec_filing_profile_with_gemini(
 
                 # Update metadata with retry info
                 metadata['token_count_output'] = retry_tokens_out
+                metadata['token_count_input'] = retry_response.usage_metadata.prompt_token_count if hasattr(retry_response, 'usage_metadata') else 0
                 metadata['generation_time_seconds'] += int((retry_end - retry_start).total_seconds())
 
                 is_valid_retry, retry_reason = _validate_10k_output(profile_markdown, retry_tokens_out, ticker)
@@ -1405,7 +1416,7 @@ def generate_sec_filing_profile_with_gemini(
                     LOG.error(f"[{ticker}] ❌ 10-K GENERATION FAILED - No valid output after 2 attempts")
                     return None
 
-                LOG.info(f"[{ticker}] ✅ Retry successful - 10-K now valid")
+                LOG.info(f"[{ticker}] ✅ Retry successful with truncated input - 10-K now valid")
 
         # Always strip trailing whitespace before returning
         profile_markdown = profile_markdown.rstrip()

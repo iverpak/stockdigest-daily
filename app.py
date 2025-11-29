@@ -15144,128 +15144,47 @@ def generate_email_html_core(
     else:
         unsubscribe_url = "{{UNSUBSCRIBE_TOKEN}}"
 
-    # Build full HTML (SAME template as Email #3)
-    html = f'''<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{ticker} Stock Intelligence Report</title>
-    <style>
-        @media only screen and (max-width: 600px) {{
-            .content-padding {{ padding: 16px !important; }}
-            .header-padding {{ padding: 16px 20px 25px 20px !important; }}
-            .price-box {{ padding: 8px 10px !important; }}
-            .company-name {{ font-size: 20px !important; }}
-        }}
-    </style>
-</head>
-<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8f9fa; color: #212529;">
+    # Build full HTML using Jinja2 template (Nov 2025 redesign)
+    from jinja2 import Environment, FileSystemLoader
+    template_env = Environment(loader=FileSystemLoader('templates'))
+    user_report_template = template_env.get_template('email_user_report.html')
 
-    <table role="presentation" style="width: 100%; border-collapse: collapse;">
-        <tr>
-            <td align="center" style="padding: 40px 20px;">
+    html = user_report_template.render(
+        # Core identifiers
+        ticker=ticker,
+        company_name=company_name,
+        sector=sector,  # Template handles "· Sector" formatting
 
-                <table role="presentation" style="max-width: 700px; width: 100%; background-color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-collapse: collapse; border-radius: 8px; overflow: visible;">
+        # Header branding
+        header_title=header_title,
+        current_date=current_date,
+        market_status=market_status,
 
-                    <!-- Header -->
-                    <tr>
-                        <td class="header-padding" style="padding: 18px 24px 30px 24px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff; border-radius: 8px 8px 0 0;">
-                            <table role="presentation" style="width: 100%; border-collapse: collapse;">
-                                <tr>
-                                    <td style="width: 58%;">
-                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">{header_title}</div>
-                                    </td>
-                                    <td align="right" style="width: 42%;">
-                                        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">{current_date} • {market_status}</div>
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td style="width: 58%; vertical-align: top;">
-                                        <h1 class="company-name" style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; line-height: 1; color: #ffffff;">{company_name}</h1>
-                                        <div style="margin-top: 10px; font-size: 13px; opacity: 0.9; font-weight: 500; color: #ffffff;">{ticker}{sector_display}</div>
-                                    </td>
-                                    <td align="right" style="vertical-align: top; width: 42%;">
-                                        <div style="display: inline-block; text-align: right;">
-                                            <div style="font-size: 28px; font-weight: 700; line-height: 1; margin: 0; color: #ffffff;">{stock_price}</div>
-                                            {f'<div style="font-size: 14px; color: {price_change_color}; font-weight: 600; margin-top: 10px;">{return_label}: {price_change_pct}</div>' if price_change_pct else ''}
-                                            {f'<div style="font-size: 14px; color: {ytd_return_color}; font-weight: 600; margin-top: 4px;">YTD: {ytd_return_pct}</div>' if ytd_return_pct else ''}
-                                        </div>
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
+        # Price card (header)
+        stock_price=stock_price,
+        price_change_pct=price_change_pct,
+        price_change_color=price_change_color,
+        return_label=return_label,
+        ytd_return_pct=ytd_return_pct,
+        ytd_return_color=ytd_return_color,
 
-                    <!-- Content -->
-                    <tr>
-                        <td class="content-padding" style="padding: 24px 24px 24px 24px;">
+        # 4-metric strip (Nov 2025)
+        market_cap=stock_data.get('market_cap'),
+        enterprise_value=stock_data.get('enterprise_value'),
+        volume_ratio=stock_data.get('volume_ratio'),
+        year_range=stock_data.get('year_range'),
 
-                            <!-- Executive Summary (Phase 3 Editorial Format) -->
-                            {summary_html}
+        # Content (pre-rendered HTML)
+        summary_html=summary_html,
+        articles_html=articles_html,
+        analysis_message=analysis_message,
 
-                            <!-- Transition to Sources -->
-                            <div style="margin: 32px 0 20px 0; padding: 12px 16px; background-color: #eff6ff; border-left: 4px solid #1e40af; border-radius: 4px;">
-                                <p style="margin: 0; font-size: 12px; color: #1e40af; font-weight: 600; line-height: 1.4;">
-                                    {analysis_message}
-                                </p>
-                            </div>
-
-                            <!-- Divider -->
-                            <div style="height: 2px; background: linear-gradient(90deg, #1e40af 0%, #e5e7eb 100%); margin-bottom: 20px;"></div>
-
-                            <!-- Source Articles -->
-                            <div style="margin-bottom: 0;">
-                                <h2 style="margin: 0 0 16px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">Source Articles</h2>
-                                {articles_html}
-                            </div>
-
-                        </td>
-                    </tr>
-
-                    <!-- Footer -->
-                    <tr>
-                        <td style="background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); padding: 16px 24px; color: rgba(255,255,255,0.9);">
-                            <table role="presentation" style="width: 100%; border-collapse: collapse;">
-                                <tr>
-                                    <td>
-                                        <div style="font-size: 14px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">{footer_brand}</div>
-                                        <div style="font-size: 12px; opacity: 0.8; margin-bottom: 8px; color: #ffffff;">{footer_subtitle}</div>
-
-                                        <!-- Legal Disclaimer -->
-                                        <div style="font-size: 10px; opacity: 0.7; line-height: 1.4; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2); color: #ffffff;">
-                                            For informational and educational purposes only. Not investment advice. See Terms of Service for full disclaimer.
-                                        </div>
-
-                                        <!-- Links -->
-                                        <div style="font-size: 11px; margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.2);">
-                                            <a href="https://weavara.io/terms-of-service" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Terms of Service</a>
-                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
-                                            <a href="https://weavara.io/privacy-policy" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Privacy Policy</a>
-                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
-                                            <a href="mailto:{os.getenv('ADMIN_EMAIL', 'weavara.research@gmail.com')}" style="color: #ffffff; text-decoration: none; opacity: 0.9; margin-right: 12px;">Contact</a>
-                                            <span style="color: rgba(255,255,255,0.5); margin-right: 12px;">|</span>
-                                            <a href="{unsubscribe_url}" style="color: #ffffff; text-decoration: none; opacity: 0.9;">Unsubscribe</a>
-                                        </div>
-
-                                        <!-- Copyright -->
-                                        <div style="font-size: 10px; opacity: 0.6; margin-top: 12px; color: #ffffff;">
-                                            © 2025 {footer_brand}. All rights reserved.
-                                        </div>
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
-
-                </table>
-
-            </td>
-        </tr>
-    </table>
-
-</body>
-</html>'''
+        # Footer
+        footer_brand=footer_brand,
+        footer_subtitle=footer_subtitle,
+        contact_email=os.getenv('ADMIN_EMAIL', 'weavara.research@gmail.com'),
+        unsubscribe_url=unsubscribe_url
+    )
 
     # ========== Official user-facing email subject ==========
     if report_type == 'weekly':
@@ -16102,7 +16021,7 @@ def stop_heartbeat_thread(job_id: str):
 
 def get_filing_stock_data(ticker: str) -> dict:
     """
-    Get real-time stock data for filing emails (10-K, 10-Q, Transcripts, Press Releases).
+    Get real-time stock data for filing emails (10-K, 10-Q, Transcripts, Press Releases, User Reports).
 
     Priority order:
     1. FMP (Financial Modeling Prep) - Fast, reliable, has pre-calculated YTD
@@ -16113,8 +16032,10 @@ def get_filing_stock_data(ticker: str) -> dict:
     NOTE: Database fallback removed (Nov 2025) - stale data is worse than no data.
 
     Returns:
-        dict with template variables: stock_price, price_change_pct, price_change_color,
-        ytd_return_pct, ytd_return_color, market_status, return_label
+        dict with template variables:
+        - Header price card: stock_price, price_change_pct, price_change_color,
+          ytd_return_pct, ytd_return_color, market_status, return_label
+        - 4-metric strip (Nov 2025): market_cap, enterprise_value, volume_ratio, year_range
         All values are None if data fetch completely fails.
     """
     LOG.info(f"[{ticker}] Fetching stock data for email (FMP → yfinance → Polygon)")
@@ -16132,7 +16053,12 @@ def get_filing_stock_data(ticker: str) -> dict:
             'ytd_return_pct': None,
             'ytd_return_color': None,
             'market_status': None,
-            'return_label': None
+            'return_label': None,
+            # 4-metric strip (Nov 2025)
+            'market_cap': None,
+            'enterprise_value': None,
+            'volume_ratio': None,
+            'year_range': None
         }
 
     # Successfully got data - format for templates
@@ -16140,14 +16066,46 @@ def get_filing_stock_data(ticker: str) -> dict:
     daily_return = live_data.get('financial_price_change_pct')
     ytd_return = live_data.get('financial_ytd_return_pct')
 
+    # Extract raw values for 4-metric strip (Nov 2025)
+    market_cap_raw = live_data.get('financial_market_cap')
+    enterprise_value_raw = live_data.get('financial_enterprise_value')
+    volume_raw = live_data.get('financial_volume')
+    avg_volume_raw = live_data.get('financial_avg_volume')
+    year_high_raw = live_data.get('financial_year_high')
+    year_low_raw = live_data.get('financial_year_low')
+
+    # Format 4-metric strip values
+    # Market Cap: "$4.32T"
+    market_cap_formatted = format_financial_number(market_cap_raw) if market_cap_raw else None
+
+    # Enterprise Value: "$4.29T"
+    enterprise_value_formatted = format_financial_number(enterprise_value_raw) if enterprise_value_raw else None
+
+    # Volume Ratio: "1.4x Avg"
+    volume_ratio_formatted = None
+    if volume_raw and avg_volume_raw and avg_volume_raw > 0:
+        ratio = volume_raw / avg_volume_raw
+        volume_ratio_formatted = f"{ratio:.1f}x Avg"
+
+    # 52-Week Range: "$86.24 – $195.87"
+    year_range_formatted = None
+    if year_low_raw and year_high_raw:
+        year_range_formatted = f"${year_low_raw:.2f} – ${year_high_raw:.2f}"
+
     return {
+        # Header price card (existing)
         'stock_price': f"${live_data['financial_last_price']:.2f}",
         'price_change_pct': f"{'+' if daily_return >= 0 else ''}{daily_return:.2f}%" if daily_return is not None else None,
         'price_change_color': "#4ade80" if daily_return is not None and daily_return >= 0 else "#ef4444",
         'ytd_return_pct': f"{'+' if ytd_return >= 0 else ''}{ytd_return:.2f}%" if ytd_return is not None else None,
         'ytd_return_color': "#4ade80" if ytd_return is not None and ytd_return >= 0 else "#ef4444",
         'market_status': "INTRADAY" if market_is_open else "LAST CLOSE",
-        'return_label': "TODAY" if market_is_open else "1D"
+        'return_label': "TODAY" if market_is_open else "1D",
+        # 4-metric strip (Nov 2025)
+        'market_cap': market_cap_formatted,
+        'enterprise_value': enterprise_value_formatted,
+        'volume_ratio': volume_ratio_formatted,
+        'year_range': year_range_formatted
     }
 
 

@@ -2890,13 +2890,15 @@ def upsert_feed_new_architecture(url: str, name: str, search_keyword: str = None
     """
     with db() as conn, conn.cursor() as cur:
         try:
-            # Insert or get existing feed - Feeds are IMMUTABLE (only reactivate on conflict)
+            # Insert or get existing feed - Feeds are IMMUTABLE except for fixing NULL feed_ticker
+            # COALESCE allows fixing feeds that were created without feed_ticker (bug fix Nov 29, 2025)
             cur.execute("""
                 INSERT INTO feeds (url, name, search_keyword, feed_ticker, company_name, retain_days)
                 VALUES (%s, %s, %s, %s, %s, %s)
                 ON CONFLICT (url) DO UPDATE SET
                     active = TRUE,
-                    updated_at = NOW()
+                    updated_at = NOW(),
+                    feed_ticker = COALESCE(feeds.feed_ticker, EXCLUDED.feed_ticker)
                 RETURNING id;
             """, (url, name, search_keyword, competitor_ticker, company_name, retain_days))
 
@@ -3009,7 +3011,8 @@ def create_feeds_for_ticker_new_architecture(ticker: str, metadata: dict) -> lis
             feed_id = upsert_feed_new_architecture(
                 url=feed_config["url"],
                 name=feed_config["name"],
-                search_keyword=feed_config["search_keyword"]
+                search_keyword=feed_config["search_keyword"],
+                competitor_ticker=ticker  # Feed is ABOUT this ticker (needed for reuse as competitor/value_chain)
             )
 
             # Associate this feed with this ticker as "company" category

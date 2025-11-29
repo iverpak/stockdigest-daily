@@ -4185,7 +4185,6 @@ def get_ticker_config(ticker: str) -> Optional[Dict]:
             LOG.error(f"[DB_DEBUG] ❌ fetchone() failed with {type(e).__name__}: {e}")
             LOG.error(f"[DB_DEBUG] Cursor type: {type(cur)}")
             LOG.error(f"[DB_DEBUG] Connection type: {type(conn)}")
-            import traceback
             LOG.error(f"[DB_DEBUG] Traceback:\n{traceback.format_exc()}")
             raise  # Re-raise to surface the error
 
@@ -4761,7 +4760,6 @@ def import_ticker_reference_from_csv_content(csv_content: str):
         }
         
     except Exception as e:
-        import traceback
         full_trace = traceback.format_exc()
         LOG.error(f"[CSV_IMPORT] CSV parsing failed with exception: {e}")
         LOG.error(f"[CSV_IMPORT] Full traceback:\n{full_trace}")
@@ -7371,7 +7369,6 @@ def ingest_feed_basic_only(feed: Dict, mode: str = 'production', quota: int = No
                             LOG.info(f"DUPLICATE SKIPPED: {title[:30]}")
                             
                     except Exception as db_e:
-                        import traceback
                         LOG.error(f"Database error processing article '{title[:30]}...': {type(db_e).__name__}: {str(db_e)}")
                         LOG.error(f"Full traceback: {traceback.format_exc()}")
                         continue
@@ -18270,7 +18267,6 @@ async def process_ticker_job(job: dict):
 
                                 except Exception as e:
                                     LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Email #2 generation failed: {e}")
-                                    import traceback
                                     LOG.error(f"[{ticker}] Stacktrace: {traceback.format_exc()}")
                                     # Continue to Email #3 even if Email #2 fails
 
@@ -18455,7 +18451,6 @@ async def process_ticker_job(job: dict):
 
                                 except Exception as e:
                                     LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Email #2 generation failed (test mode): {e}")
-                                    import traceback
                                     LOG.error(f"[{ticker}] Stacktrace: {traceback.format_exc()}")
                                     # Continue to Email #3 even if Email #2 fails
 
@@ -29220,7 +29215,6 @@ async def regenerate_email_api(request: Request):
 
                         except Exception as e:
                             LOG.error(f"❌ [{ticker}] Email #2 generation failed (regen): {e}")
-                            import traceback
                             LOG.error(f"[{ticker}] Stacktrace: {traceback.format_exc()}")
                             # Continue to Email #3 even if Email #2 fails
 
@@ -29290,7 +29284,6 @@ async def regenerate_email_api(request: Request):
 
     except Exception as e:
         LOG.error(f"❌ Failed to regenerate email for {ticker}: {e}")
-        import traceback
         LOG.error(traceback.format_exc())
         return {"status": "error", "message": str(e)}
 
@@ -29379,7 +29372,6 @@ async def submit_quality_review_job(request: Request):
 
     except Exception as e:
         LOG.error(f"❌ Failed to submit quality review jobs: {e}")
-        import traceback
         LOG.error(traceback.format_exc())
         return {"status": "error", "message": str(e)}
 
@@ -31835,7 +31827,6 @@ def process_ticker_feeds_hourly(ticker: str) -> Dict[str, int]:
 
     except Exception as e:
         LOG.error(f"[{ticker}] ❌ Ticker feed processing failed: {e}")
-        import traceback
         LOG.error(traceback.format_exc())
         return stats
 
@@ -32081,14 +32072,12 @@ def process_hourly_alerts():
 
         except Exception as e:
             LOG.error(f"❌ Error generating hourly alert: {e}")
-            import traceback
             LOG.error(traceback.format_exc())
 
         LOG.info(f"✅ Hourly alerts processing complete at {now_est.strftime('%I:%M %p')} EST")
 
     except Exception as e:
         LOG.error(f"❌ Hourly alerts processing failed: {e}")
-        import traceback
         LOG.error(traceback.format_exc())
 
 

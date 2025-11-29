@@ -295,7 +295,7 @@ Bottom Line: 150 words (HARD CAP - strict enforcement with word count)
 
 Major Developments: 3-8 bullets (aim for comprehensive coverage)
 Financial/Operational Performance: 2-5 bullets max
-Risk Factors: 2-6 bullets max
+Risk Factors: 0-4 bullets max (may be empty if risks covered elsewhere)
 Wall Street Sentiment: 2-6 bullets (include all analyst views)
 Competitive/Industry Dynamics: 2-8 bullets (comprehensive industry context)
 Upcoming Catalysts: 1-4 bullets max
@@ -1563,87 +1563,38 @@ Direction check:
 Report what articles stated using their framing and severity. Phase 2 will calculate exact materiality using filing data.
 
 ═══════════════════════════════════════════════════════════════════════════════
-SECTION ASSIGNMENT LOGIC - WHERE BULLETS BELONG
+SECTION ASSIGNMENT LOGIC - WHERE BULLETS BELONG - NO DUPLICATION
 ═══════════════════════════════════════════════════════════════════════════════
+
+CRITICAL: Each theme appears in EXACTLY ONE bullet section. No duplication. No exceptions.
+
+(Bottom Line, Upside/Downside have separate rules - not counted in this limit)
 
 Bullets must be assigned to the correct section based on content type, not importance.
 
-DECISION FRAMEWORK:
+DECISION FRAMEWORK (first match wins):
 
-1. Is it a company-specific development (company action/target)?
-   → Major Developments
+1. Is it analyst rating, price target, or commentary?
+   → Wall Street Sentiment
 
-2. Is it financial/operational data or metrics?
+2. Is it a scheduled future event?
+   → Upcoming Catalysts
+
+3. Is it financial/operational data or metrics?
    → Financial/Operational Performance
 
-3. Is it a risk, concern, or threat?
-   → Risk Factors (if meets risk criteria - see below)
-
-4. Is it analyst rating, price target, or commentary?
-   → Wall Street Sentiment
+4. Is it a company-specific development (company action/target)?
+   → Major Developments (include all context - financial exposure, timeline, implications - in one bullet)
 
 5. Is it competitor action, value chain intelligence, or industry trend?
    → Competitive/Industry Dynamics (if meets relevance test - see below)
 
-6. Is it a scheduled future event?
-   → Upcoming Catalysts
+6. Is it a forward-looking concern NOT covered by sections 1-5?
+   → Risk Factors (if meets risk criteria - see below)
 
-Apply tests in this order. First match wins.
+When a theme could fit multiple sections, use the FIRST matching section above. Include all relevant context in that single bullet.
 
-═══════════════════════════════════════════════════════════════════════════════
-REDUNDANCY PREVENTION & THEME DEDUPLICATION:
-═══════════════════════════════════════════════════════════════════════════════
-
-CRITICAL: Each theme appears in MAX 2 sections from this list:
-- Major Developments
-- Financial/Operational Performance  
-- Risk Factors
-- Wall Street Sentiment
-- Competitive/Industry Dynamics
-- Upcoming Catalysts
-
-(Bottom Line, Upside/Downside have separate rules - not counted in this limit)
-
-STRICT PLACEMENT RULES:
-
-1. DEFAULT: Place theme in ONE section only based on primary focus:
-   - Major Developments - company actions/announcements, backward-looking facts
-   - Financial/Operational Performance – point-in-time metrics/results
-   - Risk Factors – forward-looking threats/concerns
-   - Wall Street Sentiment - analyst opinions/external valuation view
-   - Competitive/Industry Dynamics - external environment
-   - Upcoming Catalysts - scheduled future events with specific dates
-
-2. EXCEPTION: Use 2 sections ONLY if:
-   - Different temporal focus (explicitly different time periods discussed)
-   - 100% unique facts (no overlap in specific data points)
-
-3. LIMITED INFORMATION RULE:
-   When you have <10 unique facts about a theme (regardless of article count):
-   - Consolidate into ONE comprehensive bullet
-   - Better one substantive bullet than multiple thin fragments
-
-Example: Acquisition theme with 6 facts total → ONE section
-Example: Acquisition theme with 20+ unique facts → Can split if temporal focus differs
-
-DEFAULT: When uncertain, use FEWER sections. Sophisticated readers prefer consolidated insight.
-
-CRITICAL OVERRIDE - ANALYST ACTIONS (CHECK THIS FIRST):
-
-Analyst ratings, price targets, and commentary ALWAYS go to Wall Street Sentiment.
-NEVER put analyst actions in Major Developments, even if they mention the target company.
-
-Test: Is this an analyst/firm stating a view about the company?
-→ Wall Street Sentiment (NOT Major Developments)
-
-Examples:
-❌ WRONG: "J.P. Morgan rates Buy" → Major Developments
-✅ CORRECT: "J.P. Morgan rates Buy" → Wall Street Sentiment
-
-❌ WRONG: "Goldman upgraded to Outperform" → Major Developments
-✅ CORRECT: "Goldman upgraded to Outperform" → Wall Street Sentiment
-
-Check for analyst override BEFORE applying the 6-step framework above.
+DEFAULT: When uncertain, pick one section and move on. Miscategorization is minor; duplication is a critical failure.
 
 ═══════════════════════════════════════════════════════════════════════════════
 MAJOR DEVELOPMENTS - SCOPE & BRIGHT-LINE TEST
@@ -1699,7 +1650,7 @@ WHAT TO EXCLUDE:
 Do not include:
 - Competitor news (even if major) unless the target company is explicitly mentioned as affected
 - Industry trends without target company-specific action
-- Regulatory changes affecting whole industry (→ Risk Factors or Competitive Dynamics)
+- Regulatory changes affecting whole industry (→ Competitive/Industry Dynamics)
 - Analyst commentary (→ Wall Street Sentiment)
 - Future scheduled events (→ Upcoming Catalysts)
 
@@ -1789,13 +1740,13 @@ FORMAT NOTE: This section does NOT use sentiment tags in Phase 1 output (Phase 2
 RISK FACTORS
 ═══════════════════════════════════════════════════════════════════════════════
 
-SECTION SCOPE: Risks, concerns, and threats that articles reported or that meet categorical risk criteria. Primary emphasis on forward-looking exposures, magnitude, and probability. Report only what articles discussed - no additional inference.
+SECTION SCOPE: Forward-looking concerns and exposures NOT already covered by a bullet in another section. Primary emphasis on forward-looking exposures, magnitude, and probability. Report only what articles discussed - no additional inference.
 
-LENGTH LIMIT: 2-5 bullets max (use 4-5 when multiple categorical risks present)
+LENGTH LIMIT: 0-4 bullets (section may be empty if risks are covered elsewhere per the hierarchy)
 
 SOURCE: [COMPANY], [COMPETITOR], [UPSTREAM], [DOWNSTREAM], and [INDUSTRY] articles all qualify
 
-BULLET CREATION: Article must report the risk/event. Phase 2 quantifies materiality via context.
+BULLET CREATION: Article must report the risk/event. Before creating a bullet, verify the theme is not already covered in Major Developments, Financial/Operational Performance, or Competitive/Industry Dynamics. Phase 2 quantifies materiality via context.
 
 RISK FACTORS INCLUSION CRITERIA (must meet at least ONE):
 
@@ -1804,15 +1755,19 @@ RISK FACTORS INCLUSION CRITERIA (must meet at least ONE):
    
    Keywords: "concern", "risk", "threat", "headwind", "challenge", "pressure"
    
+   NOTE: Per the DECISION FRAMEWORK hierarchy, analyst commentary routes to Wall Street Sentiment (#1) before Risk Factors (#6). If an analyst raises a concern, it goes to Wall Street Sentiment. Risk Factors is for non-analyst concerns (management-flagged, author-flagged) not already covered elsewhere.
+   
    Examples:
-   ✓ "Analyst raised concerns about margin sustainability"
    ✓ "CFO flagged supply chain risks in earnings call"
    ✓ "Articles questioned demand outlook following price cuts"
+   ✓ "Management cited regulatory uncertainty as headwind per press release"
 
 2. CATEGORICAL RISK EVENTS
    Events that are inherently risky by their nature (regardless of framing).
    
-   Auto-include events:
+   NOTE: Per the DECISION FRAMEWORK hierarchy, most categorical events will route to Major Developments (#4) before reaching Risk Factors (#6). Only include here if the theme is NOT already covered in another section.
+   
+   Qualifying events (if not already covered elsewhere):
    - Product recalls (safety issues)
    - Regulatory investigations or enforcement actions
    - Litigation (class action, government lawsuits)
@@ -1829,31 +1784,10 @@ RISK FACTORS INCLUSION CRITERIA (must meet at least ONE):
    ✓ "Class action lawsuit filed alleging securities fraud"
    ✓ "Moody's downgraded debt to Ba1 from Baa3"
 
-   NOTE ON CATEGORICAL EVENTS:
-   Many categorical risk events (investigations, litigation, recalls, executive departures)
-   also appear in Major Developments. Use complementary emphasis when covering both:
-
-   → Major Dev: PRIMARY EMPHASIS on what happened (timeline, announcement, procedural status,
-     management response). Can include forward-looking elements if articles discussed.
-
-   → Risk Factors: PRIMARY EMPHASIS on forward-looking impact (financial exposure, magnitude,
-     probability, operational risks). Can include current status if articles discussed.
-
-   Important: Risk Factors reports what articles discussed - no additional inference beyond
-   what articles state. If article mentioned the risk, include it even if some overlap with
-   Major Dev exists.
-
-   Example - DOJ Investigation:
-   Major Dev: "DOJ investigation acknowledged July 2025, motion to dismiss pending per company
-     statement (Oct 23)"
-   Risk Factors: "DOJ investigation for alleged criminal fraud with potential False Claims Act
-     penalties typically 3x damages; affects Medicare billing representing 40% revenue per
-     articles and 10-K (Oct 23-28)"
-
-   Overlap is acceptable - don't omit risks to avoid duplication.
-
 3. COMPETITIVE THREATS (ARTICLE-FRAMING REQUIRED)
    Competitor developments that articles explicitly frame as threats to the target company.
+
+   NOTE: Per the DECISION FRAMEWORK hierarchy, competitor actions route to Competitive/Industry Dynamics (#5) before Risk Factors (#6). Only include competitive threats here if the theme is NOT already covered in Competitive/Industry Dynamics.
 
    Include ONLY if competitor action meets ONE of these tests:
 
@@ -1887,10 +1821,6 @@ RISK FACTORS INCLUSION CRITERIA (must meet at least ONE):
    ✗ "Competitor acquired 2.6 GW capacity in PJM market" (no threat language)
    ✗ "Competitor opened 10 new stores" (no stated impact on target company)
    ✗ "Competitor hired 1,000 employees" (organizational news, not threat)
-
-   CRITICAL: If competitive threat meets Test A, B, or C, include in BOTH:
-   - Risk Factors (threat framing): Focus on risk to the target company
-   - Competitive Dynamics (detail framing): Focus on transaction/development details
 
 4. VALUE CHAIN DISRUPTIONS
    Supplier/customer issues articles explicitly frame as threats to the target company.
@@ -2059,9 +1989,8 @@ Test 2: Direct comparative framing
 - Article directly compares competitor/value chain metric to the target company metric
 - Example: "GM posted 18% margins vs Tesla's 12% per analyst report"
 
-Test 3: Material competitive event (meets Risk Factors Test 3 criteria)
+Test 3: Material competitive event
 - >$10B M&A, major approval the target company lacks, significant capacity expansion, superior product launch
-- If meets Test 3 → Include in BOTH Risk Factors and Competitive Dynamics
 
 Test 4: Value chain intelligence
 - Upstream articles provide supply chain signals (costs, capacity, disruptions)
@@ -2558,9 +2487,9 @@ Before finalizing output, verify these critical requirements:
 □ Bottom Line ≤150 words (count them)
 □ Major Developments: 3-6 bullets, each passes "Remove the target company - still news?" test
 □ Financial Performance: 2-4 bullets, [COMPANY] articles only
-□ Risk Factors: 2-4 bullets, each meets 1 of 3 criteria (author concern, categorical event, or competitive threat)
+□ Risk Factors: 0-4 bullets (may be empty if risks covered elsewhere per hierarchy)
 □ Wall Street Sentiment: If 1+ analyst actions exist in articles → section must have content
-□ Competitive Dynamics: Each bullet passes 1 of 3 relevance tests
+□ Competitive Dynamics: Each bullet passes relevance test
 □ Upcoming Catalysts: 1-3 bullets, concrete/scheduled events only
 □ Key Variables: 3-5 bullets, no filing_hints
 

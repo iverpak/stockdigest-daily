@@ -1057,15 +1057,19 @@ def extract_8k_html_content(exhibit_url: str) -> str:
 # GEMINI AI PROFILE GENERATION
 # ==============================================================================
 
-def _validate_10k_output(profile_markdown: str, tokens_out: int, ticker: str) -> tuple:
+def _validate_sec_filing_output(profile_markdown: str, tokens_out: int, ticker: str, filing_type: str) -> tuple:
     """
-    Validate Gemini 10-K output for deformed patterns.
+    Validate Gemini 10-K/10-Q output for deformed patterns.
 
     Deformed outputs have:
     - Massive trailing whitespace (garbage)
-    - Incomplete sections (< 14 of 18 expected)
-    - Low token count (< 8000)
-    - Short content length (< 40000 chars)
+    - Incomplete sections
+    - Low token count
+    - Short content length
+
+    Thresholds differ by filing type:
+    - 10-K: 18 sections expected, min 14, min 8K tokens, min 40K chars
+    - 10-Q: 13 sections expected, min 10, min 6K tokens, min 30K chars
 
     Returns:
         (is_valid: bool, reason: str)
@@ -1077,16 +1081,27 @@ def _validate_10k_output(profile_markdown: str, tokens_out: int, ticker: str) ->
     trailing_pct = (trailing_len / total_len * 100) if total_len > 0 else 0
     section_count = profile_markdown.count('## ')
 
-    # Thresholds based on healthy 10-K analysis:
-    # - Healthy: 0% trailing, 18 sections, 12K-20K tokens, 52K-82K chars
-    # - Deformed: 98%+ trailing, 5-8 sections, 2K-6K tokens, 8K-22K chars
+    # Set thresholds based on filing type
+    if filing_type == '10-K':
+        # 10-K: Healthy = 18 sections, 12K-20K tokens, 52K-82K chars
+        expected_sections = 18
+        min_sections = 14
+        min_tokens = 8000
+        min_content = 40000
+    else:  # 10-Q
+        # 10-Q: Healthy = 13 sections, 12K-23K tokens, 43K-89K chars
+        expected_sections = 13
+        min_sections = 10
+        min_tokens = 6000
+        min_content = 30000
+
     if trailing_pct > 5:
         return False, f"trailing_whitespace={trailing_pct:.1f}%"
-    if section_count < 14:
-        return False, f"sections={section_count}/18"
-    if tokens_out < 8000:
+    if section_count < min_sections:
+        return False, f"sections={section_count}/{expected_sections}"
+    if tokens_out < min_tokens:
         return False, f"tokens={tokens_out}"
-    if content_len < 40000:
+    if content_len < min_content:
         return False, f"content_len={content_len}"
 
     return True, "valid"
@@ -1375,20 +1390,21 @@ def generate_sec_filing_profile_with_gemini(
         }
 
         # ====================================================================
-        # 10-K DEFORMED OUTPUT DETECTION + RETRY (10-K only)
+        # DEFORMED OUTPUT DETECTION + RETRY (10-K and 10-Q)
         # ====================================================================
-        if filing_type == '10-K':
-            is_valid, reason = _validate_10k_output(profile_markdown, metadata['token_count_output'], ticker)
+        is_valid, reason = _validate_sec_filing_output(profile_markdown, metadata['token_count_output'], ticker, filing_type)
 
-            if not is_valid:
-                LOG.warning(f"[{ticker}] ⚠️ DEFORMED 10-K detected: {reason}")
-                LOG.warning(f"[{ticker}] ⏳ Waiting 10 seconds before retry with truncated input...")
-                time.sleep(10)
+        if not is_valid:
+            LOG.warning(f"[{ticker}] ⚠️ DEFORMED {filing_type} detected: {reason}")
+            LOG.warning(f"[{ticker}] ⏳ Waiting 10 seconds before retry with truncated input...")
+            time.sleep(10)
 
-                # Build truncated prompt for retry (~300K tokens instead of 400K)
-                truncated_content = content[:1200000]  # ~300K tokens
-                LOG.info(f"[{ticker}] 🔄 Retrying Gemini 10-K generation (attempt 2/2) with truncated input ({len(truncated_content):,} chars)...")
+            # Build truncated prompt for retry (~300K tokens instead of 400K)
+            truncated_content = content[:1200000]  # ~300K tokens
+            LOG.info(f"[{ticker}] 🔄 Retrying Gemini {filing_type} generation (attempt 2/2) with truncated input ({len(truncated_content):,} chars)...")
 
+            # Build retry prompt based on filing type
+            if filing_type == '10-K':
                 retry_prompt = prompt_template.format(
                     company_name=company_name,
                     ticker=ticker,
@@ -1396,27 +1412,37 @@ def generate_sec_filing_profile_with_gemini(
                     fiscal_year_end=f"{fiscal_year}-12-31",
                     full_10k_text=truncated_content
                 )
+            else:  # 10-Q
+                quarter_num = fiscal_quarter[1] if fiscal_quarter else "?"
+                retry_prompt = prompt_template.format(
+                    company_name=company_name,
+                    ticker=ticker,
+                    quarter=quarter_num,
+                    fiscal_year=fiscal_year,
+                    filing_date=filing_date or "N/A",
+                    full_10q_text=truncated_content
+                )
 
-                retry_start = datetime.now()
-                retry_response = model.generate_content(retry_prompt, generation_config=generation_config)
-                retry_end = datetime.now()
+            retry_start = datetime.now()
+            retry_response = model.generate_content(retry_prompt, generation_config=generation_config)
+            retry_end = datetime.now()
 
-                profile_markdown = retry_response.text
-                retry_tokens_out = retry_response.usage_metadata.candidates_token_count if hasattr(retry_response, 'usage_metadata') else 0
+            profile_markdown = retry_response.text
+            retry_tokens_out = retry_response.usage_metadata.candidates_token_count if hasattr(retry_response, 'usage_metadata') else 0
 
-                # Update metadata with retry info
-                metadata['token_count_output'] = retry_tokens_out
-                metadata['token_count_input'] = retry_response.usage_metadata.prompt_token_count if hasattr(retry_response, 'usage_metadata') else 0
-                metadata['generation_time_seconds'] += int((retry_end - retry_start).total_seconds())
+            # Update metadata with retry info
+            metadata['token_count_output'] = retry_tokens_out
+            metadata['token_count_input'] = retry_response.usage_metadata.prompt_token_count if hasattr(retry_response, 'usage_metadata') else 0
+            metadata['generation_time_seconds'] += int((retry_end - retry_start).total_seconds())
 
-                is_valid_retry, retry_reason = _validate_10k_output(profile_markdown, retry_tokens_out, ticker)
+            is_valid_retry, retry_reason = _validate_sec_filing_output(profile_markdown, retry_tokens_out, ticker, filing_type)
 
-                if not is_valid_retry:
-                    LOG.error(f"[{ticker}] ❌ RETRY FAILED - 10-K still deformed: {retry_reason}")
-                    LOG.error(f"[{ticker}] ❌ 10-K GENERATION FAILED - No valid output after 2 attempts")
-                    return None
+            if not is_valid_retry:
+                LOG.error(f"[{ticker}] ❌ RETRY FAILED - {filing_type} still deformed: {retry_reason}")
+                LOG.error(f"[{ticker}] ❌ {filing_type} GENERATION FAILED - No valid output after 2 attempts")
+                return None
 
-                LOG.info(f"[{ticker}] ✅ Retry successful with truncated input - 10-K now valid")
+            LOG.info(f"[{ticker}] ✅ Retry successful with truncated input - {filing_type} now valid")
 
         # Always strip trailing whitespace before returning
         profile_markdown = profile_markdown.rstrip()

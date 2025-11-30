@@ -551,22 +551,6 @@
             cursor: not-allowed;
         }
 
-        .suggestion-btn {
-            background: var(--warning);
-            color: white;
-            border: none;
-            padding: 4px 10px;
-            border-radius: 4px;
-            font-size: 11px;
-            font-weight: 600;
-            cursor: pointer;
-            margin-top: 4px;
-        }
-
-        .suggestion-btn:hover {
-            background: #b45309;
-        }
-
         /* ========== FOOTER ========== */
         footer {
             background: var(--paper-warm);
@@ -1416,14 +1400,7 @@
                     input.style.borderColor = '#1e6b4a';
                     tickerValidation[inputId] = data.ticker;
                 } else if (data.suggestion) {
-                    feedback.innerHTML = `
-                        <span style="color: #92400e; font-weight: 600;">
-                            ${data.suggestion.message}<br>
-                            <button class="suggestion-btn" onclick="acceptSuggestion('${inputId}', '${feedbackId}', '${data.suggestion.ticker}')">
-                                Use ${data.suggestion.ticker}
-                            </button>
-                        </span>
-                    `;
+                    feedback.innerHTML = `<span style="color: #92400e; font-weight: 600;">${data.suggestion.message}</span>`;
                     input.style.borderColor = '#92400e';
                     tickerValidation[inputId] = null;
                 } else {
@@ -1436,12 +1413,6 @@
                 input.style.borderColor = '#9b2c2c';
                 tickerValidation[inputId] = null;
             }
-        }
-
-        function acceptSuggestion(inputId, feedbackId, suggestedTicker) {
-            const input = document.getElementById(inputId);
-            input.value = suggestedTicker;
-            validateTicker(inputId, feedbackId);
         }
 
         // Attach validation

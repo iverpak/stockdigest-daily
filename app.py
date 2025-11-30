@@ -21605,49 +21605,53 @@ def _update_ticker_stats(ticker_stats: Dict, total_stats: Dict, stats: Dict, cat
     total_stats["total_basic_scored"] += stats.get("basic_scored", 0)
     total_stats["by_category"][category] += stats["inserted"]
 
-@APP.post("/cron/digest")
-async def cron_digest(
-    request: Request,
-    minutes: int = Query(default=1440, description="Time window in minutes"),
-    tickers: List[str] = Query(default=None, description="Specific tickers for digest")
-):
-    """Generate and send email digest with content scraping data and AI summaries"""
-    require_admin(request)
-    # NOTE: Schema initialization removed from here (was causing lock timeouts during concurrent processing)
-    # Schema is now initialized once at application startup in startup_event() - see line ~16805
-
-    try:
-        LOG.info(f"=== DIGEST GENERATION STARTING ===")
-        LOG.info(f"Time window: {minutes} minutes, Tickers: {tickers}")
-
-        # Use the existing enhanced digest function that sends emails
-        LOG.info("Calling enhanced digest function...")
-        result = await fetch_digest_articles_with_enhanced_content(minutes / 60, tickers)
-
-        # The function returns a detailed result dict, let's pass it through with additional metadata
-        if isinstance(result, dict):
-            result["minutes"] = minutes
-            result["requested_tickers"] = tickers
-            LOG.info(f"Digest result: {result.get('status', 'unknown')} - {result.get('articles', 0)} articles")
-            return result
-        else:
-            LOG.error(f"Unexpected result type from digest function: {type(result)}")
-            return {
-                "status": "error",
-                "message": "Unexpected result from digest generation",
-                "minutes": minutes,
-                "tickers": tickers
-            }
-
-    except Exception as e:
-        LOG.error(f"Digest generation failed: {e}")
-        LOG.error(f"Error details: {traceback.format_exc()}")
-        return {
-            "status": "error",
-            "message": str(e),
-            "tickers": tickers,
-            "minutes": minutes
-            }
+# DEPRECATED (Nov 2025): Use job queue via /admin/test or python app.py process
+# This endpoint used old Phase 1+2 workflow without Phase 3 deduplication
+# Commented out to prevent accidental use producing inconsistent Email #2 format
+#
+# @APP.post("/cron/digest")
+# async def cron_digest(
+#     request: Request,
+#     minutes: int = Query(default=1440, description="Time window in minutes"),
+#     tickers: List[str] = Query(default=None, description="Specific tickers for digest")
+# ):
+#     """Generate and send email digest with content scraping data and AI summaries"""
+#     require_admin(request)
+#     # NOTE: Schema initialization removed from here (was causing lock timeouts during concurrent processing)
+#     # Schema is now initialized once at application startup in startup_event() - see line ~16805
+#
+#     try:
+#         LOG.info(f"=== DIGEST GENERATION STARTING ===")
+#         LOG.info(f"Time window: {minutes} minutes, Tickers: {tickers}")
+#
+#         # Use the existing enhanced digest function that sends emails
+#         LOG.info("Calling enhanced digest function...")
+#         result = await fetch_digest_articles_with_enhanced_content(minutes / 60, tickers)
+#
+#         # The function returns a detailed result dict, let's pass it through with additional metadata
+#         if isinstance(result, dict):
+#             result["minutes"] = minutes
+#             result["requested_tickers"] = tickers
+#             LOG.info(f"Digest result: {result.get('status', 'unknown')} - {result.get('articles', 0)} articles")
+#             return result
+#         else:
+#             LOG.error(f"Unexpected result type from digest function: {type(result)}")
+#             return {
+#                 "status": "error",
+#                 "message": "Unexpected result from digest generation",
+#                 "minutes": minutes,
+#                 "tickers": tickers
+#             }
+#
+#     except Exception as e:
+#         LOG.error(f"Digest generation failed: {e}")
+#         LOG.error(f"Error details: {traceback.format_exc()}")
+#         return {
+#             "status": "error",
+#             "message": str(e),
+#             "tickers": tickers,
+#             "minutes": minutes
+#             }
         
 # FIXED: Updated endpoint with proper request body handling
 @APP.post("/admin/clean-feeds")
@@ -21809,74 +21813,78 @@ async def admin_export_user_csv(request: Request):
         raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
 
 
-@APP.post("/admin/force-digest")
-async def force_digest(request: Request, body: ForceDigestRequest):
-    """Force digest with existing articles (for testing) - Enhanced with AI analysis"""
-    require_admin(request)
-    
-    with db() as conn, conn.cursor() as cur:
-        if body.tickers:
-            cur.execute("""
-                SELECT
-                    a.url, a.resolved_url, a.title, a.description,
-                    ta.ticker, a.domain, a.published_at,
-                    ta.found_at, tf.category,
-                    f.search_keyword
-                FROM articles a
-                JOIN ticker_articles ta ON a.id = ta.article_id
-                JOIN ticker_feeds tf ON ta.feed_id = tf.feed_id AND ta.ticker = tf.ticker
-                JOIN feeds f ON ta.feed_id = f.id
-                WHERE ta.found_at >= %s
-                    AND ta.ticker = ANY(%s)
-                ORDER BY ta.ticker, tf.category, COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
-            """, (datetime.now(timezone.utc) - timedelta(days=7), body.tickers))
-        else:
-            cur.execute("""
-                SELECT
-                    a.url, a.resolved_url, a.title, a.description,
-                    ta.ticker, a.domain, a.published_at,
-                    ta.found_at, tf.category,
-                    f.search_keyword
-                FROM articles a
-                JOIN ticker_articles ta ON a.id = ta.article_id
-                JOIN ticker_feeds tf ON ta.feed_id = tf.feed_id AND ta.ticker = tf.ticker
-                JOIN feeds f ON ta.feed_id = f.id
-                WHERE ta.found_at >= %s
-                ORDER BY ta.ticker, tf.category, COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
-            """, (datetime.now(timezone.utc) - timedelta(days=7),))
-        
-        articles_by_ticker = {}
-        for row in cur.fetchall():
-            ticker = row["ticker"] or "UNKNOWN"
-            category = row["category"] or "company"
-            
-            if ticker not in articles_by_ticker:
-                articles_by_ticker[ticker] = {}
-            if category not in articles_by_ticker[ticker]:
-                articles_by_ticker[ticker][category] = []
-            
-            articles_by_ticker[ticker][category].append(dict(row))
-    
-    total_articles = sum(
-        sum(len(arts) for arts in categories.values())
-        for categories in articles_by_ticker.values()
-    )
-    
-    if total_articles == 0:
-        return {"status": "no_articles", "message": "No articles found in database"}
-
-    # FIXED: Extract HTML from tuple and add empty text attachment
-    html = await build_enhanced_digest_html(articles_by_ticker, 7)
-    tickers_str = ', '.join(articles_by_ticker.keys())
-    subject = f"FULL Stock Intelligence: {tickers_str} - {total_articles} articles"
-    success = send_email(subject, html)
-    
-    return {
-        "status": "sent" if success else "failed",
-        "articles": total_articles,
-        "tickers": list(articles_by_ticker.keys()),
-        "recipient": DIGEST_TO
-    }
+# DEPRECATED (Nov 2025): Use job queue via /admin/test or python app.py process
+# This endpoint used old Phase 1+2 workflow without Phase 3 deduplication
+# Commented out to prevent accidental use producing inconsistent Email #2 format
+#
+# @APP.post("/admin/force-digest")
+# async def force_digest(request: Request, body: ForceDigestRequest):
+#     """Force digest with existing articles (for testing) - Enhanced with AI analysis"""
+#     require_admin(request)
+#
+#     with db() as conn, conn.cursor() as cur:
+#         if body.tickers:
+#             cur.execute("""
+#                 SELECT
+#                     a.url, a.resolved_url, a.title, a.description,
+#                     ta.ticker, a.domain, a.published_at,
+#                     ta.found_at, tf.category,
+#                     f.search_keyword
+#                 FROM articles a
+#                 JOIN ticker_articles ta ON a.id = ta.article_id
+#                 JOIN ticker_feeds tf ON ta.feed_id = tf.feed_id AND ta.ticker = tf.ticker
+#                 JOIN feeds f ON ta.feed_id = f.id
+#                 WHERE ta.found_at >= %s
+#                     AND ta.ticker = ANY(%s)
+#                 ORDER BY ta.ticker, tf.category, COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
+#             """, (datetime.now(timezone.utc) - timedelta(days=7), body.tickers))
+#         else:
+#             cur.execute("""
+#                 SELECT
+#                     a.url, a.resolved_url, a.title, a.description,
+#                     ta.ticker, a.domain, a.published_at,
+#                     ta.found_at, tf.category,
+#                     f.search_keyword
+#                 FROM articles a
+#                 JOIN ticker_articles ta ON a.id = ta.article_id
+#                 JOIN ticker_feeds tf ON ta.feed_id = tf.feed_id AND ta.ticker = tf.ticker
+#                 JOIN feeds f ON ta.feed_id = f.id
+#                 WHERE ta.found_at >= %s
+#                 ORDER BY ta.ticker, tf.category, COALESCE(a.published_at, ta.found_at) DESC, ta.found_at DESC
+#             """, (datetime.now(timezone.utc) - timedelta(days=7),))
+#
+#         articles_by_ticker = {}
+#         for row in cur.fetchall():
+#             ticker = row["ticker"] or "UNKNOWN"
+#             category = row["category"] or "company"
+#
+#             if ticker not in articles_by_ticker:
+#                 articles_by_ticker[ticker] = {}
+#             if category not in articles_by_ticker[ticker]:
+#                 articles_by_ticker[ticker][category] = []
+#
+#             articles_by_ticker[ticker][category].append(dict(row))
+#
+#     total_articles = sum(
+#         sum(len(arts) for arts in categories.values())
+#         for categories in articles_by_ticker.values()
+#     )
+#
+#     if total_articles == 0:
+#         return {"status": "no_articles", "message": "No articles found in database"}
+#
+#     # FIXED: Extract HTML from tuple and add empty text attachment
+#     html = await build_enhanced_digest_html(articles_by_ticker, 7)
+#     tickers_str = ', '.join(articles_by_ticker.keys())
+#     subject = f"FULL Stock Intelligence: {tickers_str} - {total_articles} articles"
+#     success = send_email(subject, html)
+#
+#     return {
+#         "status": "sent" if success else "failed",
+#         "articles": total_articles,
+#         "tickers": list(articles_by_ticker.keys()),
+#         "recipient": DIGEST_TO
+#     }
 
 @APP.post("/admin/wipe-database")
 def wipe_database(request: Request):

@@ -13357,9 +13357,17 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
             LOG.debug(f"[{ticker}] Split value_chain for executive summary: upstream={len(upstream_articles)}, downstream={len(downstream_articles)}")
 
     # Generate summaries OR use existing (for regenerate workflow)
+    # CRITICAL FIX (Nov 2025): Skip generation if phase3_json is provided - Phase 3 already completed
+    # and summaries are already in the database. Regenerating would OVERWRITE Phase 3 content!
     if existing_summaries is not None:
         # Use pre-generated summaries (regenerate workflow - skips redundant generation)
         openai_summaries = existing_summaries
+    elif phase3_json is not None:
+        # Phase 3 already completed - skip generation entirely
+        # The phase3_json will be used directly for formatting (line ~13553)
+        # openai_summaries is only used in the else branch which won't execute
+        openai_summaries = {}
+        LOG.info(f"Skipping executive summary generation - Phase 3 JSON provided (already in database)")
     else:
         # Generate summaries using Gemini (primary) with Claude fallback (production workflow)
         openai_summaries = await generate_ai_final_summaries(articles_by_ticker)  # Legacy variable name

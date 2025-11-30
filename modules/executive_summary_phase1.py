@@ -840,10 +840,11 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[Dict]]:
         if json_sections["bottom_line"].get("content_integrated"):
             content = json_sections["bottom_line"]["content_integrated"]
         else:
+            # Phase 3 fallback: concatenate without "Context:" label for cleaner user-facing email
             content = json_sections["bottom_line"].get("content", "")
             context = json_sections["bottom_line"].get("context", "")
             if context:
-                content += f" Context: {context}"
+                content += f" {context}"
         sections["bottom_line"] = [content]
 
     # Helper function to format bullets (simple, no metadata)
@@ -858,11 +859,11 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[Dict]]:
             # Phase 3 has run - use integrated content
             content = bullet['content_integrated']
         else:
-            # Phase 3 has not run - combine Phase 1 content with Phase 2 context
+            # Phase 3 fallback: concatenate without "Context:" label for cleaner user-facing email
             content = bullet['content']
             context = bullet.get('context', '')
             if context:
-                content += f" Context: {context}"
+                content += f" {context}"
 
         return {
             'bullet_id': bullet['bullet_id'],
@@ -903,10 +904,11 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[Dict]]:
             if json_sections[json_key].get("content_integrated"):
                 content = json_sections[json_key]["content_integrated"]
             else:
+                # Phase 3 fallback: concatenate without "Context:" label for cleaner user-facing email
                 content = json_sections[json_key].get("content", "")
                 context = json_sections[json_key].get("context", "")
                 if context:
-                    content += f" Context: {context}"
+                    content += f" {context}"
             sections[sections_key] = [content]
 
     # Add dates to all sections using bullet_id matching

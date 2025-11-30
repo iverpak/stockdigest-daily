@@ -18582,11 +18582,28 @@ async def process_ticker_job(job: dict):
 
         if not summary_result.get('success'):
             LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Executive summary generation failed: {summary_result.get('error')}")
-            # Continue to emails even if summary failed - we can at least send Email #2 with articles
+            # Phase 3 failed - try to load Phase 1+2 JSON from database as fallback
+            LOG.info(f"[{ticker}] 🔄 [JOB {job_id}] Attempting to load Phase 1+2 JSON from database as fallback...")
+            try:
+                with db() as conn, conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT summary_text FROM executive_summaries
+                        WHERE ticker = %s AND summary_date = CURRENT_DATE
+                        ORDER BY generated_at DESC LIMIT 1
+                    """, (ticker,))
+                    fallback_result = cur.fetchone()
+                    if fallback_result and fallback_result['summary_text']:
+                        phase3_json = json.loads(fallback_result['summary_text'])
+                        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Loaded Phase 1+2 JSON as fallback (emails will use this)")
+                    else:
+                        phase3_json = None
+                        LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No Phase 1+2 JSON found in database - emails will be skipped")
+            except Exception as fallback_err:
+                LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Failed to load fallback JSON: {fallback_err}")
+                phase3_json = None
         else:
             LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 4: Executive summary complete (all phases saved)")
-
-        phase3_json = summary_result.get('phase3_json')
+            phase3_json = summary_result.get('phase3_json')
 
         # Check if cancelled after Phase 4
         with db() as conn, conn.cursor() as cur:

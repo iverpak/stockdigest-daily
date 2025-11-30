@@ -259,14 +259,14 @@ restart. This prevents memory buildup from zombie threads and ensures all jobs c
 1. **Job Submission** (`/jobs/submit`): Submit batch of tickers for processing
 2. **Background Worker**: Polls database, processes jobs sequentially with full isolation
 3. **Status Polling** (`/jobs/batch/{id}`): Real-time progress monitoring
-4. Each job executes: Ingest Phase → Digest Phase (3 Emails) → Finalize
+4. Each job executes 5 phases: Ingest → Scrape → Fetch → AI Generate → Email
 
-**Processing Timeline per Ticker:**
-- 0-60%: Ingest Phase - **Async feed parsing** (5.5x faster), AI triage, Email #1 (Article Selection QA)
-- 60-95%: Digest Phase - Content scraping, AI analysis, Email #2 (Content QA)
-- 95-97%: Email #3 Generation - User-facing intelligence report (fetches executive summary from database)
-- 97-99%: Finalize - Job completion (NOTE: GitHub commits removed Nov 25, 2025)
-- 100%: Complete
+**Processing Timeline per Ticker (5-Phase Architecture):**
+- 0-60%: **Ingest Phase** - Async feed parsing, AI triage, Email #1 (Article Selection QA)
+- 60-70%: **Scrape Phase** - Content scraping for flagged articles (2-tier fallback)
+- 70-75%: **Fetch Phase** - Categorize articles for AI processing
+- 75-95%: **AI Generation Phase** - `generate_executive_summary_all_phases()` (Phase 1+2+3)
+- 95-100%: **Email Phase** - Email #2 (Content QA) + Email #3 (User Report)
 
 #### Async Feed Ingestion (NEW - Production)
 
@@ -1072,7 +1072,7 @@ Email #1 and #2 are sent ONLY to admin during ticker processing:
 - **Email #1:** `🔍 Article Selection QA` - Shows AI triage results
 - **Email #2:** `📝 Content QA` - Shows full article content + AI analysis
 - **Recipients:** Admin only
-- **Trigger:** Job queue processing (ingest phase and digest phase)
+- **Trigger:** Job queue processing (ingest phase and email phase)
 
 **Hourly Alert Emails:**
 Real-time article alerts sent to active beta users:
@@ -1084,7 +1084,7 @@ Real-time article alerts sent to active beta users:
 
 ### 3-Email Quality Assurance Workflow
 
-StockDigest generates 3 distinct emails per ticker during the digest phase, forming a complete QA pipeline:
+StockDigest generates 3 distinct emails per ticker during processing, forming a complete QA pipeline:
 
 #### Email #1: Article Selection QA (Line 10353)
 **Function:** `send_enhanced_quick_intelligence_email()`
@@ -1100,8 +1100,8 @@ StockDigest generates 3 distinct emails per ticker during the digest phase, form
 - Sorted by priority (flagged+quality first, then flagged, then rest)
 **Timing:** Sent at ~60% progress (end of ingest phase)
 
-#### Email #2: Content QA (Line 10955)
-**Function:** `fetch_digest_articles_with_enhanced_content()` + template rendering
+#### Email #2: Content QA (Line 13524)
+**Function:** `build_enhanced_digest_html()` + template rendering
 **Subject:** `📝 Content QA: [Tickers] - [X] articles analyzed`
 **Purpose:** Full content review with AI analysis for internal QA
 **Content:**
@@ -1115,8 +1115,8 @@ StockDigest generates 3 distinct emails per ticker during the digest phase, form
 - Executive Summary section (AI-generated overview of all flagged articles)
 - **Source Articles metadata** per bullet: `Source Articles: [0, 3, 5]` (NEW Nov 2025)
 - Sorted by priority (same algorithm as Email #1)
-**Timing:** Sent at ~95% progress (end of digest phase)
-**Key Behavior:** Generates and SAVES executive summary to database via `save_executive_summary()` (Line 1050)
+**Timing:** Sent at ~95% progress (after AI generation)
+**Key Behavior:** Requires `phase3_json` parameter - executive summary generated separately via `generate_executive_summary_all_phases()`
 
 #### Email #3: Premium Stock Intelligence Report (Line 18601)
 **Function:** `generate_email_html_core(ticker, hours, flagged_article_ids, recipient_email)` (inline HTML generation)
@@ -1278,7 +1278,7 @@ NOTE (Nov 25, 2025): Per-ticker GitHub commits removed. CSV is source of truth.
 
 **Email Timeline:**
 - Email #1 (Article Selection QA): Sent at 60% progress (end of ingest phase)
-- Email #2 (Content QA): Sent at 95% progress (end of digest phase, saves executive summary)
+- Email #2 (Content QA): Sent at 95% progress (after AI generation, uses `phase3_json`)
 - Email #3 (Stock Intelligence): Sent at 97% progress (fetches executive summary from database)
 
 ### Production Features
@@ -1946,23 +1946,33 @@ python app.py check_filings
 
 ## Key Function Locations
 
+**Executive Summary Generation (Nov 30, 2025 Refactor):**
+- `generate_executive_summary_all_phases()` - Line 12791 (Single entry point for Phase 1+2+3 generation)
+  - Orchestrates: Phase 1 → Phase 2 → Phase 3 → Database save
+  - Returns: `{'success': bool, 'phase3_json': Dict, 'error': str}`
+- `fetch_digest_articles()` - Line 13948 (Pure article fetching, no AI)
+  - Fetches categorized articles for digest processing
+  - Returns: `Dict[str, Dict[str, List[Dict]]]` (articles_by_ticker)
+- `build_enhanced_digest_html()` - Line 13524 (Email #2 HTML builder)
+  - Requires: `phase3_json` parameter (AI summary required upfront)
+- `process_scrape_phase()` - Line 16071 (Content scraping, no AI)
+  - Scrapes flagged articles using 2-tier fallback (newspaper3k → Scrapfly)
+
 **3-Email System:**
 - `send_enhanced_quick_intelligence_email()` - Line 10353 (Email #1: Article Selection QA)
-- `fetch_digest_articles_with_enhanced_content()` - Line 10955 (Email #2: Content QA)
+- `build_enhanced_digest_html()` - Line 13524 (Email #2: Content QA HTML builder)
 - `send_user_intelligence_report(hours, tickers, flagged_article_ids, recipient_email)` - Line 11873 (Email #3: Premium Stock Intelligence)
-  - **NEW (Oct 2025):** Jinja2 template refactor with legal disclaimers
   - **Requires:** `recipient_email` parameter for unsubscribe token generation
 - `build_executive_summary_html(sections)` - Line 11785 (Helper: Render summary sections as HTML)
 - `build_articles_html(articles_by_category)` - Line 11818 (Helper: Render article links as HTML)
 - `parse_executive_summary_sections()` - Line 11733 (Parse AI summary into 6 sections)
 - `generate_email_html_core()` - Line 12278 (Core Email #3 generation - shared by test and production)
 - `save_executive_summary()` - Line 2051 (Executive summary database storage)
-- `get_latest_summary_date(ticker)` - Line 2114 (Query for most recent summary - NEW Nov 2025)
+- `get_latest_summary_date(ticker)` - Line 2114 (Query for most recent summary)
   - Used by Regenerate and Quality Review endpoints
   - Queries: `ORDER BY generated_at DESC LIMIT 1`
   - Returns: Most recent `summary_date` for ticker
   - Eliminates time-of-day dependency (no 12pm cutoff)
-- `generate_openai_executive_summary()` - Line 10069 (Executive summary AI prompt)
 
 **Unsubscribe System (NEW - Oct 2025):**
 - `generate_unsubscribe_token(email)` - Line 13055 (Generate cryptographic token)
@@ -2023,14 +2033,17 @@ python app.py check_filings
   - `POST /api/rerun-all-queue` - Uses day-of-week detection
 
 **Job Queue System:**
-- `process_digest_phase()` - Line 11626 (Main digest phase orchestrator)
+- `process_ticker_job()` - Line 18276 (Main job orchestrator with 5-phase flow)
+  - Phase 1: Ingest (RSS, triage) → Email #1
+  - Phase 2: Scraping (`process_scrape_phase()`)
+  - Phase 3: Article Fetching (`fetch_digest_articles()`)
+  - Phase 4: AI Generation (`generate_executive_summary_all_phases()` → Phase 1+2+3)
+  - Phase 5: Email Generation (Email #2 + Email #3)
+- `process_scrape_phase()` - Line 16071 (Pure content scraping)
 
 **Triage & Ingestion:**
 - `cron_ingest()` - Line 12730 (RSS feed processing & database-first triage)
 - Database-first triage query - Lines 12862-12916 (Pulls from DB, not RSS)
-
-**Digest:**
-- `cron_digest()` - Line 13335 (Digest generation - called by job queue worker)
 
 **NOTE (Nov 25, 2025):** `process_commit_phase()` removed - per-ticker GitHub commits no longer occur.
 `safe_incremental_commit()` endpoint still exists but is not called from job processing.
@@ -2394,13 +2407,13 @@ Articles → Phase 1 (synthesis)
 **Solution:**
 ```python
 # Track phase completion in job config
-config['completed_phases'] = ['ingest', 'resolution', 'digest']
+config['completed_phases'] = ['ingest', 'scrape', 'ai_generation', 'emails']
 config['emails_sent'] = ['email_1', 'email_2']
 
 # Skip completed phases on restart
-if 'digest' not in completed_phases:
-    await process_digest_phase(...)
-    mark_phase_complete('digest')
+if 'ai_generation' not in completed_phases:
+    await generate_executive_summary_all_phases(...)
+    mark_phase_complete('ai_generation')
 
 # Don't resend emails
 if 'email_1' not in emails_sent:

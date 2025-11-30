@@ -1446,6 +1446,11 @@ def ensure_schema():
             try:
                 LOG.info("✅ Schema lock acquired - proceeding with initialization")
 
+                # STEP 1.5: Enable pg_trgm extension for fuzzy search (Nov 2025)
+                # Used for ticker/company name suggestions on landing page
+                cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+                LOG.info("✅ pg_trgm extension enabled for fuzzy search")
+
                 # STEP 2: Check if core schema already exists (optimization)
                 cur.execute("""
                     SELECT COUNT(*) FROM information_schema.tables
@@ -1722,6 +1727,11 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_ticker_reference_ticker ON ticker_reference(ticker);
                 CREATE INDEX IF NOT EXISTS idx_ticker_reference_active ON ticker_reference(active);
                 CREATE INDEX IF NOT EXISTS idx_ticker_reference_company_name ON ticker_reference(company_name);
+
+                -- GIN indexes for fuzzy search using pg_trgm (Nov 2025)
+                -- Used for ticker/company name suggestions on landing page
+                CREATE INDEX IF NOT EXISTS idx_ticker_reference_ticker_trgm ON ticker_reference USING GIN (ticker gin_trgm_ops);
+                CREATE INDEX IF NOT EXISTS idx_ticker_reference_company_name_trgm ON ticker_reference USING GIN (company_name gin_trgm_ops);
 
                 -- JOB QUEUE: Batch tracking table
                 CREATE TABLE IF NOT EXISTS ticker_processing_batches (
@@ -19746,6 +19756,51 @@ async def unsubscribe_page(request: Request, token: str = Query(...)):
 # Beta Signup API Endpoints
 # ------------------------------------------------------------------------------
 
+def _fuzzy_search_ticker(search_term: str) -> dict | None:
+    """
+    Fuzzy search for ticker or company name using pg_trgm.
+    Returns best US match or None if no good match found.
+
+    Uses similarity threshold of 0.3 (pg_trgm default).
+    Searches both ticker and company_name columns.
+
+    Args:
+        search_term: User input (could be ticker like "GOOG" or company name like "Apple")
+
+    Returns:
+        {"ticker": "GOOGL", "company_name": "Alphabet Inc.", "score": 0.8} or None
+    """
+    try:
+        with db() as conn:
+            with conn.cursor() as cur:
+                # Search both ticker and company_name, return best match
+                # The % operator uses similarity threshold (default 0.3)
+                cur.execute("""
+                    SELECT ticker, company_name,
+                           GREATEST(
+                               similarity(ticker, %s),
+                               similarity(company_name, %s)
+                           ) as score
+                    FROM ticker_reference
+                    WHERE country = 'US'
+                      AND (ticker %% %s OR company_name %% %s)
+                    ORDER BY score DESC
+                    LIMIT 1
+                """, (search_term, search_term, search_term, search_term))
+
+                result = cur.fetchone()
+                if result:
+                    return {
+                        "ticker": result["ticker"],
+                        "company_name": result["company_name"],
+                        "score": float(result["score"])
+                    }
+                return None
+    except Exception as e:
+        LOG.warning(f"Fuzzy search failed for '{search_term}': {e}")
+        return None
+
+
 @APP.get("/api/validate-ticker")
 async def validate_ticker_endpoint(ticker: str = Query(..., min_length=1, max_length=10)):
     """
@@ -19773,6 +19828,18 @@ async def validate_ticker_endpoint(ticker: str = Query(..., min_length=1, max_le
 
         # Check if ticker exists in database (has_full_config=True means it's real, False means fallback)
         if not config or not config.get('has_full_config', True):
+            # TIER 2.5: Fuzzy search for suggestions (Nov 2025)
+            # Search both ticker and company_name using pg_trgm
+            suggestion = _fuzzy_search_ticker(ticker)
+            if suggestion:
+                return {
+                    "valid": False,
+                    "message": "Ticker not recognized",
+                    "suggestion": {
+                        "ticker": suggestion["ticker"],
+                        "message": f"Did you mean {suggestion['ticker']} ({suggestion['company_name']})?"
+                    }
+                }
             return {
                 "valid": False,
                 "message": "Ticker not recognized"
@@ -19781,6 +19848,17 @@ async def validate_ticker_endpoint(ticker: str = Query(..., min_length=1, max_le
         # TIER 3: Country check - must be US-listed
         country = config.get("country", "")
         if country != "US":
+            # Check if there's a US alternative to suggest
+            suggestion = _fuzzy_search_ticker(ticker)
+            if suggestion:
+                return {
+                    "valid": False,
+                    "message": "US-listed companies only. Canadian and international tickers not supported.",
+                    "suggestion": {
+                        "ticker": suggestion["ticker"],
+                        "message": f"Did you mean {suggestion['ticker']} ({suggestion['company_name']})?"
+                    }
+                }
             return {
                 "valid": False,
                 "message": "US-listed companies only. Canadian and international tickers not supported."

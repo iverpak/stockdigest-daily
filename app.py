@@ -3263,15 +3263,14 @@ def create_ticker_reference_table():
 
 # 2. INTERNATIONAL TICKER FORMAT VALIDATION
 def validate_ticker_format(ticker: str) -> bool:
-    """Validate ticker format supporting international exchanges and special formats"""
-    if not ticker or len(ticker) > 25:  # Increased length for complex international tickers
+    """Validate ticker format for US-listed companies only"""
+    if not ticker or len(ticker) > 15:
         return False
-    
-    # Comprehensive regex patterns for different ticker formats
+
+    # US-only regex patterns
     patterns = [
-        # Standard formats
+        # Standard US tickers
         r'^[A-Z]{1,8}$',                          # US: MSFT, AAPL, GOOGL, BERKSHIRE
-        r'^[A-Z0-9]{1,8}\.[A-Z]{1,4}$',          # International: RY.TO, BHP.AX, VOD.L, 005930.KS (Korean), 7203.T (Tokyo)
 
         # Crypto pairs (Yahoo Finance format)
         r'^[A-Z0-9]{2,10}-USD$',                 # Crypto to USD: BTC-USD, ETH-USD, BNB-USD
@@ -3281,56 +3280,26 @@ def validate_ticker_format(ticker: str) -> bool:
         r'^[A-Z]{6}=X$',                         # Forex: EURUSD=X, GBPUSD=X, CADJPY=X
         r'^[A-Z]{3}=X$',                         # Single currency to USD: CAD=X, EUR=X
 
-        # Market indices (Yahoo Finance format)
-        r'^\^[A-Z0-9]{2,8}$',                    # Indices: ^GSPC, ^DJI, ^IXIC, ^FTSE
+        # US Market indices (Yahoo Finance format)
+        r'^\^[A-Z0-9]{2,8}$',                    # Indices: ^GSPC, ^DJI, ^IXIC
 
-        # Special class/series formats
+        # US class/series shares
         r'^[A-Z]{1,6}-[A-Z]$',                   # Class shares: BRK-A, BRK-B
         r'^[A-Z]{1,6}-[A-Z]{2}$',               # Extended class: BRK-PA
-        r'^[A-Z]{1,6}-[A-Z]\.[A-Z]{1,4}$',      # International class: TECK-A.TO
 
-        # Rights, warrants, units
+        # US rights, warrants, units
         r'^[A-Z]{1,6}\.R$',                      # Rights: AAPL.R
         r'^[A-Z]{1,6}\.W$',                      # Warrants: AAPL.W
         r'^[A-Z]{1,6}\.U$',                      # Units: AAPL.U
-        r'^[A-Z]{1,6}\.UN$',                     # Units: REI.UN (Canadian REITs)
-
-        # Canadian specific formats
-        r'^[A-Z]{1,6}\.TO$',                     # Toronto: RY.TO, TD.TO
-        r'^[A-Z]{1,6}-UN\.TO$',                  # Canadian REIT/Trust units: CAR-UN.TO, REI-UN.TO, DIR-UN.TO
-        r'^[A-Z]{1,6}\.UN\.TO$',                 # Alternate unit format: CAR.UN.TO, BEI.UN.TO
-        r'^[A-Z]{1,6}\.V$',                      # Vancouver: XXX.V
-        r'^[A-Z]{1,6}\.CN$',                     # Canadian National: XXX.CN
-
-        # Other international suffixes
-        r'^[A-Z]{1,6}\.L$',                      # London: VOD.L, BP.L
-        r'^[A-Z]{1,6}\.AX$',                     # Australia: BHP.AX, CBA.AX
-        r'^[A-Z]{1,6}\.HK$',                     # Hong Kong: 0005.HK
-        r'^\d{4}\.HK$',                          # Hong Kong numeric: 0700.HK
-
-        # European formats
-        r'^[A-Z]{1,6}\.DE$',                     # Germany: SAP.DE
-        r'^[A-Z]{1,6}\.PA$',                     # Paris: MC.PA
-        r'^[A-Z]{1,6}\.AS$',                     # Amsterdam: ASML.AS
-
-        # Indian stock exchanges (NSE/BSE)
-        r'^[A-Z]{2,15}\.NS$',                    # NSE: HEROMOTOCO.NS, SUNPHARMA.NS, BHARTIARTL.NS, ADANIGREEN.NS
-        r'^[A-Z]{2,15}\.BO$',                    # BSE (Bombay): RELIANCE.BO
-
-        # Mexican stock exchange
-        r'^[A-Z0-9]{2,12}\.MX$',                 # BMV: FIBRAPL14.MX, FIBRAMQ12.MX
-
-        # ADR formats
-        r'^[A-Z]{1,6}-ADR$',                     # ADRs: NVO-ADR
     ]
-    
+
     ticker_upper = ticker.upper().strip()
-    
+
     # Check against all patterns
     for pattern in patterns:
         if re.match(pattern, ticker_upper):
             return True
-    
+
     return False
 
 # 3. TICKER FORMAT NORMALIZATION
@@ -15578,7 +15547,7 @@ def generate_email_html_core(
         # Footer
         footer_brand=footer_brand,
         footer_subtitle=footer_subtitle,
-        contact_email=os.getenv('ADMIN_EMAIL', 'weavara.research@gmail.com'),
+        contact_email='support@weavara.io',
         unsubscribe_url=unsubscribe_url
     )
 
@@ -19696,13 +19665,12 @@ async def unsubscribe_page(request: Request, token: str = Query(...)):
 @APP.get("/api/validate-ticker")
 async def validate_ticker_endpoint(ticker: str = Query(..., min_length=1, max_length=10)):
     """
-    Validate ticker with smart Canadian .TO suggestions.
+    Validate ticker for US-listed companies.
     Public endpoint (no auth required) for live form validation.
 
     Returns:
     - valid=True: Ticker found in database
-    - valid=False + suggestion: Ticker not found, but .TO variant exists
-    - valid=False: No matches found
+    - valid=False: Ticker not found or invalid format
     """
     try:
         # Normalize ticker format (handles case, removes quotes, etc)
@@ -19712,7 +19680,7 @@ async def validate_ticker_endpoint(ticker: str = Query(..., min_length=1, max_le
         if not validate_ticker_format(normalized):
             return {
                 "valid": False,
-                "message": "Invalid ticker format"
+                "message": "Invalid ticker format. US-listed companies only."
             }
 
         # TIER 2: Database whitelist (only allow approved tickers)
@@ -19728,26 +19696,6 @@ async def validate_ticker_endpoint(ticker: str = Query(..., min_length=1, max_le
                 "exchange": config.get("exchange", "Unknown"),
                 "country": config.get("country", "Unknown")
             }
-
-        # No exact match - try Canadian variant (.TO suffix)
-        # Only if: no existing suffix AND ticker is 2-5 chars (typical Canadian ticker length)
-        if '.' not in normalized and 2 <= len(normalized) <= 5:
-            canadian_ticker = f"{normalized}.TO"
-            canadian_config = get_ticker_config(canadian_ticker)
-
-            # Check if Canadian variant exists in database (not just fallback)
-            if canadian_config and canadian_config.get('has_full_config', True):
-                # Found Canadian variant - suggest it
-                return {
-                    "valid": False,
-                    "suggestion": {
-                        "ticker": canadian_ticker,
-                        "company_name": canadian_config.get("company_name", "Unknown"),
-                        "exchange": canadian_config.get("exchange", "TSX"),
-                        "country": canadian_config.get("country", "Canada"),
-                        "message": f"Did you mean {canadian_ticker}?"
-                    }
-                }
 
         # No matches found in database - ticker not recognized
         return {

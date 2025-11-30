@@ -19552,7 +19552,7 @@ async def unsubscribe_page(request: Request, token: str = Query(...)):
                         <div class="container">
                             <h1>❌ Invalid Unsubscribe Link</h1>
                             <p>This unsubscribe link is invalid or has expired.</p>
-                            <p>If you need assistance, please contact us at <a href="mailto:{os.getenv('ADMIN_EMAIL', 'weavara.research@gmail.com')}">{os.getenv('ADMIN_EMAIL', 'weavara.research@gmail.com')}</a></p>
+                            <p>If you need assistance, please contact us at <a href="mailto:{os.getenv('ADMIN_EMAIL', 'support@weavara.io')}">{os.getenv('ADMIN_EMAIL', 'support@weavara.io')}</a></p>
                             <p style="margin-top: 24px;"><a href="/">← Return to Home</a></p>
                         </div>
                     </body>
@@ -19633,7 +19633,7 @@ async def unsubscribe_page(request: Request, token: str = Query(...)):
                             Changed your mind? <a href="/">Re-subscribe here</a>
                         </p>
                         <p style="margin-top: 24px; font-size: 14px; color: #6b7280;">
-                            Questions? <a href="mailto:{os.getenv('ADMIN_EMAIL', 'weavara.research@gmail.com')}">Contact us</a>
+                            Questions? <a href="mailto:{os.getenv('ADMIN_EMAIL', 'support@weavara.io')}">Contact us</a>
                         </p>
                     </div>
                 </body>
@@ -19644,7 +19644,7 @@ async def unsubscribe_page(request: Request, token: str = Query(...)):
         LOG.error(f"Error processing unsubscribe: {e}")
         LOG.error(traceback.format_exc())
 
-        admin_email = os.getenv('ADMIN_EMAIL', 'weavara.research@gmail.com')
+        admin_email = os.getenv('ADMIN_EMAIL', 'support@weavara.io')
         return HTMLResponse(f"""
             <!DOCTYPE html>
             <html>
@@ -30969,7 +30969,7 @@ async def send_ticker_api(request: Request):
                 return {"status": "error", "message": f"No ready email found for {ticker}"}
 
             recipients = email['recipients']
-            admin_email = os.getenv('ADMIN_EMAIL', 'weavara.research@gmail.com')
+            admin_email = os.getenv('ADMIN_EMAIL', 'support@weavara.io')
 
             # Send to each recipient with unique unsubscribe token
             for recipient in recipients:
@@ -31172,7 +31172,7 @@ def send_admin_notification(results: Dict):
     else:
         failed_list_html = "<p>None</p>"
 
-    admin_email = os.getenv('ADMIN_EMAIL', 'weavara.research@gmail.com')
+    admin_email = os.getenv('ADMIN_EMAIL', 'support@weavara.io')
     admin_token = os.getenv('ADMIN_TOKEN', '')
     dashboard_url = f"https://weavara.io/admin/queue?token={admin_token}"
 
@@ -31235,7 +31235,7 @@ def send_email_with_dry_run(subject: str, html: str, to, bcc=None) -> bool:
     In DRY_RUN mode, all emails redirect to admin.
     """
     dry_run = os.getenv('DRY_RUN', 'false').lower() == 'true'
-    admin_email = os.getenv('ADMIN_EMAIL', 'weavara.research@gmail.com')
+    admin_email = os.getenv('ADMIN_EMAIL', 'support@weavara.io')
 
     if dry_run:
         LOG.warning(f"🧪 DRY_RUN: Redirecting email to {admin_email}")
@@ -31284,7 +31284,7 @@ def send_all_ready_emails_impl() -> Dict:
 
             sent_count = 0
             failed_tickers = []
-            admin_email = os.getenv('ADMIN_EMAIL', 'weavara.research@gmail.com')
+            admin_email = os.getenv('ADMIN_EMAIL', 'support@weavara.io')
 
             for email in emails:
                 ticker = email['ticker']

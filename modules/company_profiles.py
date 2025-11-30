@@ -236,7 +236,7 @@ def fetch_sec_html_text(url: str) -> str:
     try:
         # SEC requires proper User-Agent to prevent blocking
         headers = {
-            "User-Agent": "Weavara/1.0 (weavara.research@gmail.com)"
+            "User-Agent": "Weavara/1.0 (support@weavara.io)"
         }
 
         response = requests.get(url, headers=headers, timeout=60)
@@ -396,7 +396,7 @@ def parse_sec_8k_filing_list(cik: str, count: int = 10) -> List[Dict]:
     try:
         url = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={cik}&type=8-K&count={count}"
         headers = {
-            'User-Agent': 'Weavara/1.0 (weavara.research@gmail.com)'
+            'User-Agent': 'Weavara/1.0 (support@weavara.io)'
         }
 
         LOG.info(f"[8K_DEBUG] Making request to SEC for CIK {cik}...")
@@ -474,7 +474,7 @@ def get_8k_html_url(documents_url: str) -> dict:
 
     try:
         headers = {
-            'User-Agent': 'Weavara/1.0 (weavara.research@gmail.com)'
+            'User-Agent': 'Weavara/1.0 (support@weavara.io)'
         }
 
         response = requests.get(documents_url, headers=headers, timeout=10)
@@ -597,7 +597,7 @@ def get_all_8k_exhibits(documents_url: str) -> List[Dict[str, Any]]:
 
     try:
         headers = {
-            'User-Agent': 'Weavara/1.0 (weavara.research@gmail.com)'
+            'User-Agent': 'Weavara/1.0 (support@weavara.io)'
         }
 
         response = requests.get(documents_url, headers=headers, timeout=10)
@@ -756,7 +756,7 @@ def get_main_8k_url(documents_url: str) -> Optional[str]:
 
     try:
         headers = {
-            'User-Agent': 'Weavara/1.0 (weavara.research@gmail.com)'
+            'User-Agent': 'Weavara/1.0 (support@weavara.io)'
         }
 
         response = requests.get(documents_url, headers=headers, timeout=10)
@@ -908,7 +908,7 @@ def extract_8k_item_codes(sec_html_url: str, rate_limit_delay: float = 0.15) -> 
 
     try:
         headers = {
-            'User-Agent': 'Weavara/1.0 (weavara.research@gmail.com)',
+            'User-Agent': 'Weavara/1.0 (support@weavara.io)',
             'Range': 'bytes=0-15000'  # Fetch first 15KB to get past iXBRL overhead
         }
 
@@ -1005,7 +1005,7 @@ def extract_8k_html_content(exhibit_url: str) -> str:
 
     # SEC requires proper User-Agent
     headers = {
-        "User-Agent": "Weavara/1.0 (weavara.research@gmail.com)"
+        "User-Agent": "Weavara/1.0 (support@weavara.io)"
     }
 
     try:
@@ -2203,7 +2203,7 @@ Analyze this earnings release PDF and extract all material information."""
                                 # Download image
                                 img_response = requests.get(
                                     img_url,
-                                    headers={'User-Agent': 'Weavara/1.0 (weavara.research@gmail.com)'},
+                                    headers={'User-Agent': 'Weavara/1.0 (support@weavara.io)'},
                                     timeout=30
                                 )
                                 img_response.raise_for_status()

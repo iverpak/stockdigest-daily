@@ -13984,25 +13984,11 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
     if total_articles == 0:
         LOG.info(f"ℹ️ 0 articles found - Phase 1 will generate quiet day summary")
 
-    # Use the enhanced digest function with flagged article IDs for sorting
-    html = await build_enhanced_digest_html(articles_by_ticker, days if days > 0 else 1,
-                                      show_ai_analysis, show_descriptions, flagged_article_ids)
-
-    # Enhanced subject with ticker list (company names) - UPDATED HEADER
-    ticker_display_list = []
-    for ticker in articles_by_ticker.keys():
-        config = get_ticker_config(ticker)
-        company_name = config.get("company_name", ticker) if config else ticker
-        ticker_display_list.append(f"{company_name} ({ticker})")
-    ticker_list = ', '.join(ticker_display_list)
-    # NEW (Nov 2025): Add report_type label to subject
-    report_label = "(WEEKLY)" if report_type == 'weekly' else "(DAILY)"
-    subject = f"QA Content Review {report_label}: {ticker_list} - {total_articles} articles analyzed"
-
-    # NEW (Nov 2025): Skip Email #2 sending if disabled (post-Phase-3 workflow sends it later)
+    # NEW (Dec 2025): Skip HTML generation entirely when email sending is disabled
+    # Email #2 will be generated fresh after Phase 3 with deduplication info
     if not send_email_enabled:
-        LOG.info(f"[{tickers}] Email #2 sending disabled - will be sent after Phase 3")
-        # Still collect stats for return value
+        LOG.info(f"[{tickers}] Email #2 generation skipped - will be generated after Phase 3 with deduplication")
+        # Collect stats for return value
         category_counts = {"company": 0, "industry": 0, "competitor": 0, "value_chain": 0, "upstream": 0, "downstream": 0}
         content_stats = {"scraped": 0, "failed": 0, "skipped": 0, "ai_summaries": 0}
         for ticker_cats in articles_by_ticker.values():
@@ -14025,10 +14011,23 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
             "by_category": category_counts,
             "content_scraping_stats": content_stats,
             "recipient": DIGEST_TO,
-            "html": html,  # Return HTML for later use
-            "subject": subject,  # Return subject for later use
-            "articles_by_ticker": articles_by_ticker  # NEW (Nov 2025): Return for Phase 3 Email #2 generation
+            "articles_by_ticker": articles_by_ticker  # For Phase 3 Email #2 generation
         }
+
+    # Generate HTML only when email sending is enabled (legacy path)
+    html = await build_enhanced_digest_html(articles_by_ticker, days if days > 0 else 1,
+                                      show_ai_analysis, show_descriptions, flagged_article_ids)
+
+    # Enhanced subject with ticker list (company names) - UPDATED HEADER
+    ticker_display_list = []
+    for ticker in articles_by_ticker.keys():
+        config = get_ticker_config(ticker)
+        company_name = config.get("company_name", ticker) if config else ticker
+        ticker_display_list.append(f"{company_name} ({ticker})")
+    ticker_list = ', '.join(ticker_display_list)
+    # NEW (Nov 2025): Add report_type label to subject
+    report_label = "(WEEKLY)" if report_type == 'weekly' else "(DAILY)"
+    subject = f"QA Content Review {report_label}: {ticker_list} - {total_articles} articles analyzed"
 
     # Save Email #2 snapshot to database (for admin dashboard preview)
     # Skip saving for test runs - only save production runs

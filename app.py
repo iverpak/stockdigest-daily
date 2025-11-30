@@ -4255,7 +4255,7 @@ def get_ticker_config(ticker: str) -> Optional[Dict]:
         LOG.info(f"[DB_DEBUG] Found {count_result['count'] if count_result else 0} records for ticker '{ticker}'")
         
         cur.execute("""
-            SELECT ticker, company_name,
+            SELECT ticker, company_name, country,
                    industry_keyword_1, industry_keyword_2, industry_keyword_3,
                    competitor_1_name, competitor_1_ticker,
                    competitor_2_name, competitor_2_ticker,
@@ -4350,6 +4350,7 @@ def get_ticker_config(ticker: str) -> Optional[Dict]:
         config = {
             "name": result["company_name"],
             "company_name": result["company_name"],  # Some functions expect this field name
+            "country": result.get("country", ""),  # Country code (US, CA, etc.)
             "industry_keywords": industry_keywords,
             "competitors": competitors,
             "value_chain": value_chain,
@@ -4357,7 +4358,8 @@ def get_ticker_config(ticker: str) -> Optional[Dict]:
             "industry": result.get("industry", ""),
             "sub_industry": result.get("sub_industry", ""),
             "geographic_markets": result.get("geographic_markets", ""),
-            "subsidiaries": result.get("subsidiaries", "")
+            "subsidiaries": result.get("subsidiaries", ""),
+            "has_full_config": True  # Flag indicating this is a real ticker from database
         }
 
         # Add financial data if available
@@ -4418,25 +4420,17 @@ def store_ticker_reference(ticker_data: dict) -> bool:
             if ticker_data.get(field):
                 ticker_data[field] = clean_null_bytes(str(ticker_data[field]))
         
-        # Normalize competitor tickers
+        # Normalize competitor tickers (no validation - international tickers allowed for feed creation)
         competitor_ticker_fields = ['competitor_1_ticker', 'competitor_2_ticker', 'competitor_3_ticker']
         for field in competitor_ticker_fields:
             if ticker_data.get(field):
                 ticker_data[field] = normalize_ticker_format(ticker_data[field])
-                # Validate competitor ticker format
-                if not validate_ticker_format(ticker_data[field]):
-                    LOG.warning(f"Invalid competitor ticker format: {ticker_data[field]}")
-                    ticker_data[field] = None  # Clear invalid ticker
 
-        # Normalize upstream/downstream tickers
+        # Normalize upstream/downstream tickers (no validation - international tickers allowed for feed creation)
         value_chain_ticker_fields = ['upstream_1_ticker', 'upstream_2_ticker', 'downstream_1_ticker', 'downstream_2_ticker']
         for field in value_chain_ticker_fields:
             if ticker_data.get(field):
                 ticker_data[field] = normalize_ticker_format(ticker_data[field])
-                # Validate value chain ticker format
-                if not validate_ticker_format(ticker_data[field]):
-                    LOG.warning(f"Invalid value chain ticker format: {ticker_data[field]}")
-                    ticker_data[field] = None  # Clear invalid ticker
         
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
@@ -4727,25 +4721,17 @@ def import_ticker_reference_from_csv_content(csv_content: str):
                     if ticker_data.get(field):
                         ticker_data[field] = clean_null_bytes(str(ticker_data[field]))
                 
-                # Normalize competitor tickers
+                # Normalize competitor tickers (no validation - international tickers allowed for feed creation)
                 competitor_ticker_fields = ['competitor_1_ticker', 'competitor_2_ticker', 'competitor_3_ticker']
                 for field in competitor_ticker_fields:
                     if ticker_data.get(field):
                         ticker_data[field] = normalize_ticker_format(ticker_data[field])
-                        # Validate competitor ticker format
-                        if not validate_ticker_format(ticker_data[field]):
-                            LOG.warning(f"Invalid competitor ticker format: {ticker_data[field]}")
-                            ticker_data[field] = None  # Clear invalid ticker
 
-                # Normalize value chain tickers (Oct 31, 2025)
+                # Normalize value chain tickers (no validation - international tickers allowed for feed creation)
                 value_chain_ticker_fields = ['upstream_1_ticker', 'upstream_2_ticker', 'downstream_1_ticker', 'downstream_2_ticker']
                 for field in value_chain_ticker_fields:
                     if ticker_data.get(field):
                         ticker_data[field] = normalize_ticker_format(ticker_data[field])
-                        # Validate value chain ticker format
-                        if not validate_ticker_format(ticker_data[field]):
-                            LOG.warning(f"Invalid value chain ticker format: {ticker_data[field]}")
-                            ticker_data[field] = None  # Clear invalid ticker
 
                 ticker_data_batch.append(ticker_data)
                     
@@ -5395,90 +5381,91 @@ def sync_ticker_references_to_github(commit_message: str = None):
         "message": f"Exported {export_result.get('ticker_count', 0)} ticker references to CSV format"
     }
 
-def commit_ticker_reference_to_github():
-    """
-    Daily cron job function: Export ticker_reference from database and commit to GitHub.
-    Called by: python app.py commit (Render cron at 6:30 AM EST)
-
-    Unlike incremental commits during job runs, this triggers a Render deployment.
-    """
-    LOG.info("🔄 ============================================")
-    LOG.info("🔄 DAILY GITHUB COMMIT - ticker_reference.csv")
-    LOG.info("🔄 ============================================")
-
-    try:
-        # Step 1: Export ticker_reference from database to CSV
-        LOG.info("📤 Step 1: Exporting ticker_reference from database...")
-        export_result = export_ticker_references_to_csv()
-
-        if export_result["status"] != "success":
-            LOG.error(f"❌ Export failed: {export_result.get('message', 'Unknown error')}")
-            return {
-                "status": "error",
-                "message": f"CSV export failed: {export_result.get('message')}",
-                "rows": 0
-            }
-
-        csv_content = export_result["csv_content"]
-        ticker_count = export_result.get("ticker_count", 0)
-        LOG.info(f"✅ Exported {ticker_count} tickers ({len(csv_content)} chars)")
-
-        # Step 2: Commit to GitHub (WITHOUT [skip render])
-        LOG.info("📤 Step 2: Committing to GitHub (triggers deployment)...")
-        from datetime import datetime
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-        commit_message = f"Daily ticker reference update - {timestamp}"
-
-        commit_result = commit_csv_to_github(csv_content, commit_message)
-
-        if commit_result["status"] != "success":
-            error_msg = commit_result.get('message', 'Unknown error')
-
-            # Check if it's a missing env vars error (not a critical failure)
-            if "not configured" in error_msg or "GITHUB_TOKEN" in error_msg:
-                LOG.warning(f"⚠️ GitHub commit skipped: {error_msg}")
-                LOG.warning(f"   To enable: Set GITHUB_TOKEN and GITHUB_REPO in Render environment")
-                LOG.info(f"✅ CSV export successful (GitHub backup skipped)")
-                return {
-                    "status": "success",
-                    "message": "CSV export successful (GitHub backup skipped - env vars not configured)",
-                    "rows": ticker_count,
-                    "timestamp": timestamp,
-                    "github_skipped": True
-                }
-            else:
-                # Real error (network, permission, etc)
-                LOG.error(f"❌ GitHub commit failed: {error_msg}")
-                return {
-                    "status": "error",
-                    "message": f"GitHub commit failed: {error_msg}",
-                    "rows": ticker_count
-                }
-
-        LOG.info(f"✅ GitHub commit successful")
-        LOG.info(f"   Commit SHA: {commit_result.get('commit_sha', 'N/A')[:8]}")
-        LOG.info(f"   Tickers: {ticker_count}")
-        LOG.info(f"   CSV size: {len(csv_content)} chars")
-        LOG.info(f"⚠️  Render deployment will start in ~10 seconds")
-
-        return {
-            "status": "success",
-            "message": "Ticker reference committed to GitHub successfully",
-            "rows": ticker_count,
-            "commit_sha": commit_result.get("commit_sha"),
-            "commit_url": commit_result.get("commit_url"),
-            "timestamp": timestamp
-        }
-
-    except Exception as e:
-        LOG.error(f"❌ Daily GitHub commit failed: {e}")
-        LOG.error(traceback.format_exc())
-        return {
-            "status": "error",
-            "message": f"Unexpected error: {str(e)}",
-            "rows": 0
-        }
+# DISABLED (Nov 30, 2025): CSV is source of truth - never write DB back to ticker_reference.csv
+# def commit_ticker_reference_to_github():
+#     """
+#     Daily cron job function: Export ticker_reference from database and commit to GitHub.
+#     Called by: python app.py commit (Render cron at 6:30 AM EST)
+#
+#     Unlike incremental commits during job runs, this triggers a Render deployment.
+#     """
+#     LOG.info("🔄 ============================================")
+#     LOG.info("🔄 DAILY GITHUB COMMIT - ticker_reference.csv")
+#     LOG.info("🔄 ============================================")
+#
+#     try:
+#         # Step 1: Export ticker_reference from database to CSV
+#         LOG.info("📤 Step 1: Exporting ticker_reference from database...")
+#         export_result = export_ticker_references_to_csv()
+#
+#         if export_result["status"] != "success":
+#             LOG.error(f"❌ Export failed: {export_result.get('message', 'Unknown error')}")
+#             return {
+#                 "status": "error",
+#                 "message": f"CSV export failed: {export_result.get('message')}",
+#                 "rows": 0
+#             }
+#
+#         csv_content = export_result["csv_content"]
+#         ticker_count = export_result.get("ticker_count", 0)
+#         LOG.info(f"✅ Exported {ticker_count} tickers ({len(csv_content)} chars)")
+#
+#         # Step 2: Commit to GitHub (WITHOUT [skip render])
+#         LOG.info("📤 Step 2: Committing to GitHub (triggers deployment)...")
+#         from datetime import datetime
+#         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+#
+#         commit_message = f"Daily ticker reference update - {timestamp}"
+#
+#         commit_result = commit_csv_to_github(csv_content, commit_message)
+#
+#         if commit_result["status"] != "success":
+#             error_msg = commit_result.get('message', 'Unknown error')
+#
+#             # Check if it's a missing env vars error (not a critical failure)
+#             if "not configured" in error_msg or "GITHUB_TOKEN" in error_msg:
+#                 LOG.warning(f"⚠️ GitHub commit skipped: {error_msg}")
+#                 LOG.warning(f"   To enable: Set GITHUB_TOKEN and GITHUB_REPO in Render environment")
+#                 LOG.info(f"✅ CSV export successful (GitHub backup skipped)")
+#                 return {
+#                     "status": "success",
+#                     "message": "CSV export successful (GitHub backup skipped - env vars not configured)",
+#                     "rows": ticker_count,
+#                     "timestamp": timestamp,
+#                     "github_skipped": True
+#                 }
+#             else:
+#                 # Real error (network, permission, etc)
+#                 LOG.error(f"❌ GitHub commit failed: {error_msg}")
+#                 return {
+#                     "status": "error",
+#                     "message": f"GitHub commit failed: {error_msg}",
+#                     "rows": ticker_count
+#                 }
+#
+#         LOG.info(f"✅ GitHub commit successful")
+#         LOG.info(f"   Commit SHA: {commit_result.get('commit_sha', 'N/A')[:8]}")
+#         LOG.info(f"   Tickers: {ticker_count}")
+#         LOG.info(f"   CSV size: {len(csv_content)} chars")
+#         LOG.info(f"⚠️  Render deployment will start in ~10 seconds")
+#
+#         return {
+#             "status": "success",
+#             "message": "Ticker reference committed to GitHub successfully",
+#             "rows": ticker_count,
+#             "commit_sha": commit_result.get("commit_sha"),
+#             "commit_url": commit_result.get("commit_url"),
+#             "timestamp": timestamp
+#         }
+#
+#     except Exception as e:
+#         LOG.error(f"❌ Daily GitHub commit failed: {e}")
+#         LOG.error(traceback.format_exc())
+#         return {
+#             "status": "error",
+#             "message": f"Unexpected error: {str(e)}",
+#             "rows": 0
+#         }
 
 # 5. SELECTIVE TICKER UPDATE - Update specific tickers only
 def update_specific_tickers_on_github(tickers: list, commit_message: str = None):
@@ -9931,12 +9918,9 @@ def get_competitor_display_name(search_keyword: str, competitor_ticker: str = No
     Never relies on search_keyword for display (search_keyword is feed query parameter, not display name).
     """
 
-    # Input validation
+    # Input validation (normalize only - no format validation to allow international tickers)
     if competitor_ticker:
         competitor_ticker = normalize_ticker_format(competitor_ticker)
-        if not validate_ticker_format(competitor_ticker):
-            LOG.warning(f"Invalid competitor ticker format: {competitor_ticker}")
-            competitor_ticker = None
 
     if search_keyword:
         search_keyword = search_keyword.strip()
@@ -10759,11 +10743,9 @@ class FeedManager:
                     LOG.info(f"DEBUG: Skipping competitor - already exists: {comp_ticker}")
                     continue
                 
-                # ENHANCED: Validate ticker format with international support
-                if not validate_ticker_format(comp_ticker):
-                    LOG.info(f"DEBUG: Skipping competitor - invalid ticker format: '{comp_ticker}'")
-                    continue
-                
+                # NOTE: Validation removed (Nov 30, 2025) - international competitor tickers allowed for feed creation
+                # Yahoo Finance handles unknown tickers gracefully (returns empty feed)
+
                 # CRITICAL DEBUG: Log what feeds we're about to create
                 LOG.info(f"[{ticker}] CREATING COMPETITOR FEEDS: comp_name='{comp_name}', comp_ticker='{comp_ticker}'")
 
@@ -23165,30 +23147,31 @@ async def force_cleanup():
         "cleanup_result": cleanup_result
     }
 
-@APP.post("/admin/commit-csv-to-github")
-async def commit_csv_to_github_endpoint():
-    """HTTP endpoint to export DB to CSV and commit to GitHub"""
-    try:
-        # Step 1: Export database to CSV
-        export_result = export_ticker_references_to_csv()
-        if export_result["status"] != "success":
-            return export_result
-        
-        # Step 2: Commit CSV to GitHub
-        commit_result = commit_csv_to_github(export_result["csv_content"])
-        
-        return {
-            "status": commit_result["status"],
-            "export_info": {
-                "ticker_count": export_result["ticker_count"],
-                "csv_size": len(export_result["csv_content"])
-            },
-            "github_commit": commit_result,
-            "message": f"Exported {export_result['ticker_count']} tickers and committed to GitHub"
-        }
-        
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+# DISABLED (Nov 30, 2025): CSV is source of truth - never write DB back to ticker_reference.csv
+# @APP.post("/admin/commit-csv-to-github")
+# async def commit_csv_to_github_endpoint():
+#     """HTTP endpoint to export DB to CSV and commit to GitHub"""
+#     try:
+#         # Step 1: Export database to CSV
+#         export_result = export_ticker_references_to_csv()
+#         if export_result["status"] != "success":
+#             return export_result
+#
+#         # Step 2: Commit CSV to GitHub
+#         commit_result = commit_csv_to_github(export_result["csv_content"])
+#
+#         return {
+#             "status": commit_result["status"],
+#             "export_info": {
+#                 "ticker_count": export_result["ticker_count"],
+#                 "csv_size": len(export_result["csv_content"])
+#             },
+#             "github_commit": commit_result,
+#             "message": f"Exported {export_result['ticker_count']} tickers and committed to GitHub"
+#         }
+#
+#     except Exception as e:
+#         return {"status": "error", "message": str(e)}
 
 @APP.post("/admin/update-domain-names")
 async def update_domain_formal_names(request: Request):
@@ -24279,142 +24262,143 @@ async def commit_ticker_csv(request: Request):
         LOG.error(f"Error details: {traceback.format_exc()}")
         return {"status": "error", "message": str(e)}
 
-@APP.post("/admin/safe-incremental-commit")
-async def safe_incremental_commit(request: Request, body: UpdateTickersRequest):
-    """Safely commit individual tickers as they complete processing"""
-    require_admin(request)
-
-    if not body.tickers:
-        return {"status": "error", "message": "No tickers specified"}
-
-    LOG.info(f"=== SAFE INCREMENTAL COMMIT: {len(body.tickers)} TICKERS ===")
-
-    try:
-        # Step 1: Verify all tickers have AI-generated metadata
-        with db() as conn, conn.cursor() as cur:
-            cur.execute("""
-                SELECT ticker, ai_generated, industry_keyword_1, competitor_1_name,
-                       ai_enhanced_at, updated_at
-                FROM ticker_reference
-                WHERE ticker = ANY(%s)
-                ORDER BY ticker
-            """, (body.tickers,))
-
-            ticker_status = {}
-            for row in cur.fetchall():
-                ticker = row["ticker"]
-                has_ai_data = (row["ai_generated"] and
-                             (row["industry_keyword_1"] or row["competitor_1_name"]))
-                ticker_status[ticker] = {
-                    "has_ai_metadata": has_ai_data,
-                    "ai_enhanced_at": row["ai_enhanced_at"],
-                    "updated_at": row["updated_at"]
-                }
-
-        # Step 2: Filter to only commit tickers with AI metadata
-        valid_tickers = [t for t, status in ticker_status.items() if status["has_ai_metadata"]]
-        invalid_tickers = [t for t, status in ticker_status.items() if not status["has_ai_metadata"]]
-
-        if not valid_tickers:
-            return {
-                "status": "no_changes",
-                "message": "No tickers have AI-generated metadata to commit",
-                "invalid_tickers": invalid_tickers,
-                "ticker_status": ticker_status
-            }
-
-        # Step 3: Create backup before commit (include job_id for idempotency)
-        # [skip render] controlled by skip_render flag (default: True)
-        backup_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        job_id_suffix = f" [job:{body.job_id[:8]}]" if body.job_id else ""
-
-        # Add [skip render] prefix only if skip_render=True
-        skip_prefix = "[skip render] " if body.skip_render else ""
-        commit_message = f"{skip_prefix}Incremental update: {', '.join(valid_tickers)} - {backup_timestamp}{job_id_suffix}"
-
-        if not body.skip_render:
-            LOG.warning(f"⚠️ RENDER DEPLOYMENT WILL BE TRIGGERED by this commit")
-            LOG.warning(f"   Commit message: {commit_message}")
-        else:
-            LOG.info(f"✅ [skip render] enabled - no deployment will be triggered")
-
-        # Step 4: Export and commit with retry logic
-        LOG.info(f"Exporting {len(valid_tickers)} enhanced tickers: {valid_tickers}")
-        export_result = export_ticker_references_to_csv()
-
-        if export_result["status"] != "success":
-            return {
-                "status": "export_failed",
-                "message": export_result["message"],
-                "valid_tickers": valid_tickers,
-                "invalid_tickers": invalid_tickers
-            }
-
-        LOG.info(f"Committing to GitHub with message: {commit_message}")
-
-        # Wrap GitHub commit in try/except to make it non-fatal
-        try:
-            commit_result = commit_csv_to_github(export_result["csv_content"], commit_message)
-
-            if commit_result["status"] == "success":
-                # Step 5: Update commit tracking in database (with column existence check)
-                try:
-                    with db() as conn, conn.cursor() as cur:
-                        # Verify column exists before attempting update (bulletproofing for schema mismatches)
-                        cur.execute("""
-                            SELECT column_name
-                            FROM information_schema.columns
-                            WHERE table_schema = 'public'
-                            AND table_name = 'ticker_reference'
-                            AND column_name = 'last_github_sync'
-                        """)
-
-                        if cur.fetchone():
-                            cur.execute("""
-                                UPDATE ticker_reference
-                                SET last_github_sync = %s
-                                WHERE ticker = ANY(%s)
-                            """, (datetime.now(timezone.utc), valid_tickers))
-
-                            LOG.info(f"✅ Updated GitHub sync timestamp for {len(valid_tickers)} tickers")
-                        else:
-                            LOG.warning("⚠️ Column 'last_github_sync' does not exist in ticker_reference table")
-                            LOG.warning("   CSV committed successfully, but sync timestamp not recorded")
-                            LOG.warning("   Run: ALTER TABLE ticker_reference ADD COLUMN last_github_sync TIMESTAMP;")
-
-                except Exception as db_error:
-                    LOG.error(f"⚠️ Failed to update last_github_sync timestamp: {db_error}")
-                    LOG.warning("   CSV was committed to GitHub successfully, but DB timestamp update failed")
-                    # Don't fail the entire operation - GitHub commit succeeded
-
-        except Exception as commit_error:
-            LOG.error(f"⚠️ GitHub commit failed (non-fatal): {commit_error}")
-            commit_result = {
-                "status": "error",
-                "message": f"GitHub commit failed: {str(commit_error)}"
-            }
-
-        return {
-            "status": commit_result["status"],
-            "message": f"Successfully committed {len(valid_tickers)} tickers",
-            "committed_tickers": valid_tickers,
-            "skipped_tickers": invalid_tickers,
-            "ticker_status": ticker_status,
-            "export_info": {
-                "total_tickers_in_csv": export_result["ticker_count"],
-                "csv_size": len(export_result["csv_content"])
-            },
-            "commit_info": commit_result
-        }
-
-    except Exception as e:
-        LOG.error(f"Safe incremental commit failed: {e}")
-        LOG.error(f"Error details: {traceback.format_exc()}")
-        return {
-            "status": "error",
-            "message": f"Incremental commit failed: {str(e)}",
-            "requested_tickers": body.tickers
-        }
+# DISABLED (Nov 30, 2025): CSV is source of truth - never write DB back to ticker_reference.csv
+# @APP.post("/admin/safe-incremental-commit")
+# async def safe_incremental_commit(request: Request, body: UpdateTickersRequest):
+#     """Safely commit individual tickers as they complete processing"""
+#     require_admin(request)
+#
+#     if not body.tickers:
+#         return {"status": "error", "message": "No tickers specified"}
+#
+#     LOG.info(f"=== SAFE INCREMENTAL COMMIT: {len(body.tickers)} TICKERS ===")
+#
+#     try:
+#         # Step 1: Verify all tickers have AI-generated metadata
+#         with db() as conn, conn.cursor() as cur:
+#             cur.execute("""
+#                 SELECT ticker, ai_generated, industry_keyword_1, competitor_1_name,
+#                        ai_enhanced_at, updated_at
+#                 FROM ticker_reference
+#                 WHERE ticker = ANY(%s)
+#                 ORDER BY ticker
+#             """, (body.tickers,))
+#
+#             ticker_status = {}
+#             for row in cur.fetchall():
+#                 ticker = row["ticker"]
+#                 has_ai_data = (row["ai_generated"] and
+#                              (row["industry_keyword_1"] or row["competitor_1_name"]))
+#                 ticker_status[ticker] = {
+#                     "has_ai_metadata": has_ai_data,
+#                     "ai_enhanced_at": row["ai_enhanced_at"],
+#                     "updated_at": row["updated_at"]
+#                 }
+#
+#         # Step 2: Filter to only commit tickers with AI metadata
+#         valid_tickers = [t for t, status in ticker_status.items() if status["has_ai_metadata"]]
+#         invalid_tickers = [t for t, status in ticker_status.items() if not status["has_ai_metadata"]]
+#
+#         if not valid_tickers:
+#             return {
+#                 "status": "no_changes",
+#                 "message": "No tickers have AI-generated metadata to commit",
+#                 "invalid_tickers": invalid_tickers,
+#                 "ticker_status": ticker_status
+#             }
+#
+#         # Step 3: Create backup before commit (include job_id for idempotency)
+#         # [skip render] controlled by skip_render flag (default: True)
+#         backup_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+#         job_id_suffix = f" [job:{body.job_id[:8]}]" if body.job_id else ""
+#
+#         # Add [skip render] prefix only if skip_render=True
+#         skip_prefix = "[skip render] " if body.skip_render else ""
+#         commit_message = f"{skip_prefix}Incremental update: {', '.join(valid_tickers)} - {backup_timestamp}{job_id_suffix}"
+#
+#         if not body.skip_render:
+#             LOG.warning(f"⚠️ RENDER DEPLOYMENT WILL BE TRIGGERED by this commit")
+#             LOG.warning(f"   Commit message: {commit_message}")
+#         else:
+#             LOG.info(f"✅ [skip render] enabled - no deployment will be triggered")
+#
+#         # Step 4: Export and commit with retry logic
+#         LOG.info(f"Exporting {len(valid_tickers)} enhanced tickers: {valid_tickers}")
+#         export_result = export_ticker_references_to_csv()
+#
+#         if export_result["status"] != "success":
+#             return {
+#                 "status": "export_failed",
+#                 "message": export_result["message"],
+#                 "valid_tickers": valid_tickers,
+#                 "invalid_tickers": invalid_tickers
+#             }
+#
+#         LOG.info(f"Committing to GitHub with message: {commit_message}")
+#
+#         # Wrap GitHub commit in try/except to make it non-fatal
+#         try:
+#             commit_result = commit_csv_to_github(export_result["csv_content"], commit_message)
+#
+#             if commit_result["status"] == "success":
+#                 # Step 5: Update commit tracking in database (with column existence check)
+#                 try:
+#                     with db() as conn, conn.cursor() as cur:
+#                         # Verify column exists before attempting update (bulletproofing for schema mismatches)
+#                         cur.execute("""
+#                             SELECT column_name
+#                             FROM information_schema.columns
+#                             WHERE table_schema = 'public'
+#                             AND table_name = 'ticker_reference'
+#                             AND column_name = 'last_github_sync'
+#                         """)
+#
+#                         if cur.fetchone():
+#                             cur.execute("""
+#                                 UPDATE ticker_reference
+#                                 SET last_github_sync = %s
+#                                 WHERE ticker = ANY(%s)
+#                             """, (datetime.now(timezone.utc), valid_tickers))
+#
+#                             LOG.info(f"✅ Updated GitHub sync timestamp for {len(valid_tickers)} tickers")
+#                         else:
+#                             LOG.warning("⚠️ Column 'last_github_sync' does not exist in ticker_reference table")
+#                             LOG.warning("   CSV committed successfully, but sync timestamp not recorded")
+#                             LOG.warning("   Run: ALTER TABLE ticker_reference ADD COLUMN last_github_sync TIMESTAMP;")
+#
+#                 except Exception as db_error:
+#                     LOG.error(f"⚠️ Failed to update last_github_sync timestamp: {db_error}")
+#                     LOG.warning("   CSV was committed to GitHub successfully, but DB timestamp update failed")
+#                     # Don't fail the entire operation - GitHub commit succeeded
+#
+#         except Exception as commit_error:
+#             LOG.error(f"⚠️ GitHub commit failed (non-fatal): {commit_error}")
+#             commit_result = {
+#                 "status": "error",
+#                 "message": f"GitHub commit failed: {str(commit_error)}"
+#             }
+#
+#         return {
+#             "status": commit_result["status"],
+#             "message": f"Successfully committed {len(valid_tickers)} tickers",
+#             "committed_tickers": valid_tickers,
+#             "skipped_tickers": invalid_tickers,
+#             "ticker_status": ticker_status,
+#             "export_info": {
+#                 "total_tickers_in_csv": export_result["ticker_count"],
+#                 "csv_size": len(export_result["csv_content"])
+#             },
+#             "commit_info": commit_result
+#         }
+#
+#     except Exception as e:
+#         LOG.error(f"Safe incremental commit failed: {e}")
+#         LOG.error(f"Error details: {traceback.format_exc()}")
+#         return {
+#             "status": "error",
+#             "message": f"Incremental commit failed: {str(e)}",
+#             "requested_tickers": body.tickers
+#         }
 
 # ------------------------------------------------------------------------------
 # ADMIN DASHBOARD ENDPOINTS
@@ -30373,45 +30357,46 @@ async def regen_all_emails_api(request: Request):
         LOG.error(f"Failed to regen all emails: {e}")
         return {"status": "error", "message": str(e)}
 
-@APP.post("/api/commit-ticker-csv")
-async def commit_ticker_csv_api(request: Request):
-    """
-    Manually commit ticker_reference.csv to GitHub.
-    Triggers Render deployment (~2-3 min downtime).
-    Admin-only endpoint.
-    """
-    body = await request.json()
-    token = body.get('token')
-
-    if not check_admin_token(token):
-        return {"status": "error", "message": "Unauthorized"}
-
-    try:
-        LOG.info("🔄 Manual GitHub commit requested via admin dashboard")
-        result = commit_ticker_reference_to_github()
-
-        if result['status'] == 'success':
-            LOG.info(f"✅ Manual commit successful: {result.get('commit_sha', 'N/A')[:8]}")
-            return {
-                "status": "success",
-                "message": result['message'],
-                "rows": result['rows'],
-                "commit_sha": result.get('commit_sha'),
-                "commit_url": result.get('commit_url'),
-                "timestamp": result.get('timestamp')
-            }
-        else:
-            LOG.error(f"❌ Manual commit failed: {result.get('message')}")
-            return {
-                "status": "error",
-                "message": result.get('message', 'Unknown error'),
-                "rows": result.get('rows', 0)
-            }
-
-    except Exception as e:
-        LOG.error(f"Manual GitHub commit failed: {e}")
-        LOG.error(traceback.format_exc())
-        return {"status": "error", "message": str(e)}
+# DISABLED (Nov 30, 2025): CSV is source of truth - never write DB back to ticker_reference.csv
+# @APP.post("/api/commit-ticker-csv")
+# async def commit_ticker_csv_api(request: Request):
+#     """
+#     Manually commit ticker_reference.csv to GitHub.
+#     Triggers Render deployment (~2-3 min downtime).
+#     Admin-only endpoint.
+#     """
+#     body = await request.json()
+#     token = body.get('token')
+#
+#     if not check_admin_token(token):
+#         return {"status": "error", "message": "Unauthorized"}
+#
+#     try:
+#         LOG.info("🔄 Manual GitHub commit requested via admin dashboard")
+#         result = commit_ticker_reference_to_github()
+#
+#         if result['status'] == 'success':
+#             LOG.info(f"✅ Manual commit successful: {result.get('commit_sha', 'N/A')[:8]}")
+#             return {
+#                 "status": "success",
+#                 "message": result['message'],
+#                 "rows": result['rows'],
+#                 "commit_sha": result.get('commit_sha'),
+#                 "commit_url": result.get('commit_url'),
+#                 "timestamp": result.get('timestamp')
+#             }
+#         else:
+#             LOG.error(f"❌ Manual commit failed: {result.get('message')}")
+#             return {
+#                 "status": "error",
+#                 "message": result.get('message', 'Unknown error'),
+#                 "rows": result.get('rows', 0)
+#             }
+#
+#     except Exception as e:
+#         LOG.error(f"Manual GitHub commit failed: {e}")
+#         LOG.error(traceback.format_exc())
+#         return {"status": "error", "message": str(e)}
 
 @APP.get("/api/get-domain-stats")
 async def get_domain_stats_api(token: str = Query(...)):
@@ -32420,18 +32405,19 @@ if __name__ == "__main__":
             auto_send_cron_job()
         elif func_name == "export":
             export_beta_users_csv()
-        elif func_name == "commit":
-            # Daily GitHub commit (triggers deployment)
-            result = commit_ticker_reference_to_github()
-            if result['status'] == 'success':
-                print(f"✅ {result['message']}")
-                print(f"   Rows: {result['rows']}")
-                print(f"   Commit: {result.get('commit_sha', 'N/A')[:8]}")
-                print(f"   URL: {result.get('commit_url', 'N/A')}")
-                sys.exit(0)
-            else:
-                print(f"❌ Error: {result['message']}")
-                sys.exit(1)
+        # DISABLED (Nov 30, 2025): CSV is source of truth - never write DB back to ticker_reference.csv
+        # elif func_name == "commit":
+        #     # Daily GitHub commit (triggers deployment)
+        #     result = commit_ticker_reference_to_github()
+        #     if result['status'] == 'success':
+        #         print(f"✅ {result['message']}")
+        #         print(f"   Rows: {result['rows']}")
+        #         print(f"   Commit: {result.get('commit_sha', 'N/A')[:8]}")
+        #         print(f"   URL: {result.get('commit_url', 'N/A')}")
+        #         sys.exit(0)
+        #     else:
+        #         print(f"❌ Error: {result['message']}")
+        #         sys.exit(1)
         elif func_name == "alerts":
             # Hourly alerts (9 AM - 10 PM EST)
             process_hourly_alerts()

@@ -3263,7 +3263,109 @@ def create_ticker_reference_table():
 
 # 2. INTERNATIONAL TICKER FORMAT VALIDATION
 def validate_ticker_format(ticker: str) -> bool:
-    """Validate ticker format for US-listed companies only"""
+    """
+    Validate ticker format - supports international tickers.
+    Used for internal processing (competitors, value chain, CSV import).
+    For user-facing signup, use validate_ticker_format_us_only().
+    """
+    if not ticker or len(ticker) > 15:
+        return False
+
+    # Comprehensive regex patterns for global tickers
+    patterns = [
+        # Standard US tickers (1-5 letters, some up to 8)
+        r'^[A-Z]{1,8}$',                          # US: MSFT, AAPL, GOOGL, BERKSHIRE
+
+        # Canadian exchanges
+        r'^[A-Z]{1,6}\.TO$',                      # Toronto: RY.TO, TD.TO
+        r'^[A-Z]{1,6}-UN\.TO$',                   # Toronto units: REI-UN.TO
+        r'^[A-Z]{1,6}-[A-Z]\.TO$',                # Toronto class: CTC-A.TO
+        r'^[A-Z]{1,6}\.V$',                       # TSX Venture: ABC.V
+        r'^[A-Z]{1,6}\.CN$',                      # CSE: WEED.CN
+
+        # UK exchanges
+        r'^[A-Z]{2,4}\.L$',                       # London: BP.L, ULVR.L
+        r'^[A-Z0-9]{2,6}\.L$',                    # London with numbers
+
+        # Australian exchanges
+        r'^[A-Z]{3}\.AX$',                        # ASX: BHP.AX, CBA.AX
+        r'^[A-Z0-9]{3,6}\.AX$',                   # ASX with numbers
+
+        # Hong Kong exchanges
+        r'^[0-9]{4}\.HK$',                        # HKEX: 0005.HK, 9988.HK
+        r'^[0-9]{4,5}\.HK$',                      # Extended HKEX
+
+        # European exchanges
+        r'^[A-Z]{2,6}\.DE$',                      # Germany: SAP.DE, BMW.DE
+        r'^[A-Z]{2,6}\.PA$',                      # Paris: MC.PA, OR.PA
+        r'^[A-Z]{2,6}\.AS$',                      # Amsterdam: ASML.AS
+        r'^[A-Z]{2,6}\.SW$',                      # Swiss: NESN.SW
+        r'^[A-Z]{2,6}\.MI$',                      # Milan: ENI.MI
+        r'^[A-Z]{2,6}\.ST$',                      # Stockholm
+        r'^[A-Z]{2,6}\.OL$',                      # Oslo
+        r'^[A-Z]{2,6}\.CO$',                      # Copenhagen
+        r'^[A-Z]{2,6}\.BR$',                      # Brussels
+
+        # Asian exchanges
+        r'^[0-9]{4,6}\.KS$',                      # Korea: 005930.KS (Samsung)
+        r'^[0-9]{4,6}\.KQ$',                      # Korea KOSDAQ
+        r'^[0-9]{4,6}\.T$',                       # Tokyo: 7203.T (Toyota)
+        r'^[0-9]{4,6}\.TW$',                      # Taiwan: 2330.TW (TSMC)
+        r'^[A-Z0-9]{2,10}\.NS$',                  # India NSE
+        r'^[A-Z0-9]{2,10}\.BO$',                  # India BSE
+        r'^[A-Z0-9]{2,6}\.SI$',                   # Singapore
+        r'^[A-Z0-9]{2,6}\.BK$',                   # Bangkok
+        r'^[A-Z0-9]{2,6}\.JK$',                   # Jakarta
+
+        # China exchanges
+        r'^[0-9]{6}\.SS$',                        # Shanghai: 600000.SS
+        r'^[0-9]{6}\.SZ$',                        # Shenzhen: 000001.SZ
+
+        # Latin America
+        r'^[A-Z]{2,10}\.MX$',                     # Mexico
+        r'^[A-Z0-9]{4,10}\.SA$',                  # Brazil
+
+        # Other formats
+        r'^[A-Z0-9]{2,6}\.TA$',                   # Tel Aviv
+        r'^[A-Z0-9]{2,6}\.IS$',                   # Istanbul
+        r'^[A-Z0-9]{2,6}\.JO$',                   # Johannesburg
+
+        # Crypto pairs (Yahoo Finance format)
+        r'^[A-Z0-9]{2,10}-USD$',                 # Crypto to USD: BTC-USD, ETH-USD, BNB-USD
+        r'^[A-Z0-9]{2,10}-[A-Z]{3}$',           # Crypto pairs: BTC-EUR, ETH-GBP
+
+        # Forex pairs (Yahoo Finance format)
+        r'^[A-Z]{6}=X$',                         # Forex: EURUSD=X, GBPUSD=X, CADJPY=X
+        r'^[A-Z]{3}=X$',                         # Single currency to USD: CAD=X, EUR=X
+
+        # Market indices (Yahoo Finance format)
+        r'^\^[A-Z0-9]{2,8}$',                    # Indices: ^GSPC, ^DJI, ^IXIC, ^FTSE
+
+        # Class/series shares (US and international)
+        r'^[A-Z]{1,6}-[A-Z]$',                   # Class shares: BRK-A, BRK-B
+        r'^[A-Z]{1,6}-[A-Z]{2}$',               # Extended class: BRK-PA, TECK-B
+
+        # Rights, warrants, units
+        r'^[A-Z]{1,6}\.R$',                      # Rights
+        r'^[A-Z]{1,6}\.W$',                      # Warrants
+        r'^[A-Z]{1,6}\.U$',                      # Units
+    ]
+
+    ticker_upper = ticker.upper().strip()
+
+    # Check against all patterns
+    for pattern in patterns:
+        if re.match(pattern, ticker_upper):
+            return True
+
+    return False
+
+
+def validate_ticker_format_us_only(ticker: str) -> bool:
+    """
+    Validate ticker format for US-listed companies only.
+    Used for user-facing signup on landing page.
+    """
     if not ticker or len(ticker) > 15:
         return False
 
@@ -19677,7 +19779,8 @@ async def validate_ticker_endpoint(ticker: str = Query(..., min_length=1, max_le
         normalized = normalize_ticker_format(ticker)
 
         # TIER 1: Format validation (reject obvious garbage immediately)
-        if not validate_ticker_format(normalized):
+        # Use US-only validation for landing page signup
+        if not validate_ticker_format_us_only(normalized):
             return {
                 "valid": False,
                 "message": "Invalid ticker format. US-listed companies only."

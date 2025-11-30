@@ -2233,7 +2233,7 @@ Tracks which articles contributed to each bullet/paragraph in the executive summ
 
 **Email Display** (`modules/executive_summary_phase1.py`)
 - Email #3 Converter: `convert_phase1_to_sections_dict()` - User-facing format (lines 465-565)
-- Email #2 Converter: `convert_phase1_to_enhanced_sections()` - QA format with hints (lines 609-713)
+- Email #2 Converter: `convert_phase3_to_email2_sections()` - QA format with full deduplication display (lines 918-1150)
 - Both converters use bullet_id matching for date appending
 - Post-processing: `bold_labels=True` parameter on `build_section()` calls
 - `bold_bullet_labels()` function auto-replaces `Context:` → `<strong>Context:</strong>`
@@ -2247,8 +2247,8 @@ Tracks which articles contributed to each bullet/paragraph in the executive summ
 - `generate_phase2_enrichments_with_claude()` - Phase 2 generation
 - `_parse_phase2_json_response()` - Parsing logic
 - `merge_phase1_and_phase2()` - Phase 1+2 merge function
-- `convert_phase1_to_sections_dict()` - Email #3 converter (NEW - uses bullet_id matching)
-- `convert_phase1_to_enhanced_sections()` - Email #2 converter (NEW - uses bullet_id matching)
+- `convert_phase1_to_sections_dict()` - Email #3 converter (uses bullet_id matching)
+- `convert_phase3_to_email2_sections()` - Email #2 converter with full deduplication display (lines 918-1150)
 
 **Benefits:**
 - ✅ Richer context for investment decisions
@@ -2347,7 +2347,7 @@ def merge_phase3_with_phase2(phase2_json, phase3_json):
 ```
 
 **Email Converters** (`modules/executive_summary_phase1.py`)
-- `convert_phase1_to_enhanced_sections()`: Email #2 with filing hints (lines 609-713)
+- `convert_phase3_to_email2_sections()`: Email #2 with full deduplication display (lines 918-1150)
 - `convert_phase1_to_sections_dict()`: Email #3 user-facing (lines 465-565)
 - Both use bullet_id matching for date appending
 

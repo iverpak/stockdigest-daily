@@ -15854,6 +15854,19 @@ def get_worker_id():
     """Get unique worker ID (Render instance or hostname)"""
     return os.getenv('RENDER_INSTANCE_ID') or os.getenv('HOSTNAME') or 'worker-local'
 
+def json_serialize_default(obj):
+    """Custom JSON serializer for objects not serializable by default json module.
+
+    Handles datetime/date objects by converting to ISO 8601 format strings.
+    This is the standard pattern for JSON serialization of complex Python objects.
+
+    Used by update_job_status() to safely serialize job results that may contain
+    datetime objects from database queries (e.g., articles_by_ticker with published_at).
+    """
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
 def update_job_status(job_id: str, status: str = None, phase: str = None, progress: int = None,
                      error_message: str = None, error_stacktrace: str = None, result: dict = None,
                      memory_mb: float = None, duration_seconds: float = None):
@@ -15888,7 +15901,7 @@ def update_job_status(job_id: str, status: str = None, phase: str = None, progre
 
     if result:
         updates.append("result = %s")
-        params.append(json.dumps(result))
+        params.append(json.dumps(result, default=json_serialize_default))
 
     if memory_mb is not None:
         updates.append("memory_mb = %s")

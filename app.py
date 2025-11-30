@@ -13341,8 +13341,8 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
         existing_summaries: Optional pre-generated summaries (for regenerate workflow).
                            If provided, skips summary generation and uses these instead.
                            Format: {ticker: {"ai_analysis_summary": "...", "model_used": "..."}}
-        phase3_json: Optional Phase 3 merged JSON (for post-Phase-3 Email #2 with deduplication).
-                    If provided, uses convert_phase3_to_email2_sections instead of convert_phase1_to_enhanced_sections.
+        phase3_json: Phase 3 merged JSON (REQUIRED for Email #2 with deduplication).
+                    Email #2 is only sent after Phase 3 completes, so this should always be provided.
     """
 
     # CRITICAL FIX: Split value_chain into upstream/downstream BEFORE executive summary generation
@@ -13528,10 +13528,15 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
         html.append(f"<h2>🎯 Target Company: {company_name} ({ticker})</h2>")
 
         # Display executive summary
-        # NEW (Nov 2025): If phase3_json provided, use Phase 3 format with deduplication
-        # Otherwise fall back to Phase 1+2 format
-        if phase3_json:
-            # Phase 3 format with deduplication info
+        # Phase 3 format with deduplication info (REQUIRED - Nov 2025)
+        # phase3_json must always be provided - Email #2 is only sent after Phase 3 completes
+        if not phase3_json:
+            LOG.error(f"[{ticker}] phase3_json is required for Email #2 - this should never happen")
+            html.append("<div class='company-summary'>")
+            html.append("<div class='summary-title'>📰 Executive Summary - ERROR</div>")
+            html.append("<div class='summary-content'>Phase 3 JSON not provided. Email #2 requires Phase 3 to be completed first.</div>")
+            html.append("</div>")
+        else:
             from modules.executive_summary_phase1 import convert_phase3_to_email2_sections
 
             # Fetch model info from database
@@ -13564,51 +13569,6 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
 
             html.append("</div>")
             html.append("</div>")
-        else:
-            # Legacy Phase 1+2 format (no deduplication)
-            openai_summary = openai_summaries.get(ticker, {}).get("ai_analysis_summary", "")
-            model_used = openai_summaries.get(ticker, {}).get("model_used", "AI")  # Get Phase 1 model
-
-            if openai_summary:
-                # Fetch Phase 2 model info from database if available
-                phase2_model = None
-                try:
-                    with db() as conn, conn.cursor() as cur:
-                        cur.execute("""
-                            SELECT ai_models FROM executive_summaries
-                            WHERE ticker = %s AND summary_date = CURRENT_DATE
-                            ORDER BY generated_at DESC LIMIT 1
-                        """, (ticker,))
-                        result = cur.fetchone()
-                        if result and result.get('ai_models'):
-                            ai_models = result['ai_models']
-                            phase2_model = ai_models.get('phase2') if isinstance(ai_models, dict) else None
-                except Exception as e:
-                    LOG.warning(f"[{ticker}] Could not fetch Phase 2 model info: {e}")
-
-                # Build model display string
-                models_display = f"Phase 1: {model_used}"
-                if phase2_model:
-                    models_display += f" | Phase 2: {phase2_model}"
-
-                html.append("<div class='company-summary'>")
-                html.append(f"<div class='summary-title'>📰 Executive Summary - {models_display}</div>")
-                html.append("<div class='summary-content'>")
-
-                # Parse Phase 1 JSON and show FULL structure (filing hints + topic labels)
-                from modules.executive_summary_phase1 import convert_phase1_to_enhanced_sections
-                try:
-                    json_output = json.loads(openai_summary)
-                    sections = convert_phase1_to_enhanced_sections(json_output)
-                except json.JSONDecodeError as e:
-                    LOG.error(f"[{ticker}] Failed to parse Phase 1 JSON in Email #2: {e}")
-                    sections = {}  # Empty sections, show error in email
-
-                summary_html = build_executive_summary_html(sections, strip_emojis=False)
-                html.append(summary_html)
-
-                html.append("</div>")
-                html.append("</div>")
 
         # NOTE: value_chain was already split into upstream/downstream at function start (line 20310)
         # This code kept for backward compatibility and debugging visibility
@@ -14485,7 +14445,7 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                             <td style="width: 100%;"><div style="border-top: 1px solid #d4d0c8; height: 1px;"></div></td>
                         </tr>
                     </table>
-                    <ul style="margin: 0; padding-left: 20px; list-style-type: disc;">
+                    <ul style="margin: 0; margin-top: 8px; padding-left: 20px; list-style-type: disc;">
                         {bullet_html}
                     </ul>
                 </div>

@@ -5,10 +5,11 @@ This module generates structured JSON executive summaries from news articles ONL
 NO filing data is used in Phase 1 - that comes in Phase 2.
 
 Key functions:
-- generate_executive_summary_phase1(): Main entry point
+- generate_executive_summary_phase1(): Main entry point for Phase 1 generation
 - validate_phase1_json(): Schema validator
-- convert_phase1_to_sections_dict(): Simple bullets for Email #3
-- convert_phase1_to_enhanced_sections(): Full structure for Email #2
+- convert_phase1_to_sections_dict(): Simple bullets for Email #3 (user-facing)
+- convert_phase3_to_email2_sections(): Full QA format for Email #2 with deduplication
+  (NOTE: Email #2 requires Phase 3 JSON - always runs AFTER Phase 3 completes)
 """
 
 import json
@@ -914,151 +915,6 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[Dict]]:
     return sections
 
 
-def convert_phase1_to_enhanced_sections(phase1_json: Dict) -> Dict[str, List[Dict]]:
-    """
-    Convert Phase 1+2 JSON to Email #2 QA format with bullet_id matching.
-
-    NEW FORMAT:
-    **[Entity] Topic • Sentiment (reason)**
-    Content paragraph (Nov 04)
-      Filing hints: 10-K (Section A, B)
-      Filing keywords: ["keyword1"]
-      ID: bullet_id
-
-    Args:
-        phase1_json: Phase 1+2 merged JSON (with impact, sentiment, context, etc.)
-
-    Returns:
-        sections dict: {section_name: [{'bullet_id': '...', 'formatted': '...'}, ...]}
-    """
-    from modules.executive_summary_utils import format_bullet_header, add_dates_to_email_sections
-
-    sections = {
-        "bottom_line": [],
-        "major_developments": [],
-        "financial_operational": [],
-        "risk_factors": [],
-        "wall_street": [],
-        "competitive_industry": [],
-        "upcoming_catalysts": [],
-        "upside_scenario": [],
-        "downside_scenario": [],
-        "key_variables": []
-    }
-
-    json_sections = phase1_json.get("sections", {})
-
-    # Bottom Line (simple list, no bullet_id)
-    if "bottom_line" in json_sections:
-        content = json_sections["bottom_line"].get("content", "")
-        context = json_sections["bottom_line"].get("context", "")
-        if context:
-            content += f" Context: {context}"
-        sections["bottom_line"] = [content]
-
-    # Helper function to format bullets with metadata
-    def format_bullet_with_metadata(bullet: Dict) -> Dict:
-        """Format bullet with header, content, and Email #2 metadata. Returns {'bullet_id': '...', 'formatted': '...'}"""
-        # Use shared utility for header
-        header = format_bullet_header(bullet)
-
-        # Content (Phase 1 content)
-        content = bullet['content']
-
-        result = f"{header}\n{content}"
-
-        # Add Phase 2 context if present (regex will bold "Context:" label)
-        context = bullet.get('context', '')
-        if context:
-            result += f" Context: {context}"
-
-        # Add Email #2 metadata
-        # Filing hints
-        hints = bullet.get("filing_hints", {})
-        hint_parts = []
-        for filing_type, sections_list in hints.items():
-            if sections_list:
-                hint_parts.append(f"{filing_type} ({', '.join(sections_list)})")
-        if hint_parts:
-            result += f"<br>  Filing hints: {'; '.join(hint_parts)}"
-
-        # Filing keywords
-        keywords = bullet.get("filing_keywords", [])
-        if keywords:
-            import json
-            result += f"<br>  Filing keywords: {json.dumps(keywords)}"
-
-        # Phase 2 Enrichment Metadata (QA purposes)
-        # Only show if Phase 2 fields are present (indicates bullet was enriched)
-        if any(key in bullet for key in ['impact', 'sentiment', 'reason', 'relevance']):
-            metadata_parts = []
-            # Entity (only present for competitive_industry_dynamics)
-            entity_val = bullet.get('entity', 'N/A')
-            metadata_parts.append(f"Entity: {entity_val}")
-            # Relevance
-            relevance_val = bullet.get('relevance', 'N/A')
-            metadata_parts.append(f"Relevance: {relevance_val}")
-            # Impact
-            impact_val = bullet.get('impact', 'N/A')
-            metadata_parts.append(f"Impact: {impact_val}")
-            # Sentiment
-            sentiment_val = bullet.get('sentiment', 'N/A')
-            metadata_parts.append(f"Sentiment: {sentiment_val}")
-            # Reason
-            reason_val = bullet.get('reason', 'N/A')
-            metadata_parts.append(f"Reason: {reason_val}")
-
-            result += f"<br>  Metadata: {' | '.join(metadata_parts)}"
-
-        # Source articles (Phase 1 tracking)
-        source_articles = bullet.get('source_articles', [])
-        if source_articles:
-            result += f"<br>  Source Articles: {source_articles}"
-
-        # Bullet ID
-        result += f"<br>  ID: {bullet['bullet_id']}"
-
-        return {
-            'bullet_id': bullet['bullet_id'],
-            'formatted': result
-        }
-
-    # All bullet sections
-    section_mapping = {
-        "major_developments": "major_developments",
-        "financial_performance": "financial_operational",
-        "risk_factors": "risk_factors",
-        "wall_street_sentiment": "wall_street",
-        "competitive_industry_dynamics": "competitive_industry",
-        "upcoming_catalysts": "upcoming_catalysts",
-        "key_variables": "key_variables"
-    }
-
-    for json_key, sections_key in section_mapping.items():
-        if json_key in json_sections:
-            sections[sections_key] = [
-                format_bullet_with_metadata(b)
-                for b in json_sections[json_key]
-            ]
-
-    # Scenarios (simple lists, no bullet_id)
-    for json_key, sections_key in [
-        ("upside_scenario", "upside_scenario"),
-        ("downside_scenario", "downside_scenario")
-    ]:
-        if json_key in json_sections:
-            content = json_sections[json_key].get("content", "")
-            context = json_sections[json_key].get("context", "")
-            if context:
-                content += f" Context: {context}"
-            sections[sections_key] = [content]
-
-    # Add dates to all sections using bullet_id matching
-    sections = add_dates_to_email_sections(sections, phase1_json)
-
-    return sections
-
-
 def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]]:
     """
     Convert Phase 3 merged JSON to Email #2 QA format with deduplication display.
@@ -1066,20 +922,22 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
     NEW FORMAT (Nov 2025):
     ────────────────────────────────────────────────────────────────────────────────
     [bullet_id] Topic Label • Sentiment (reason)
-    ────────────────────────────────────────────────────────────────────────────────
+
     Phase 1+2 (Original):
     Content from Phase 1 articles with Phase 2 context appended.
 
     Phase 3 (Integrated):
     Content with Phase 2 context woven inline.
 
-    Metadata:
-      Entity: N/A | Relevance: direct | Impact: high | Sentiment: bullish | Reason: xxx
-      Filing hints: 10-K (Section A, B)
-      Source Articles: [0, 3, 5]
+    Metadata: Impact: high | Sentiment: bullish | Relevance: direct | Reason: xxx
+    Filing hints: 10-K (Section A, B); 10-Q (Section C)
+    Filing keywords: ["keyword1", "keyword2"]
+    Source Articles: [0, 3, 5]
 
-    Deduplication:
-      status: unique ✅
+    Deduplication: ✅ UNIQUE
+    (Nov 27)
+
+    ID: bullet_id
     ────────────────────────────────────────────────────────────────────────────────
 
     Args:
@@ -1112,12 +970,13 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
         context = bl.get("context", "")
         content_p3 = bl.get("content_integrated", "")
 
-        # Simplified: show content with optional context and Phase 3
-        result = content_p12
+        # Professional format with Phase 1+2 and Phase 3 labels
+        result = "<strong>Phase 1+2 (Original):</strong><br>"
+        result += content_p12
         if context:
             result += f" Context: {context}"
-        if content_p3 and content_p3 != content_p12:
-            result += f"<br><strong>Phase 3:</strong> {content_p3}"
+        if content_p3:
+            result += f"<br><br><strong>Phase 3 (Integrated):</strong><br>{content_p3}"
 
         sections["bottom_line"] = [result]
 
@@ -1125,44 +984,77 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
     def format_bullet_with_dedup(bullet: Dict) -> Dict:
         """Format bullet showing Phase 1+2, Phase 3, Metadata, and Deduplication.
 
-        Simplified format (Nov 2025) - matches Phase 1+2 style:
-        - No heavy div wrappers with padding/margins
-        - No hr separators
-        - Clean header + content + metadata flow
+        Professional QA format (Nov 2025):
+        ────────────────────────────────────────────────────────────────────────────────
+        [bullet_id] Topic Label • Sentiment (reason)
+
+        Phase 1+2 (Original):
+        <content> Context: <context>
+
+        Phase 3 (Integrated):
+        <integrated content>
+
+        Metadata: Impact: high | Sentiment: bullish | Relevance: direct | Reason: xxx
+        Filing hints: 10-K (Section A); 10-Q (Section B)
+        Filing keywords: ["keyword1", "keyword2"]
+        Source Articles: [0, 3, 5]
+
+        Deduplication: ✅ UNIQUE
+        (Nov 27)
+
+        ID: bullet_id
+        ────────────────────────────────────────────────────────────────────────────────
         """
-        # Header line (includes topic_label, sentiment, reason)
+        import json as json_module
+
+        bullet_id = bullet.get('bullet_id', 'N/A')
+
+        # Header line with [bullet_id] prefix (includes topic_label, sentiment, reason)
         header = format_bullet_header(bullet)
+        # Insert bullet_id prefix after the opening **
+        if header.startswith('**'):
+            header = f"**[{bullet_id}] {header[2:]}"
+        else:
+            header = f"[{bullet_id}] {header}"
 
         # Start with header
         result = f"{header}\n"
 
-        # Phase 1+2 content
+        # Phase 1+2 content with clear label
         content_p12 = bullet.get('content', '')
-        result += content_p12
-
-        # Add Phase 2 context if present
         context = bullet.get('context', '')
+
+        result += "<br><strong>Phase 1+2 (Original):</strong><br>"
+        result += content_p12
         if context:
             result += f" Context: {context}"
 
-        # Phase 3 integrated content (if different from Phase 1+2)
+        # Phase 3 integrated content with clear label (always show if present)
         content_p3 = bullet.get('content_integrated', '')
-        if content_p3 and content_p3 != content_p12:
-            result += f"<br><strong>Phase 3:</strong> {content_p3}"
+        if content_p3:
+            result += f"<br><br><strong>Phase 3 (Integrated):</strong><br>{content_p3}"
 
-        # Metadata line (compact)
+        # Metadata line - order: Impact | Sentiment | Relevance | Reason
         metadata_parts = []
+        # Entity (only for competitive_industry_dynamics)
         entity_val = bullet.get('entity')
         if entity_val and entity_val != 'N/A':
             metadata_parts.append(f"Entity: {entity_val}")
-        relevance_val = bullet.get('relevance', 'N/A')
-        metadata_parts.append(f"Relevance: {relevance_val}")
+        # Impact first
         impact_val = bullet.get('impact', 'N/A')
         metadata_parts.append(f"Impact: {impact_val}")
+        # Sentiment second
         sentiment_val = bullet.get('sentiment', 'N/A')
         metadata_parts.append(f"Sentiment: {sentiment_val}")
+        # Relevance third
+        relevance_val = bullet.get('relevance', 'N/A')
+        metadata_parts.append(f"Relevance: {relevance_val}")
+        # Reason fourth
+        reason_val = bullet.get('reason', 'N/A')
+        metadata_parts.append(f"Reason: {reason_val}")
+
         if metadata_parts:
-            result += f"<br>  Metadata: {' | '.join(metadata_parts)}"
+            result += f"<br><br>Metadata: {' | '.join(metadata_parts)}"
 
         # Filing hints (compact)
         hints = bullet.get("filing_hints", {})
@@ -1171,34 +1063,48 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
             if sections_list:
                 hint_parts.append(f"{filing_type} ({', '.join(sections_list)})")
         if hint_parts:
-            result += f"<br>  Filing hints: {'; '.join(hint_parts)}"
+            result += f"<br>Filing hints: {'; '.join(hint_parts)}"
+
+        # Filing keywords (was missing from Phase 3 converter)
+        keywords = bullet.get("filing_keywords", [])
+        if keywords:
+            result += f"<br>Filing keywords: {json_module.dumps(keywords)}"
 
         # Source articles
         source_articles = bullet.get('source_articles', [])
         if source_articles:
-            result += f"<br>  Source Articles: {source_articles}"
+            result += f"<br>Source Articles: {source_articles}"
 
-        # Deduplication status (compact - only show if not unique)
+        # Deduplication status - on its own line with full details
         dedup = bullet.get('deduplication', {'status': 'unique'})
         status = dedup.get('status', 'unique')
+        shared_theme = dedup.get('shared_theme', '')
+
+        result += "<br><br>"  # Blank line before dedup block
 
         if status == 'unique':
-            result += " <span style='color: #28a745;'>✅</span>"
+            result += "Deduplication: <span style='color: #28a745;'>✅ UNIQUE</span>"
         elif status == 'primary':
             absorbs = dedup.get('absorbs', [])
-            result += f"<br>  Dedup: primary (absorbs {absorbs}) <span style='color: #007bff;'>🔗</span>"
+            result += f"Deduplication: <span style='color: #007bff;'>🔗 PRIMARY</span>"
+            result += f"<br>  Absorbs: {absorbs}"
+            if shared_theme:
+                result += f"<br>  Theme: {shared_theme}"
             proposed = dedup.get('proposed_edit', '')
             if proposed:
-                result += f"<br>  Proposed edit: {proposed}"
+                result += f"<br>  Proposed Edit: {proposed}"
         elif status == 'duplicate':
             absorbed_by = dedup.get('absorbed_by', '')
-            result += f"<br>  Dedup: duplicate (absorbed by {absorbed_by}) <span style='color: #dc3545;'>❌</span>"
+            result += f"Deduplication: <span style='color: #dc3545;'>❌ DUPLICATE</span>"
+            result += f"<br>  Absorbed by: {absorbed_by}"
+            if shared_theme:
+                result += f"<br>  Theme: {shared_theme}"
 
-        # Bullet ID (at end for reference)
-        result += f"<br>  ID: {bullet.get('bullet_id', 'N/A')}"
+        # Bullet ID at the very end
+        result += f"<br><br>ID: {bullet_id}"
 
         return {
-            'bullet_id': bullet.get('bullet_id', ''),
+            'bullet_id': bullet_id,
             'formatted': result
         }
 
@@ -1231,12 +1137,13 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
             context = scenario.get("context", "")
             content_p3 = scenario.get("content_integrated", "")
 
-            # Simplified: show content with optional context and Phase 3
-            result = content_p12
+            # Professional format with Phase 1+2 and Phase 3 labels
+            result = "<strong>Phase 1+2 (Original):</strong><br>"
+            result += content_p12
             if context:
                 result += f" Context: {context}"
-            if content_p3 and content_p3 != content_p12:
-                result += f"<br><strong>Phase 3:</strong> {content_p3}"
+            if content_p3:
+                result += f"<br><br><strong>Phase 3 (Integrated):</strong><br>{content_p3}"
 
             sections[sections_key] = [result]
 

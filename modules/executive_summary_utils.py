@@ -68,33 +68,36 @@ def format_bullet_header(bullet: Dict, show_reason: bool = True, section_name: s
 
 def _insert_date_before_metadata(text: str, date: str) -> str:
     """
-    Insert date (Nov 04) before metadata lines in formatted bullet.
+    Insert date (Nov 04) after deduplication block but before ID line.
 
-    Metadata lines start with <br>  Filing hints:, <br>  ID:, etc.
+    New format (Nov 2025):
+    - Date goes AFTER: Deduplication block (✅ UNIQUE, 🔗 PRIMARY, ❌ DUPLICATE)
+    - Date goes BEFORE: ID: bullet_id
 
     Args:
         text: Formatted bullet string
         date: Date string like "Nov 04" or "Nov 03-08"
 
     Returns:
-        Text with date inserted before metadata
+        Text with date inserted in correct position
     """
-    # Find where metadata starts
-    metadata_patterns = [
-        r'(<br>\s*Filing hints:)',
-        r'(<br>\s*Filing keywords:)',
-        r'(<br>\s*ID:)',
-        r'(<br>\s*Impact:)'
-    ]
+    # Look for ID line at the end - insert date before it
+    # Pattern: <br><br>ID: (with two line breaks before ID)
+    id_pattern = r'(<br><br>ID:)'
+    match = re.search(id_pattern, text)
+    if match:
+        pos = match.start()
+        # Insert date between dedup and ID
+        return f"{text[:pos]}<br>({date}){text[pos:]}"
 
-    for pattern in metadata_patterns:
-        match = re.search(pattern, text)
-        if match:
-            # Insert date before metadata
-            pos = match.start()
-            return f"{text[:pos]} ({date}){text[pos:]}"
+    # Fallback: Look for single <br>ID: pattern
+    id_pattern_single = r'(<br>ID:)'
+    match = re.search(id_pattern_single, text)
+    if match:
+        pos = match.start()
+        return f"{text[:pos]}<br>({date}){text[pos:]}"
 
-    # No metadata found, append date at end
+    # No ID found, append date at end
     return f"{text} ({date})"
 
 

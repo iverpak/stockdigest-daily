@@ -14462,11 +14462,21 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                 processed_item = bold_bullet_labels(text, context_only=False) if bold_labels else text
                 # Apply sentiment badge styling (color-coded Bullish/Bearish/Mixed/Neutral)
                 processed_item = style_sentiment_badges(processed_item)
-                bullet_html += f'<li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;">{processed_item}</li>'
+                bullet_html += f'<li style="margin-bottom: 8px; font-size: 14px; line-height: 1.7; color: #3d3d3d;">{processed_item}</li>'
+
+            # Determine header color based on section title
+            # Bottom Line gets terracotta (#8b2c24), all others get muted gray (#6b6b6b)
+            is_bottom_line = "bottom line" in display_title.lower()
+            header_color = "#8b2c24" if is_bottom_line else "#6b6b6b"
 
             return f'''
-                <div style="margin-bottom: 20px;">
-                    <h2 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">{display_title}</h2>
+                <div style="margin-bottom: 24px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 12px;">
+                        <tr>
+                            <td style="font-family: Georgia, 'Times New Roman', serif; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: {header_color}; white-space: nowrap; padding-right: 12px;">{display_title}</td>
+                            <td style="width: 100%;"><div style="border-top: 1px solid #d4d0c8; height: 1px;"></div></td>
+                        </tr>
+                    </table>
                     <ul style="margin: 0; padding-left: 20px; list-style-type: disc;">
                         {bullet_html}
                     </ul>
@@ -14499,10 +14509,31 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                 # Join paragraphs with <br><br> for visual spacing
                 text = "<br><br>".join(paragraphs)
 
+            # Determine header color and special styling based on section title
+            title_lower = display_title.lower()
+            is_bottom_line = "bottom line" in title_lower
+            is_upside = "upside" in title_lower
+            is_downside = "downside" in title_lower
+
+            header_color = "#8b2c24" if is_bottom_line else "#6b6b6b"
+
+            # Special background tints for upside/downside scenarios
+            if is_upside:
+                content_style = "margin: 0; font-size: 14px; line-height: 1.7; color: #3d3d3d; background-color: #f0fdf4; padding: 12px; border-left: 3px solid #1e6b4a; border-radius: 4px;"
+            elif is_downside:
+                content_style = "margin: 0; font-size: 14px; line-height: 1.7; color: #3d3d3d; background-color: #fef2f2; padding: 12px; border-left: 3px solid #9b2c2c; border-radius: 4px;"
+            else:
+                content_style = "margin: 0; font-size: 14px; line-height: 1.7; color: #3d3d3d;"
+
             return f'''
-                <div style="margin-bottom: 20px;">
-                    <h2 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">{display_title}</h2>
-                    <div style="margin: 0; font-size: 13px; line-height: 1.6; color: #374151;">{text}</div>
+                <div style="margin-bottom: 24px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 12px;">
+                        <tr>
+                            <td style="font-family: Georgia, 'Times New Roman', serif; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: {header_color}; white-space: nowrap; padding-right: 12px;">{display_title}</td>
+                            <td style="width: 100%;"><div style="border-top: 1px solid #d4d0c8; height: 1px;"></div></td>
+                        </tr>
+                    </table>
+                    <div style="{content_style}">{text}</div>
                 </div>
             '''
 
@@ -14767,36 +14798,41 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
             # Build category-specific inline tag
             tag_html = ""
             if category == "industry":
-                # Gray tag with keyword
+                # Indigo tag with keyword
                 keyword = article.get('search_keyword', '')
                 if keyword:
-                    tag_html = f'<span style="display: inline-block; background: #6c757d; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">{keyword.title()}</span>'
+                    tag_html = f'<span style="display: inline-block; background: #4f46e5; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">{keyword.title()}</span>'
 
             elif category == "competitor":
-                # Red tag with ticker or company name
+                # Maroon tag with ticker or company name
                 comp_ticker = article.get('feed_ticker')
                 comp_name = strip_legal_suffixes(article.get('search_keyword', 'Unknown'))
                 partner_tag = comp_ticker if comp_ticker else comp_name
-                tag_html = f'<span style="display: inline-block; background: #dc3545; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">{partner_tag}</span>'
+                tag_html = f'<span style="display: inline-block; background: #7c2d12; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">{partner_tag}</span>'
 
             elif category == "company":
-                # Blue tag with ticker
+                # Black tag with ticker
                 ticker = article.get('ticker', 'N/A')
-                tag_html = f'<span style="display: inline-block; background: #1e40af; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">{ticker}</span>'
+                tag_html = f'<span style="display: inline-block; background: #1a1a1a; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">{ticker}</span>'
 
             domain_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
             date_str = format_date_short(article['published_at']) if article.get('published_at') else "Recent"
 
             article_links += f'''
-                <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                    <a href="{article.get('resolved_url', '#')}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{tag_html}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
-                    <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">{domain_name} • {date_str}</div>
+                <div style="padding: 8px 0; margin-bottom: 4px; border-bottom: 1px solid #e0ddd8;">
+                    <a href="{article.get('resolved_url', '#')}" style="font-family: Georgia, 'Times New Roman', serif; font-size: 14px; font-weight: 500; color: #1a1a1a; text-decoration: none; line-height: 1.5;">{tag_html}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
+                    <div style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b; margin-top: 4px;">{domain_name} • {date_str}</div>
                 </div>
             '''
 
         return f'''
-            <div style="margin-bottom: 16px;">
-                <h3 style="margin: 0 0 8px 0; font-size: 13px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.75px;">{title} ({len(articles)})</h3>
+            <div style="margin-bottom: 20px;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 10px;">
+                    <tr>
+                        <td style="font-family: Georgia, 'Times New Roman', serif; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #6b6b6b; white-space: nowrap; padding-right: 12px;">{title} ({len(articles)})</td>
+                        <td style="width: 100%;"><div style="border-top: 1px solid #d4d0c8; height: 1px;"></div></td>
+                    </tr>
+                </table>
                 {article_links}
             </div>
         '''
@@ -14811,8 +14847,15 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
     upstream_articles = [a for a in value_chain_articles if a.get('value_chain_type') == 'upstream']
 
     if upstream_articles:
-        upstream_html = '<div style="margin-bottom: 16px;">'
-        upstream_html += '<h3 style="margin: 0 0 8px 0; font-size: 13px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.75px;">UPSTREAM ({0})</h3>'.format(len(upstream_articles))
+        upstream_html = '<div style="margin-bottom: 20px;">'
+        upstream_html += '''
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 10px;">
+                <tr>
+                    <td style="font-family: Georgia, 'Times New Roman', serif; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #6b6b6b; white-space: nowrap; padding-right: 12px;">UPSTREAM ({0})</td>
+                    <td style="width: 100%;"><div style="border-top: 1px solid #d4d0c8; height: 1px;"></div></td>
+                </tr>
+            </table>
+        '''.format(len(upstream_articles))
 
         for article in upstream_articles:
             is_paywalled = is_paywall_article(article.get('domain', ''))
@@ -14835,9 +14878,9 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
             date_str = format_date_short(article['published_at']) if article.get('published_at') else "Recent"
 
             upstream_html += f'''
-                <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                    <a href="{article.get('resolved_url', '#')}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{tag_html}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
-                    <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">{domain_name} • {date_str}</div>
+                <div style="padding: 8px 0; margin-bottom: 4px; border-bottom: 1px solid #e0ddd8;">
+                    <a href="{article.get('resolved_url', '#')}" style="font-family: Georgia, 'Times New Roman', serif; font-size: 14px; font-weight: 500; color: #1a1a1a; text-decoration: none; line-height: 1.5;">{tag_html}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
+                    <div style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b; margin-top: 4px;">{domain_name} • {date_str}</div>
                 </div>
             '''
         upstream_html += '</div>'
@@ -14847,8 +14890,15 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
     downstream_articles = [a for a in value_chain_articles if a.get('value_chain_type') == 'downstream']
 
     if downstream_articles:
-        downstream_html = '<div style="margin-bottom: 16px;">'
-        downstream_html += '<h3 style="margin: 0 0 8px 0; font-size: 13px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.75px;">DOWNSTREAM ({0})</h3>'.format(len(downstream_articles))
+        downstream_html = '<div style="margin-bottom: 20px;">'
+        downstream_html += '''
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 10px;">
+                <tr>
+                    <td style="font-family: Georgia, 'Times New Roman', serif; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #6b6b6b; white-space: nowrap; padding-right: 12px;">DOWNSTREAM ({0})</td>
+                    <td style="width: 100%;"><div style="border-top: 1px solid #d4d0c8; height: 1px;"></div></td>
+                </tr>
+            </table>
+        '''.format(len(downstream_articles))
 
         for article in downstream_articles:
             is_paywalled = is_paywall_article(article.get('domain', ''))
@@ -14861,19 +14911,19 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
             ]
             star = '<span style="color: #f59e0b;">★</span> ' if is_quality else ''
 
-            # Green tag with ticker or company name
+            # Dark green tag with ticker or company name (matches success color #1e6b4a)
             partner_ticker = article.get('feed_ticker')
             partner_name = strip_legal_suffixes(article.get('search_keyword', 'Unknown'))
             partner_tag = partner_ticker if partner_ticker else partner_name
-            tag_html = f'<span style="display: inline-block; background: #10b981; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">{partner_tag}</span>'
+            tag_html = f'<span style="display: inline-block; background: #1e6b4a; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">{partner_tag}</span>'
 
             domain_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
             date_str = format_date_short(article['published_at']) if article.get('published_at') else "Recent"
 
             downstream_html += f'''
-                <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                    <a href="{article.get('resolved_url', '#')}" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;">{tag_html}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
-                    <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">{domain_name} • {date_str}</div>
+                <div style="padding: 8px 0; margin-bottom: 4px; border-bottom: 1px solid #e0ddd8;">
+                    <a href="{article.get('resolved_url', '#')}" style="font-family: Georgia, 'Times New Roman', serif; font-size: 14px; font-weight: 500; color: #1a1a1a; text-decoration: none; line-height: 1.5;">{tag_html}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
+                    <div style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b; margin-top: 4px;">{domain_name} • {date_str}</div>
                 </div>
             '''
         downstream_html += '</div>'
@@ -14929,9 +14979,9 @@ def generate_email_html_core(
     stock_data = get_filing_stock_data(ticker)
     stock_price = stock_data.get('stock_price') or "$0.00"
     price_change_pct = stock_data.get('price_change_pct')
-    price_change_color = stock_data.get('price_change_color') or "#4ade80"
+    price_change_color = stock_data.get('price_change_color') or "#1e6b4a"
     ytd_return_pct = stock_data.get('ytd_return_pct')
-    ytd_return_color = stock_data.get('ytd_return_color') or "#4ade80"
+    ytd_return_color = stock_data.get('ytd_return_color') or "#1e6b4a"
     market_status = stock_data.get('market_status')
     return_label = stock_data.get('return_label')
 
@@ -16114,9 +16164,9 @@ def get_filing_stock_data(ticker: str) -> dict:
         # Header price card (existing)
         'stock_price': f"${live_data['financial_last_price']:.2f}",
         'price_change_pct': f"{'+' if daily_return >= 0 else ''}{daily_return:.2f}%" if daily_return is not None else None,
-        'price_change_color': "#4ade80" if daily_return is not None and daily_return >= 0 else "#ef4444",
+        'price_change_color': "#1e6b4a" if daily_return is not None and daily_return >= 0 else "#9b2c2c",
         'ytd_return_pct': f"{'+' if ytd_return >= 0 else ''}{ytd_return:.2f}%" if ytd_return is not None else None,
-        'ytd_return_color': "#4ade80" if ytd_return is not None and ytd_return >= 0 else "#ef4444",
+        'ytd_return_color': "#1e6b4a" if ytd_return is not None and ytd_return >= 0 else "#9b2c2c",
         'market_status': "INTRADAY" if market_is_open else "LAST CLOSE",
         'return_label': "TODAY" if market_is_open else "1D",
         # 4-metric strip (Nov 2025)
@@ -17221,9 +17271,9 @@ async def process_press_release_phase(job: dict):
                         json_output=json_output_parsed,
                         stock_price=stock_data.get('stock_price'),
                         price_change_pct=stock_data.get('price_change_pct'),
-                        price_change_color=stock_data.get('price_change_color', '#4ade80'),
+                        price_change_color=stock_data.get('price_change_color', '#1e6b4a'),
                         ytd_return_pct=stock_data.get('ytd_return_pct'),
-                        ytd_return_color=stock_data.get('ytd_return_color', '#4ade80'),
+                        ytd_return_color=stock_data.get('ytd_return_color', '#1e6b4a'),
                         market_status=stock_data.get('market_status', 'LAST CLOSE'),
                         return_label=stock_data.get('return_label', '1D')
                     )
@@ -17573,9 +17623,9 @@ async def process_8k_summary_phase(job: dict):
                                 exhibit_number=exhibit_num,
                                 stock_price=stock_data.get('stock_price'),
                                 price_change_pct=stock_data.get('price_change_pct'),
-                                price_change_color=stock_data.get('price_change_color', '#4ade80'),
+                                price_change_color=stock_data.get('price_change_color', '#1e6b4a'),
                                 ytd_return_pct=stock_data.get('ytd_return_pct'),
-                                ytd_return_color=stock_data.get('ytd_return_color', '#4ade80'),
+                                ytd_return_color=stock_data.get('ytd_return_color', '#1e6b4a'),
                                 market_status=stock_data.get('market_status', 'LAST CLOSE'),
                                 return_label=stock_data.get('return_label', '1D')
                             )
@@ -25381,9 +25431,9 @@ async def generate_parsed_pr_api(request: Request):
                 exhibit_number=exhibit_number if source_type == '8k' else None,
                 stock_price=stock_data.get('stock_price'),
                 price_change_pct=stock_data.get('price_change_pct'),
-                price_change_color=stock_data.get('price_change_color', '#4ade80'),
+                price_change_color=stock_data.get('price_change_color', '#1e6b4a'),
                 ytd_return_pct=stock_data.get('ytd_return_pct'),
-                ytd_return_color=stock_data.get('ytd_return_color', '#4ade80'),
+                ytd_return_color=stock_data.get('ytd_return_color', '#1e6b4a'),
                 market_status=stock_data.get('market_status', 'LAST CLOSE'),
                 return_label=stock_data.get('return_label', '1D')
             )

@@ -14371,36 +14371,36 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
         Targets sentiment words that appear in bullet headers after the • separator.
         Pattern: • Bullish</strong> → • <span style="...">Bullish</span></strong>
 
-        Colors (Tailwind palette - 100 bg / 600-700 text for contrast):
-        - Bullish: green (#d1fae5 bg, #059669 text)
-        - Bearish: red (#fee2e2 bg, #dc2626 text)
-        - Mixed: amber (#fef3c7 bg, #d97706 text)
-        - Neutral: gray (#e5e7eb bg, #4b5563 text)
+        Colors (matching mockup exactly):
+        - Bullish: green (#e8f5ef bg, #1e6b4a text)
+        - Bearish: red (#fdf2f2 bg, #9b2c2c text)
+        - Mixed: amber (#fef3c7 bg, #92400e text)
+        - Neutral: gray (#eef0f2 bg, #5a6570 text)
 
-        Badge styling: 11px font, 600 weight, 2px 6px padding, 3px border-radius
+        Badge styling: 10px font, 600 weight, uppercase, letter-spacing 0.5px, 2px 8px padding, 2px border-radius
         """
         import re
 
         SENTIMENT_STYLES = {
-            'Bullish': 'background:#d1fae5;color:#059669;',
-            'Bearish': 'background:#fee2e2;color:#dc2626;',
-            'Mixed': 'background:#fef3c7;color:#d97706;',
-            'Neutral': 'background:#e5e7eb;color:#4b5563;',
+            'Bullish': 'background-color:#e8f5ef;color:#1e6b4a;',
+            'Bearish': 'background-color:#fdf2f2;color:#9b2c2c;',
+            'Mixed': 'background-color:#fef3c7;color:#92400e;',
+            'Neutral': 'background-color:#eef0f2;color:#5a6570;',
         }
 
-        BASE_STYLE = 'font-size:11px;font-weight:600;padding:2px 6px;border-radius:3px;'
+        BASE_STYLE = 'display:inline-block;font-family:Arial,Helvetica,sans-serif;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;padding:2px 8px;border-radius:2px;vertical-align:middle;'
 
         for sentiment, colors in SENTIMENT_STYLES.items():
             # Match: • Sentiment</strong> (sentiment at end of header before closing tag)
             # This ensures we only style sentiment in headers, not in body content
             pattern = f'• {sentiment}</strong>'
-            styled_badge = f'• <span style="{colors}{BASE_STYLE}">{sentiment}</span></strong>'
+            styled_badge = f'</span><span style="{colors}{BASE_STYLE}">{sentiment}</span></strong>'
             html = html.replace(pattern, styled_badge)
 
         return html
 
-    def build_section(title: str, content: List, use_bullets: bool = True, bold_labels: bool = False, context_only: bool = False) -> str:
-        """Build section with consistent styling
+    def build_section(title: str, content: List, use_bullets: bool = True, bold_labels: bool = False, context_only: bool = False, section_type: str = None) -> str:
+        """Build section with consistent styling matching mockup design.
 
         Args:
             title: Section title
@@ -14408,6 +14408,7 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
             use_bullets: If True, format as bullet list
             bold_labels: If True, bold topic labels in format "Topic: Details"
             context_only: If True with bold_labels, ONLY bold "Context:" (for paragraphs)
+            section_type: Special section type ('bottom_line', 'upside', 'downside', 'key_variables')
         """
         if not content:
             return ""
@@ -14415,9 +14416,147 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
         # Strip emojis from title if requested
         display_title = strip_emoji(title) if strip_emojis else title
 
+        # Determine section type from title if not explicitly provided
+        title_lower = display_title.lower()
+        if section_type is None:
+            if "bottom line" in title_lower:
+                section_type = 'bottom_line'
+            elif "upside" in title_lower:
+                section_type = 'upside'
+            elif "downside" in title_lower:
+                section_type = 'downside'
+            elif "key variables" in title_lower:
+                section_type = 'key_variables'
+
+        # ============================================================
+        # SPECIAL HANDLING: Key Variables (table rows with borders)
+        # ============================================================
+        if section_type == 'key_variables':
+            rows_html = ""
+            for i, item in enumerate(content):
+                # Extract formatted string if item is dict (new format)
+                if isinstance(item, dict) and 'formatted' in item:
+                    text = item['formatted']
+                else:
+                    text = item
+
+                # Apply label bolding and markdown conversion
+                processed_item = bold_bullet_labels(text, context_only=False) if bold_labels else text
+
+                # Convert "**Label**: Description" to "<strong>Label</strong> — Description"
+                # Replace the first colon after a bold label with an em-dash
+                import re
+                processed_item = re.sub(r'</strong>:\s*', '</strong> — ', processed_item, count=1)
+
+                # Determine if this is the last item (no bottom border)
+                is_last = (i == len(content) - 1)
+                border_style = "" if is_last else "border-bottom: 1px solid #ebe8e3;"
+
+                rows_html += f'''
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 14px; padding-bottom: 14px; {border_style}">
+                        <tr>
+                            <td>
+                                <p style="margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 1.6; color: #3d3d3d;">{processed_item}</p>
+                            </td>
+                        </tr>
+                    </table>
+                '''
+
+            return f'''
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top: 12px; margin-bottom: 28px;">
+                    <tr>
+                        <td>
+                            <!-- Section Header -->
+                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 16px;">
+                                <tr>
+                                    <td style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 600; color: #8b2c24; padding-right: 12px; white-space: nowrap;">{display_title}</td>
+                                    <td width="100%" style="border-bottom: 1px solid #ebe8e3;"></td>
+                                </tr>
+                            </table>
+                            {rows_html}
+                        </td>
+                    </tr>
+                </table>
+            '''
+
+        # ============================================================
+        # SPECIAL HANDLING: Upside/Downside Scenarios (header INSIDE box)
+        # ============================================================
+        if section_type in ('upside', 'downside'):
+            # Process content
+            raw_content = '\n'.join(content) if isinstance(content, list) else content
+            has_markdown_list = '\n- ' in raw_content or raw_content.startswith('- ')
+
+            if has_markdown_list:
+                text = parse_markdown_list_section(raw_content)
+            else:
+                if bold_labels:
+                    content_filtered = [bold_bullet_labels(line, context_only=context_only) for line in content if line.strip()]
+                else:
+                    content_filtered = [convert_markdown_to_html(line) for line in content if line.strip()]
+                paragraphs = []
+                for item in content_filtered:
+                    item_paragraphs = item.split('\n\n')
+                    paragraphs.extend([p.strip() for p in item_paragraphs if p.strip()])
+                text = "<br><br>".join(paragraphs)
+
+            # Colors for upside vs downside
+            if section_type == 'upside':
+                bg_color = "#f0fdf4"
+                border_color = "#27ae60"
+                header_color = "#1e6b4a"
+            else:  # downside
+                bg_color = "#fef2f2"
+                border_color = "#c0392b"
+                header_color = "#9b2c2c"
+
+            return f'''
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 16px;">
+                    <tr>
+                        <td style="padding: 20px; background-color: {bg_color}; border-left: 3px solid {border_color};">
+                            <p style="margin: 0 0 10px 0; font-family: Arial, Helvetica, sans-serif; font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 700; color: {header_color};">{display_title}</p>
+                            <p style="margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 1.65; color: #3d3d3d;">{text}</p>
+                        </td>
+                    </tr>
+                </table>
+            '''
+
+        # ============================================================
+        # SPECIAL HANDLING: Bottom Line (heavy border separator)
+        # ============================================================
+        if section_type == 'bottom_line':
+            raw_content = '\n'.join(content) if isinstance(content, list) else content
+            has_markdown_list = '\n- ' in raw_content or raw_content.startswith('- ')
+
+            if has_markdown_list:
+                text = parse_markdown_list_section(raw_content)
+            else:
+                if bold_labels:
+                    content_filtered = [bold_bullet_labels(line, context_only=context_only) for line in content if line.strip()]
+                else:
+                    content_filtered = [convert_markdown_to_html(line) for line in content if line.strip()]
+                paragraphs = []
+                for item in content_filtered:
+                    item_paragraphs = item.split('\n\n')
+                    paragraphs.extend([p.strip() for p in item_paragraphs if p.strip()])
+                text = "<br><br>".join(paragraphs)
+
+            return f'''
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 36px; padding-bottom: 32px; border-bottom: 2px solid #1a1a1a;">
+                    <tr>
+                        <td>
+                            <p style="margin: 0 0 12px 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: 2px; color: #8b2c24; font-weight: 600;">Bottom Line</p>
+                            <p style="margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 1.7; color: #3d3d3d;">{text}</p>
+                        </td>
+                    </tr>
+                </table>
+            '''
+
+        # ============================================================
+        # STANDARD BULLET SECTIONS (Major Developments, Financial, etc.)
+        # ============================================================
         if use_bullets:
-            # Bullet list format
-            bullet_html = ""
+            items_html = ""
             for item in content:
                 # Extract formatted string if item is dict (new format)
                 if isinstance(item, dict) and 'formatted' in item:
@@ -14425,85 +14564,75 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                 else:
                     text = item
 
-                # Apply label bolding if requested (bullets never use context_only)
+                # Apply label bolding if requested
                 processed_item = bold_bullet_labels(text, context_only=False) if bold_labels else text
-                # Apply sentiment badge styling (color-coded Bullish/Bearish/Mixed/Neutral)
+                # Apply sentiment badge styling
                 processed_item = style_sentiment_badges(processed_item)
-                bullet_html += f'<li style="margin-bottom: 8px; font-family: Georgia, \'Times New Roman\', serif; font-size: 14px; line-height: 1.7; color: #3d3d3d;">{processed_item}</li>'
 
-            # Determine header color based on section title
-            # Bottom Line gets terracotta (#8b2c24), all others get muted gray (#6b6b6b)
-            is_bottom_line = "bottom line" in display_title.lower()
-            header_color = "#8b2c24" if is_bottom_line else "#6b6b6b"
-
-            return f'''
-                <div style="margin-bottom: 24px;">
-                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 12px;">
+                # Build bullet item with topic label on separate line from body
+                # The processed_item format is: **[Entity] Topic • Sentiment**<br>Body text (Date)
+                items_html += f'''
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 22px;">
                         <tr>
-                            <td style="font-family: Georgia, 'Times New Roman', serif; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: {header_color}; white-space: nowrap; padding-right: 12px;">{display_title}</td>
-                            <td style="width: 100%;"><div style="border-top: 1px solid #d4d0c8; height: 1px;"></div></td>
+                            <td>
+                                <p style="margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 1.7; color: #3d3d3d;">{processed_item}</p>
+                            </td>
                         </tr>
                     </table>
-                    <ul style="margin: 0; margin-top: 8px; padding-left: 20px; list-style-type: disc;">
-                        {bullet_html}
-                    </ul>
-                </div>
+                '''
+
+            return f'''
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top: 12px; margin-bottom: 28px;">
+                    <tr>
+                        <td>
+                            <!-- Section Header -->
+                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 16px;">
+                                <tr>
+                                    <td style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 600; color: #8b2c24; padding-right: 12px; white-space: nowrap;">{display_title}</td>
+                                    <td width="100%" style="border-bottom: 1px solid #ebe8e3;"></td>
+                                </tr>
+                            </table>
+                            {items_html}
+                        </td>
+                    </tr>
+                </table>
             '''
+
+        # ============================================================
+        # STANDARD PARAGRAPH SECTIONS (fallback)
+        # ============================================================
+        raw_content = '\n'.join(content) if isinstance(content, list) else content
+        has_markdown_list = '\n- ' in raw_content or raw_content.startswith('- ')
+
+        if has_markdown_list:
+            text = parse_markdown_list_section(raw_content)
         else:
-            # Paragraph format (used by Bottom Line, Upside, Downside scenarios)
-            # Check if content contains markdown lists (Phase 3 editorial format)
-            raw_content = '\n'.join(content) if isinstance(content, list) else content
-            has_markdown_list = '\n- ' in raw_content or raw_content.startswith('- ')
-
-            if has_markdown_list:
-                # Phase 3 editorial format: Parse markdown lists into HTML <ul>
-                text = parse_markdown_list_section(raw_content)
+            if bold_labels:
+                content_filtered = [bold_bullet_labels(line, context_only=context_only) for line in content if line.strip()]
             else:
-                # Phase 1/2 format: Apply bold labels and convert markdown
-                if bold_labels:
-                    content_filtered = [bold_bullet_labels(line, context_only=context_only) for line in content if line.strip()]
-                else:
-                    content_filtered = [convert_markdown_to_html(line) for line in content if line.strip()]
+                content_filtered = [convert_markdown_to_html(line) for line in content if line.strip()]
+            paragraphs = []
+            for item in content_filtered:
+                item_paragraphs = item.split('\n\n')
+                paragraphs.extend([p.strip() for p in item_paragraphs if p.strip()])
+            text = "<br><br>".join(paragraphs)
 
-                # Preserve paragraph breaks from Phase 3 markdown (\n\n → <br><br>)
-                # Split each item on double newlines (paragraph breaks) first
-                paragraphs = []
-                for item in content_filtered:
-                    # Each item might have multiple paragraphs (separated by \n\n)
-                    item_paragraphs = item.split('\n\n')
-                    paragraphs.extend([p.strip() for p in item_paragraphs if p.strip()])
-
-                # Join paragraphs with <br><br> for visual spacing
-                text = "<br><br>".join(paragraphs)
-
-            # Determine header color and special styling based on section title
-            title_lower = display_title.lower()
-            is_bottom_line = "bottom line" in title_lower
-            is_upside = "upside" in title_lower
-            is_downside = "downside" in title_lower
-
-            header_color = "#8b2c24" if is_bottom_line else "#6b6b6b"
-
-            # Special background tints for upside/downside scenarios
-            base_style = "margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: 14px; line-height: 1.7; color: #3d3d3d;"
-            if is_upside:
-                content_style = f"{base_style} background-color: #f0fdf4; padding: 12px; border-left: 3px solid #1e6b4a; border-radius: 4px;"
-            elif is_downside:
-                content_style = f"{base_style} background-color: #fef2f2; padding: 12px; border-left: 3px solid #9b2c2c; border-radius: 4px;"
-            else:
-                content_style = base_style
-
-            return f'''
-                <div style="margin-bottom: 24px;">
-                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 12px;">
-                        <tr>
-                            <td style="font-family: Georgia, 'Times New Roman', serif; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: {header_color}; white-space: nowrap; padding-right: 12px;">{display_title}</td>
-                            <td style="width: 100%;"><div style="border-top: 1px solid #d4d0c8; height: 1px;"></div></td>
-                        </tr>
-                    </table>
-                    <div style="{content_style}">{text}</div>
-                </div>
-            '''
+        return f'''
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top: 12px; margin-bottom: 28px;">
+                <tr>
+                    <td>
+                        <!-- Section Header -->
+                        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 16px;">
+                            <tr>
+                                <td style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 600; color: #8b2c24; padding-right: 12px; white-space: nowrap;">{display_title}</td>
+                                <td width="100%" style="border-bottom: 1px solid #ebe8e3;"></td>
+                            </tr>
+                        </table>
+                        <p style="margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 1.7; color: #3d3d3d;">{text}</p>
+                    </td>
+                </tr>
+            </table>
+        '''
 
     # Check for quiet day (FLAGGED ARTICLE COUNT = 0)
     bottom_line_content = sections.get("bottom_line", [])
@@ -14743,7 +14872,20 @@ def build_research_summary_html(sections: Dict[str, List[str]], content_type: st
 def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
     """
     Convert articles by category into HTML string for email template.
+    Styling matches mockup design (Nov 2025).
     """
+    # Badge base style matching mockup
+    BADGE_BASE_STYLE = "display: inline-block; padding: 2px 6px; font-size: 9px; font-weight: 600; letter-spacing: 0.5px; border-radius: 2px; margin-right: 8px;"
+
+    # Badge colors by category (matching mockup)
+    BADGE_COLORS = {
+        'company': 'background-color: #1a1a1a; color: #faf9f7;',      # Black
+        'industry': 'background-color: #6366f1; color: #ffffff;',     # Indigo
+        'competitor': 'background-color: #dc2626; color: #ffffff;',   # Red (was maroon)
+        'upstream': 'background-color: #d97706; color: #ffffff;',     # Orange/Amber
+        'downstream': 'background-color: #059669; color: #ffffff;',   # Green
+    }
+
     def build_category_section(title: str, articles: List[Dict], category: str) -> str:
         if not articles:
             return ""
@@ -14765,44 +14907,54 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
 
             # Build category-specific inline tag
             tag_html = ""
+            badge_color = BADGE_COLORS.get(category, BADGE_COLORS['company'])
+
             if category == "industry":
                 # Indigo tag with keyword
                 keyword = article.get('search_keyword', '')
                 if keyword:
-                    tag_html = f'<span style="display: inline-block; background: #4f46e5; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">{keyword.title()}</span>'
+                    tag_html = f'<span style="{badge_color}{BADGE_BASE_STYLE}">{keyword.title()}</span>'
 
             elif category == "competitor":
-                # Maroon tag with ticker or company name
+                # Red tag with ticker or company name
                 comp_ticker = article.get('feed_ticker')
                 comp_name = strip_legal_suffixes(article.get('search_keyword', 'Unknown'))
                 partner_tag = comp_ticker if comp_ticker else comp_name
-                tag_html = f'<span style="display: inline-block; background: #7c2d12; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">{partner_tag}</span>'
+                tag_html = f'<span style="{badge_color}{BADGE_BASE_STYLE}">{partner_tag}</span>'
 
             elif category == "company":
                 # Black tag with ticker
                 ticker = article.get('ticker', 'N/A')
-                tag_html = f'<span style="display: inline-block; background: #1a1a1a; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">{ticker}</span>'
+                tag_html = f'<span style="{badge_color}{BADGE_BASE_STYLE}">{ticker}</span>'
 
             domain_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
             date_str = format_date_short(article['published_at']) if article.get('published_at') else "Recent"
 
             article_links += f'''
-                <div style="padding: 8px 0; margin-bottom: 4px; border-bottom: 1px solid #e0ddd8;">
-                    <a href="{article.get('resolved_url', '#')}" style="font-family: Georgia, 'Times New Roman', serif; font-size: 14px; font-weight: 500; color: #1a1a1a; text-decoration: none; line-height: 1.5;">{tag_html}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
-                    <div style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b; margin-top: 4px;">{domain_name} • {date_str}</div>
-                </div>
+                <tr>
+                    <td style="padding: 10px 0; border-bottom: 1px solid #e0ddd8;">
+                        <a href="{article.get('resolved_url', '#')}" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">{tag_html}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
+                        <p style="margin: 4px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b;">{domain_name} · {date_str}</p>
+                    </td>
+                </tr>
             '''
 
         return f'''
-            <div style="margin-bottom: 20px;">
-                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 10px;">
-                    <tr>
-                        <td style="font-family: Georgia, 'Times New Roman', serif; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #6b6b6b; white-space: nowrap; padding-right: 12px;">{title} ({len(articles)})</td>
-                        <td style="width: 100%;"><div style="border-top: 1px solid #d4d0c8; height: 1px;"></div></td>
-                    </tr>
-                </table>
-                {article_links}
-            </div>
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 20px;">
+                <tr>
+                    <td>
+                        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 10px;">
+                            <tr>
+                                <td style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #6b6b6b; font-weight: 600; padding-right: 8px; white-space: nowrap;">{title} ({len(articles)})</td>
+                                <td width="100%" style="border-bottom: 1px solid #e0ddd8;"></td>
+                            </tr>
+                        </table>
+                        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                            {article_links}
+                        </table>
+                    </td>
+                </tr>
+            </table>
         '''
 
     html = ""
@@ -14815,16 +14967,7 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
     upstream_articles = [a for a in value_chain_articles if a.get('value_chain_type') == 'upstream']
 
     if upstream_articles:
-        upstream_html = '<div style="margin-bottom: 20px;">'
-        upstream_html += '''
-            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 10px;">
-                <tr>
-                    <td style="font-family: Georgia, 'Times New Roman', serif; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #6b6b6b; white-space: nowrap; padding-right: 12px;">UPSTREAM ({0})</td>
-                    <td style="width: 100%;"><div style="border-top: 1px solid #d4d0c8; height: 1px;"></div></td>
-                </tr>
-            </table>
-        '''.format(len(upstream_articles))
-
+        upstream_links = ""
         for article in upstream_articles:
             is_paywalled = is_paywall_article(article.get('domain', ''))
             paywall_badge = ' <span style="font-size: 10px; color: #ef4444; font-weight: 600; margin-left: 4px;">PAYWALL</span>' if is_paywalled else ''
@@ -14836,38 +14979,47 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
             ]
             star = '<span style="color: #f59e0b;">★</span> ' if is_quality else ''
 
-            # Orange tag with ticker or company name
+            # Orange/Amber tag with ticker or company name
             partner_ticker = article.get('feed_ticker')
             partner_name = strip_legal_suffixes(article.get('search_keyword', 'Unknown'))
             partner_tag = partner_ticker if partner_ticker else partner_name
-            tag_html = f'<span style="display: inline-block; background: #f97316; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">{partner_tag}</span>'
+            tag_html = f'<span style="{BADGE_COLORS["upstream"]}{BADGE_BASE_STYLE}">{partner_tag}</span>'
 
             domain_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
             date_str = format_date_short(article['published_at']) if article.get('published_at') else "Recent"
 
-            upstream_html += f'''
-                <div style="padding: 8px 0; margin-bottom: 4px; border-bottom: 1px solid #e0ddd8;">
-                    <a href="{article.get('resolved_url', '#')}" style="font-family: Georgia, 'Times New Roman', serif; font-size: 14px; font-weight: 500; color: #1a1a1a; text-decoration: none; line-height: 1.5;">{tag_html}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
-                    <div style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b; margin-top: 4px;">{domain_name} • {date_str}</div>
-                </div>
+            upstream_links += f'''
+                <tr>
+                    <td style="padding: 10px 0; border-bottom: 1px solid #e0ddd8;">
+                        <a href="{article.get('resolved_url', '#')}" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">{tag_html}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
+                        <p style="margin: 4px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b;">{domain_name} · {date_str}</p>
+                    </td>
+                </tr>
             '''
-        upstream_html += '</div>'
-        html += upstream_html
+
+        html += f'''
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 20px;">
+                <tr>
+                    <td>
+                        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 10px;">
+                            <tr>
+                                <td style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #6b6b6b; font-weight: 600; padding-right: 8px; white-space: nowrap;">Upstream ({len(upstream_articles)})</td>
+                                <td width="100%" style="border-bottom: 1px solid #e0ddd8;"></td>
+                            </tr>
+                        </table>
+                        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                            {upstream_links}
+                        </table>
+                    </td>
+                </tr>
+            </table>
+        '''
 
     # DOWNSTREAM section (separate top-level section)
     downstream_articles = [a for a in value_chain_articles if a.get('value_chain_type') == 'downstream']
 
     if downstream_articles:
-        downstream_html = '<div style="margin-bottom: 20px;">'
-        downstream_html += '''
-            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 10px;">
-                <tr>
-                    <td style="font-family: Georgia, 'Times New Roman', serif; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #6b6b6b; white-space: nowrap; padding-right: 12px;">DOWNSTREAM ({0})</td>
-                    <td style="width: 100%;"><div style="border-top: 1px solid #d4d0c8; height: 1px;"></div></td>
-                </tr>
-            </table>
-        '''.format(len(downstream_articles))
-
+        downstream_links = ""
         for article in downstream_articles:
             is_paywalled = is_paywall_article(article.get('domain', ''))
             paywall_badge = ' <span style="font-size: 10px; color: #ef4444; font-weight: 600; margin-left: 4px;">PAYWALL</span>' if is_paywalled else ''
@@ -14879,23 +15031,41 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
             ]
             star = '<span style="color: #f59e0b;">★</span> ' if is_quality else ''
 
-            # Dark green tag with ticker or company name (matches success color #1e6b4a)
+            # Green tag with ticker or company name
             partner_ticker = article.get('feed_ticker')
             partner_name = strip_legal_suffixes(article.get('search_keyword', 'Unknown'))
             partner_tag = partner_ticker if partner_ticker else partner_name
-            tag_html = f'<span style="display: inline-block; background: #1e6b4a; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">{partner_tag}</span>'
+            tag_html = f'<span style="{BADGE_COLORS["downstream"]}{BADGE_BASE_STYLE}">{partner_tag}</span>'
 
             domain_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
             date_str = format_date_short(article['published_at']) if article.get('published_at') else "Recent"
 
-            downstream_html += f'''
-                <div style="padding: 8px 0; margin-bottom: 4px; border-bottom: 1px solid #e0ddd8;">
-                    <a href="{article.get('resolved_url', '#')}" style="font-family: Georgia, 'Times New Roman', serif; font-size: 14px; font-weight: 500; color: #1a1a1a; text-decoration: none; line-height: 1.5;">{tag_html}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
-                    <div style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b; margin-top: 4px;">{domain_name} • {date_str}</div>
-                </div>
+            downstream_links += f'''
+                <tr>
+                    <td style="padding: 10px 0; border-bottom: 1px solid #e0ddd8;">
+                        <a href="{article.get('resolved_url', '#')}" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">{tag_html}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
+                        <p style="margin: 4px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b;">{domain_name} · {date_str}</p>
+                    </td>
+                </tr>
             '''
-        downstream_html += '</div>'
-        html += downstream_html
+
+        html += f'''
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 20px;">
+                <tr>
+                    <td>
+                        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 10px;">
+                            <tr>
+                                <td style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #6b6b6b; font-weight: 600; padding-right: 8px; white-space: nowrap;">Downstream ({len(downstream_articles)})</td>
+                                <td width="100%" style="border-bottom: 1px solid #e0ddd8;"></td>
+                            </tr>
+                        </table>
+                        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                            {downstream_links}
+                        </table>
+                    </td>
+                </tr>
+            </table>
+        '''
 
     return html
 
@@ -15119,10 +15289,10 @@ def generate_email_html_core(
         end_date = now_eastern - timedelta(days=1)  # Yesterday
         start_date = end_date - timedelta(days=6)   # 7-day window
 
-        # Subject: Full month name, date range
-        subject_date = f"{start_date.strftime('%B %d')}-{end_date.strftime('%d, %Y')}"
-        # Header: Abbreviated month, UPPERCASE, date range
-        current_date = f"{start_date.strftime('%b %d').upper()}-{end_date.strftime('%d, %Y').upper()}"
+        # Subject: Full month name, date range (en-dash for proper typography)
+        subject_date = f"{start_date.strftime('%B %d')}–{end_date.strftime('%d, %Y')}"
+        # Header: Abbreviated month, UPPERCASE, date range (en-dash for proper typography)
+        current_date = f"{start_date.strftime('%b %d').upper()}–{end_date.strftime('%d, %Y').upper()}"
     else:  # daily
         # Subject: Full month name
         subject_date = now_eastern.strftime("%B %d, %Y")

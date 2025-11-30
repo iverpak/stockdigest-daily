@@ -14683,7 +14683,7 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                 '''
 
             return f'''
-                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 0;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top: 20px; margin-bottom: 0;">
                     <tr>
                         <td>
                             <!-- Section Header -->
@@ -14761,7 +14761,7 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                 text = "<br><br>".join(paragraphs)
 
             return f'''
-                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 0; padding-bottom: 16px; border-bottom: 2px solid #1a1a1a;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 0; padding-bottom: 24px; border-bottom: 2px solid #1a1a1a;">
                     <tr>
                         <td>
                             <p style="margin: 0 0 12px 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: 2px; color: #8b2c24; font-weight: 600;">Bottom Line</p>
@@ -14838,7 +14838,7 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                 '''
 
             return f'''
-                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 0;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top: 20px; margin-bottom: 0;">
                     <tr>
                         <td>
                             <!-- Section Header -->
@@ -14873,7 +14873,7 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
             text = "<br><br>".join(paragraphs)
 
         return f'''
-            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 16px;">
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top: 20px; margin-bottom: 16px;">
                 <tr>
                     <td>
                         <!-- Section Header -->
@@ -14904,8 +14904,8 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
     html += build_section("📌 Bottom Line" if not strip_emojis else "Bottom Line",
                          sections.get("bottom_line", []), use_bullets=False, bold_labels=True, context_only=True)
 
-    # 16px spacer after Bottom Line black dash (consistent with all other section gaps)
-    html += '<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"><tr><td height="16" style="font-size: 0; line-height: 0;">&nbsp;</td></tr></table>'
+    # 32px spacer after Bottom Line black dash (matches metrics strip to Bottom Line gap)
+    html += '<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"><tr><td height="32" style="font-size: 0; line-height: 0;">&nbsp;</td></tr></table>'
 
     # Standard sections (bullet format)
     html += build_section("🔴 Major Developments" if not strip_emojis else "Major Developments",
@@ -14934,7 +14934,7 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
     # Only add container if at least one scenario has content
     if upside_row or downside_row:
         html += f'''
-            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 16px;">
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top: 20px; margin-bottom: 16px;">
                 {upside_row}
                 <tr>
                     <td height="16" style="font-size: 0; line-height: 0;">&nbsp;</td>

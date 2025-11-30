@@ -14440,13 +14440,21 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                 else:
                     text = item
 
-                # Apply label bolding and markdown conversion
-                processed_item = bold_bullet_labels(text, context_only=False) if bold_labels else text
-
-                # Convert "**Label**: Description" to "<strong>Label</strong> — Description"
-                # Replace the first colon after a bold label with an em-dash
+                # Key Variables format: **Label**\nDescription
+                # Convert to: <span style="...">Label</span> — Description
                 import re
-                processed_item = re.sub(r'</strong>:\s*', '</strong> — ', processed_item, count=1)
+
+                # Check for **Label** pattern at start
+                label_match = re.match(r'\*\*(.+?)\*\*\s*\n?(.*)', text, re.DOTALL)
+                if label_match:
+                    label = label_match.group(1)
+                    description = label_match.group(2).strip()
+                    # Style label with explicit font-weight and color (matching mockup)
+                    label_html = f'<span style="font-weight: 600; color: #1a1a1a;">{label}</span>'
+                    processed_item = f'{label_html} — {description}'
+                else:
+                    # Fallback: apply markdown conversion
+                    processed_item = convert_markdown_to_html(text, single_break=True)
 
                 # Determine if this is the last item (no bottom border)
                 is_last = (i == len(content) - 1)
@@ -14564,18 +14572,55 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                 else:
                     text = item
 
-                # Apply label bolding if requested
-                processed_item = bold_bullet_labels(text, context_only=False) if bold_labels else text
-                # Apply sentiment badge styling
-                processed_item = style_sentiment_badges(processed_item)
+                # Input format: **[Entity] Topic • Sentiment**\nBody text (Date)
+                # Split into header and body at first newline
+                if '\n' in text:
+                    header_raw, body_raw = text.split('\n', 1)
+                else:
+                    header_raw = text
+                    body_raw = ""
 
-                # Build bullet item with topic label on separate line from body
-                # The processed_item format is: **[Entity] Topic • Sentiment**<br>Body text (Date)
+                # Process header: Convert **text** to styled spans (not <strong>)
+                # Extract content between ** markers
+                import re
+                header_match = re.match(r'\*\*(.+?)\*\*', header_raw)
+                if header_match:
+                    header_content = header_match.group(1)
+                    # Check if header contains sentiment (has • separator)
+                    if ' • ' in header_content:
+                        topic_part, sentiment_part = header_content.rsplit(' • ', 1)
+                        # Style topic label: 14px, 600 weight, #1a1a1a, margin-right 6px
+                        topic_html = f'<span style="font-family: Arial, Helvetica, sans-serif; font-size: 14px; font-weight: 600; color: #1a1a1a; vertical-align: middle; margin-right: 6px;">{topic_part}</span>'
+                        # Style sentiment badge
+                        sentiment_styles = {
+                            'Bullish': 'background-color:#e8f5ef;color:#1e6b4a;',
+                            'Bearish': 'background-color:#fdf2f2;color:#9b2c2c;',
+                            'Mixed': 'background-color:#fef3c7;color:#92400e;',
+                            'Neutral': 'background-color:#eef0f2;color:#5a6570;',
+                        }
+                        badge_base = 'display:inline-block;font-family:Arial,Helvetica,sans-serif;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;padding:2px 8px;border-radius:2px;vertical-align:middle;'
+                        # Extract sentiment word (may have reason in parentheses)
+                        sentiment_word = sentiment_part.split('(')[0].strip()
+                        sentiment_color = sentiment_styles.get(sentiment_word, sentiment_styles['Neutral'])
+                        sentiment_html = f'<span style="{sentiment_color}{badge_base}">{sentiment_word}</span>'
+                        header_html = f'{topic_html}{sentiment_html}'
+                    else:
+                        # No sentiment - just topic label
+                        header_html = f'<span style="font-family: Arial, Helvetica, sans-serif; font-size: 14px; font-weight: 600; color: #1a1a1a; vertical-align: middle;">{header_content}</span>'
+                else:
+                    # No ** markers - use as-is with styling
+                    header_html = f'<span style="font-family: Arial, Helvetica, sans-serif; font-size: 14px; font-weight: 600; color: #1a1a1a; vertical-align: middle;">{header_raw}</span>'
+
+                # Process body: Convert markdown and clean up
+                body_html = convert_markdown_to_html(body_raw, single_break=True) if body_raw else ""
+
+                # Build bullet item with TWO separate paragraphs (matching mockup)
                 items_html += f'''
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 22px;">
                         <tr>
                             <td>
-                                <p style="margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 1.7; color: #3d3d3d;">{processed_item}</p>
+                                <p style="margin: 0 0 8px 0;">{header_html}</p>
+                                <p style="margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 1.7; color: #3d3d3d;">{body_html}</p>
                             </td>
                         </tr>
                     </table>
@@ -14886,28 +14931,33 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
         'downstream': 'background-color: #059669; color: #ffffff;',   # Green
     }
 
+    def format_article_date(dt) -> str:
+        """Format date as 'Nov 27' without parentheses for Source Articles section."""
+        if not dt:
+            return "Recent"
+        # Ensure we have a timezone-aware datetime
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        # Convert to Eastern Time
+        eastern = pytz.timezone('US/Eastern')
+        est_time = dt.astimezone(eastern)
+        # Format as "Nov 27" (no parentheses)
+        return est_time.strftime('%b %-d')
+
     def build_category_section(title: str, articles: List[Dict], category: str) -> str:
         if not articles:
             return ""
 
         article_links = ""
-        for article in articles:
+        for i, article in enumerate(articles):
             # Check if article is paywalled
             is_paywalled = is_paywall_article(article.get('domain', ''))
             paywall_badge = ' <span style="font-size: 10px; color: #ef4444; font-weight: 600; margin-left: 4px;">PAYWALL</span>' if is_paywalled else ''
 
-            # Star for FLAGGED + QUALITY articles
-            domain = article.get('domain', '')
-            is_quality = domain.lower() in [
-                'wsj.com', 'bloomberg.com', 'reuters.com', 'ft.com', 'barrons.com',
-                'cnbc.com', 'forbes.com', 'marketwatch.com', 'seekingalpha.com'
-            ]
-            # Assume article is flagged if it's in the list (this function only gets flagged articles)
-            star = '<span style="color: #f59e0b;">★</span> ' if is_quality else ''
-
             # Build category-specific inline tag
             tag_html = ""
             badge_color = BADGE_COLORS.get(category, BADGE_COLORS['company'])
+            domain = article.get('domain', '')
 
             if category == "industry":
                 # Indigo tag with keyword
@@ -14928,12 +14978,16 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
                 tag_html = f'<span style="{badge_color}{BADGE_BASE_STYLE}">{ticker}</span>'
 
             domain_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-            date_str = format_date_short(article['published_at']) if article.get('published_at') else "Recent"
+            date_str = format_article_date(article.get('published_at'))
+
+            # Last article has no border (cleaner look matching mockup)
+            is_last = (i == len(articles) - 1)
+            border_style = "" if is_last else "border-bottom: 1px solid #e0ddd8;"
 
             article_links += f'''
                 <tr>
-                    <td style="padding: 10px 0; border-bottom: 1px solid #e0ddd8;">
-                        <a href="{article.get('resolved_url', '#')}" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">{tag_html}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
+                    <td style="padding: 10px 0; {border_style}">
+                        <a href="{article.get('resolved_url', '#')}" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">{tag_html}{article.get('title', 'Untitled')}{paywall_badge}</a>
                         <p style="margin: 4px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b;">{domain_name} · {date_str}</p>
                     </td>
                 </tr>
@@ -14968,16 +15022,11 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
 
     if upstream_articles:
         upstream_links = ""
-        for article in upstream_articles:
+        for i, article in enumerate(upstream_articles):
             is_paywalled = is_paywall_article(article.get('domain', ''))
             paywall_badge = ' <span style="font-size: 10px; color: #ef4444; font-weight: 600; margin-left: 4px;">PAYWALL</span>' if is_paywalled else ''
 
             domain = article.get('domain', '')
-            is_quality = domain.lower() in [
-                'wsj.com', 'bloomberg.com', 'reuters.com', 'ft.com', 'barrons.com',
-                'cnbc.com', 'forbes.com', 'marketwatch.com', 'seekingalpha.com'
-            ]
-            star = '<span style="color: #f59e0b;">★</span> ' if is_quality else ''
 
             # Orange/Amber tag with ticker or company name
             partner_ticker = article.get('feed_ticker')
@@ -14986,12 +15035,16 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
             tag_html = f'<span style="{BADGE_COLORS["upstream"]}{BADGE_BASE_STYLE}">{partner_tag}</span>'
 
             domain_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-            date_str = format_date_short(article['published_at']) if article.get('published_at') else "Recent"
+            date_str = format_article_date(article.get('published_at'))
+
+            # Last article has no border
+            is_last = (i == len(upstream_articles) - 1)
+            border_style = "" if is_last else "border-bottom: 1px solid #e0ddd8;"
 
             upstream_links += f'''
                 <tr>
-                    <td style="padding: 10px 0; border-bottom: 1px solid #e0ddd8;">
-                        <a href="{article.get('resolved_url', '#')}" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">{tag_html}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
+                    <td style="padding: 10px 0; {border_style}">
+                        <a href="{article.get('resolved_url', '#')}" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">{tag_html}{article.get('title', 'Untitled')}{paywall_badge}</a>
                         <p style="margin: 4px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b;">{domain_name} · {date_str}</p>
                     </td>
                 </tr>
@@ -15020,16 +15073,11 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
 
     if downstream_articles:
         downstream_links = ""
-        for article in downstream_articles:
+        for i, article in enumerate(downstream_articles):
             is_paywalled = is_paywall_article(article.get('domain', ''))
             paywall_badge = ' <span style="font-size: 10px; color: #ef4444; font-weight: 600; margin-left: 4px;">PAYWALL</span>' if is_paywalled else ''
 
             domain = article.get('domain', '')
-            is_quality = domain.lower() in [
-                'wsj.com', 'bloomberg.com', 'reuters.com', 'ft.com', 'barrons.com',
-                'cnbc.com', 'forbes.com', 'marketwatch.com', 'seekingalpha.com'
-            ]
-            star = '<span style="color: #f59e0b;">★</span> ' if is_quality else ''
 
             # Green tag with ticker or company name
             partner_ticker = article.get('feed_ticker')
@@ -15038,12 +15086,16 @@ def build_articles_html(articles_by_category: Dict[str, List[Dict]]) -> str:
             tag_html = f'<span style="{BADGE_COLORS["downstream"]}{BADGE_BASE_STYLE}">{partner_tag}</span>'
 
             domain_name = get_or_create_formal_domain_name(domain) if domain else "Unknown Source"
-            date_str = format_date_short(article['published_at']) if article.get('published_at') else "Recent"
+            date_str = format_article_date(article.get('published_at'))
+
+            # Last article has no border
+            is_last = (i == len(downstream_articles) - 1)
+            border_style = "" if is_last else "border-bottom: 1px solid #e0ddd8;"
 
             downstream_links += f'''
                 <tr>
-                    <td style="padding: 10px 0; border-bottom: 1px solid #e0ddd8;">
-                        <a href="{article.get('resolved_url', '#')}" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">{tag_html}{star}{article.get('title', 'Untitled')}{paywall_badge}</a>
+                    <td style="padding: 10px 0; {border_style}">
+                        <a href="{article.get('resolved_url', '#')}" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">{tag_html}{article.get('title', 'Untitled')}{paywall_badge}</a>
                         <p style="margin: 4px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b;">{domain_name} · {date_str}</p>
                     </td>
                 </tr>

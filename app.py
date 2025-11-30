@@ -3297,6 +3297,8 @@ def validate_ticker_format(ticker: str) -> bool:
 
         # Canadian specific formats
         r'^[A-Z]{1,6}\.TO$',                     # Toronto: RY.TO, TD.TO
+        r'^[A-Z]{1,6}-UN\.TO$',                  # Canadian REIT/Trust units: CAR-UN.TO, REI-UN.TO, DIR-UN.TO
+        r'^[A-Z]{1,6}\.UN\.TO$',                 # Alternate unit format: CAR.UN.TO, BEI.UN.TO
         r'^[A-Z]{1,6}\.V$',                      # Vancouver: XXX.V
         r'^[A-Z]{1,6}\.CN$',                     # Canadian National: XXX.CN
 
@@ -3310,6 +3312,13 @@ def validate_ticker_format(ticker: str) -> bool:
         r'^[A-Z]{1,6}\.DE$',                     # Germany: SAP.DE
         r'^[A-Z]{1,6}\.PA$',                     # Paris: MC.PA
         r'^[A-Z]{1,6}\.AS$',                     # Amsterdam: ASML.AS
+
+        # Indian stock exchanges (NSE/BSE)
+        r'^[A-Z]{2,15}\.NS$',                    # NSE: HEROMOTOCO.NS, SUNPHARMA.NS, BHARTIARTL.NS, ADANIGREEN.NS
+        r'^[A-Z]{2,15}\.BO$',                    # BSE (Bombay): RELIANCE.BO
+
+        # Mexican stock exchange
+        r'^[A-Z0-9]{2,12}\.MX$',                 # BMV: FIBRAPL14.MX, FIBRAMQ12.MX
 
         # ADR formats
         r'^[A-Z]{1,6}-ADR$',                     # ADRs: NVO-ADR

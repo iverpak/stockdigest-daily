@@ -19790,20 +19790,27 @@ async def validate_ticker_endpoint(ticker: str = Query(..., min_length=1, max_le
         config = get_ticker_config(normalized)
 
         # Check if ticker exists in database (has_full_config=True means it's real, False means fallback)
-        if config and config.get('has_full_config', True):
-            # Real ticker found in database ✓
+        if not config or not config.get('has_full_config', True):
             return {
-                "valid": True,
-                "ticker": normalized,
-                "company_name": config.get("company_name", "Unknown"),
-                "exchange": config.get("exchange", "Unknown"),
-                "country": config.get("country", "Unknown")
+                "valid": False,
+                "message": "Ticker not recognized"
             }
 
-        # No matches found in database - ticker not recognized
+        # TIER 3: Country check - must be US-listed
+        country = config.get("country", "")
+        if country != "US":
+            return {
+                "valid": False,
+                "message": "US-listed companies only. Canadian and international tickers not supported."
+            }
+
+        # All checks passed - valid US ticker from our whitelist ✓
         return {
-            "valid": False,
-            "message": "Ticker not recognized"
+            "valid": True,
+            "ticker": normalized,
+            "company_name": config.get("company_name", "Unknown"),
+            "exchange": config.get("exchange", "Unknown"),
+            "country": country
         }
 
     except Exception as e:

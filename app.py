@@ -14618,8 +14618,7 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                             <!-- Section Header -->
                             <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 16px;">
                                 <tr>
-                                    <td style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 600; color: #8b2c24; padding-right: 12px; white-space: nowrap;">{display_title}</td>
-                                    <td width="100%" style="border-bottom: 1px solid #ebe8e3;"></td>
+                                    <td style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 600; color: #8b2c24;">{display_title}</td>
                                 </tr>
                             </table>
                             {rows_html}
@@ -14774,8 +14773,7 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                             <!-- Section Header -->
                             <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 16px;">
                                 <tr>
-                                    <td style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 600; color: #8b2c24; padding-right: 12px; white-space: nowrap;">{display_title}</td>
-                                    <td width="100%" style="border-bottom: 1px solid #ebe8e3;"></td>
+                                    <td style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 600; color: #8b2c24;">{display_title}</td>
                                 </tr>
                             </table>
                             {items_html}
@@ -14810,8 +14808,7 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                         <!-- Section Header -->
                         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 16px;">
                             <tr>
-                                <td style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 600; color: #8b2c24; padding-right: 12px; white-space: nowrap;">{display_title}</td>
-                                <td width="100%" style="border-bottom: 1px solid #ebe8e3;"></td>
+                                <td style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 600; color: #8b2c24;">{display_title}</td>
                             </tr>
                         </table>
                         <p style="margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 1.7; color: #3d3d3d;">{text}</p>

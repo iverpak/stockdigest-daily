@@ -15857,14 +15857,19 @@ def get_worker_id():
 def json_serialize_default(obj):
     """Custom JSON serializer for objects not serializable by default json module.
 
-    Handles datetime/date objects by converting to ISO 8601 format strings.
-    This is the standard pattern for JSON serialization of complex Python objects.
+    Handles:
+    - datetime/date objects → ISO 8601 format strings
+    - Decimal objects → float (PostgreSQL numeric columns)
 
     Used by update_job_status() to safely serialize job results that may contain
-    datetime objects from database queries (e.g., articles_by_ticker with published_at).
+    datetime objects from database queries (e.g., articles_by_ticker with published_at)
+    or Decimal values from numeric columns.
     """
+    from decimal import Decimal
     if isinstance(obj, (datetime, date)):
         return obj.isoformat()
+    if isinstance(obj, Decimal):
+        return float(obj)
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 def update_job_status(job_id: str, status: str = None, phase: str = None, progress: int = None,

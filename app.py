@@ -12788,6 +12788,202 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
     return summaries
 
 
+async def generate_executive_summary_all_phases(
+    ticker: str,
+    articles_by_ticker: Dict[str, Dict[str, List[Dict]]],
+    config: Dict,
+    report_type: str = 'daily'
+) -> Dict:
+    """
+    Generate complete executive summary (Phase 1 + Phase 2 + Phase 3).
+
+    This is the SINGLE entry point for executive summary generation.
+    Extracts AI generation from the email building functions for clean separation of concerns.
+
+    Args:
+        ticker: Stock ticker symbol
+        articles_by_ticker: Articles organized by ticker and category
+        config: Ticker configuration from get_ticker_config()
+        report_type: 'daily' or 'weekly'
+
+    Returns:
+        Dict with keys:
+        - phase3_json: Final merged JSON (Phase 1+2+3)
+        - articles_by_ticker: Original articles (for Email #2)
+        - success: bool
+        - error: str (if failed)
+    """
+    LOG.info(f"[{ticker}] 🎯 Starting executive summary generation (all phases)...")
+
+    try:
+        # CRITICAL FIX: Split value_chain into upstream/downstream BEFORE executive summary generation
+        # The executive summary module expects separate upstream/downstream categories
+        categories = articles_by_ticker.get(ticker, {})
+        value_chain_articles = categories.get("value_chain", [])
+        if value_chain_articles:
+            upstream_articles = [a for a in value_chain_articles if a.get('value_chain_type') == 'upstream']
+            downstream_articles = [a for a in value_chain_articles if a.get('value_chain_type') == 'downstream']
+            categories["upstream"] = upstream_articles
+            categories["downstream"] = downstream_articles
+            LOG.debug(f"[{ticker}] Split value_chain: upstream={len(upstream_articles)}, downstream={len(downstream_articles)}")
+
+        # ========================================================================
+        # PHASE 1+2: Generate executive summary from articles (with filing enrichment)
+        # ========================================================================
+        # This calls generate_ai_final_summaries() which runs Phase 1 and Phase 2
+        # and saves the merged result to the database
+        # ========================================================================
+
+        LOG.info(f"[{ticker}] 📝 Running Phase 1+2 (articles + filing enrichment)...")
+        summaries = await generate_ai_final_summaries(articles_by_ticker)
+
+        if not summaries or ticker not in summaries:
+            LOG.error(f"[{ticker}] ❌ Phase 1+2 generation failed - no summary returned")
+            return {
+                "success": False,
+                "error": "Phase 1+2 generation failed",
+                "phase3_json": None,
+                "articles_by_ticker": articles_by_ticker
+            }
+
+        summary_data = summaries[ticker]
+        ai_analysis_summary = summary_data.get("ai_analysis_summary")
+
+        if not ai_analysis_summary:
+            LOG.error(f"[{ticker}] ❌ Phase 1+2 generation failed - empty summary")
+            return {
+                "success": False,
+                "error": "Phase 1+2 returned empty summary",
+                "phase3_json": None,
+                "articles_by_ticker": articles_by_ticker
+            }
+
+        LOG.info(f"[{ticker}] ✅ Phase 1+2 complete, summary saved to database")
+
+        # ========================================================================
+        # PHASE 3: Context Integration + Length Enforcement
+        # ========================================================================
+        # Load Phase 2 JSON from database and run Phase 3
+        # ========================================================================
+
+        LOG.info(f"[{ticker}] 🎨 Running Phase 3 (context integration)...")
+
+        from modules.executive_summary_phase3 import generate_executive_summary_phase3
+        from modules.executive_summary_utils import filter_bullets_for_email3
+
+        # Load Phase 2 merged JSON from database (just saved by Phase 1+2)
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT summary_text FROM executive_summaries
+                WHERE ticker = %s AND summary_date = CURRENT_DATE
+                ORDER BY generated_at DESC LIMIT 1
+            """, (ticker,))
+            result = cur.fetchone()
+
+        if not result or not result['summary_text']:
+            LOG.error(f"[{ticker}] ❌ Failed to load Phase 2 JSON from database")
+            return {
+                "success": False,
+                "error": "Failed to load Phase 2 JSON from database",
+                "phase3_json": None,
+                "articles_by_ticker": articles_by_ticker
+            }
+
+        # Parse Phase 2 merged JSON
+        phase2_merged_json = json.loads(result['summary_text'])
+
+        # FILTER bullets before Phase 3 (remove relevance='none' or low impact + indirect)
+        LOG.info(f"[{ticker}] 🔍 Filtering bullets before Phase 3...")
+        filtered_json_for_phase3 = filter_bullets_for_email3(phase2_merged_json)
+
+        # Count removed bullets for logging
+        def count_bullets(json_dict):
+            count = 0
+            sections = json_dict.get('sections', {})
+            for section_name in ['major_developments', 'financial_performance', 'risk_factors',
+                               'wall_street_sentiment', 'competitive_industry_dynamics',
+                               'upcoming_catalysts', 'key_variables']:
+                count += len(sections.get(section_name, []))
+            return count
+
+        original_count = count_bullets(phase2_merged_json)
+        filtered_count = count_bullets(filtered_json_for_phase3)
+        removed_count = original_count - filtered_count
+
+        if removed_count > 0:
+            LOG.info(f"[{ticker}] 🗑️ Filtered {removed_count} low-quality bullets ({filtered_count}/{original_count} remaining)")
+        else:
+            LOG.info(f"[{ticker}] ✅ No bullets filtered (all {original_count} are high quality)")
+
+        # Get Phase 3 primary model from system config
+        primary_model = get_phase3_primary_model()
+        LOG.info(f"[{ticker}] Phase 3 primary model: {primary_model}")
+
+        # Generate Phase 3 with FILTERED JSON
+        phase3_merged_json, phase3_usage = generate_executive_summary_phase3(
+            ticker=ticker,
+            phase2_merged_json=filtered_json_for_phase3,
+            anthropic_api_key=ANTHROPIC_API_KEY,
+            gemini_api_key=GEMINI_API_KEY,
+            primary_model=primary_model
+        )
+
+        # Track Phase 3 cost
+        if phase3_usage:
+            phase3_model = phase3_usage.get("model", "")
+            if "claude" in phase3_model.lower():
+                calculate_claude_api_cost(phase3_usage, "executive_summary_phase3", model_name=phase3_model)
+            elif "gemini" in phase3_model.lower():
+                calculate_gemini_api_cost(phase3_usage, "executive_summary_phase3", model="pro", model_name=phase3_model)
+            else:
+                LOG.warning(f"[{ticker}] Phase 3 cost tracking: Unknown model '{phase3_model}'")
+
+        if not phase3_merged_json:
+            LOG.error(f"[{ticker}] ❌ Phase 3 returned no merged JSON")
+            return {
+                "success": False,
+                "error": "Phase 3 returned no merged JSON",
+                "phase3_json": None,
+                "articles_by_ticker": articles_by_ticker
+            }
+
+        # Update database with Phase 3 content
+        phase3_model = phase3_usage.get("model", "") if phase3_usage else None
+        success = update_executive_summary_with_phase3(
+            ticker=ticker,
+            phase3_merged_json=phase3_merged_json,
+            phase3_model=phase3_model
+        )
+
+        if not success:
+            LOG.error(f"[{ticker}] ❌ Failed to save Phase 3 to database")
+            return {
+                "success": False,
+                "error": "Failed to save Phase 3 to database",
+                "phase3_json": phase3_merged_json,  # Return JSON even if save failed
+                "articles_by_ticker": articles_by_ticker
+            }
+
+        LOG.info(f"[{ticker}] ✅ Phase 3 complete, all phases saved to database")
+
+        return {
+            "success": True,
+            "error": None,
+            "phase3_json": phase3_merged_json,
+            "articles_by_ticker": articles_by_ticker
+        }
+
+    except Exception as e:
+        LOG.error(f"[{ticker}] ❌ Executive summary generation failed: {e}")
+        LOG.error(f"[{ticker}] Stacktrace: {traceback.format_exc()}")
+        return {
+            "success": False,
+            "error": str(e),
+            "phase3_json": None,
+            "articles_by_ticker": articles_by_ticker
+        }
+
+
 # ------------------------------------------------------------------------------
 # 3-EMAIL SYSTEM - Article Sorting and Email Functions
 # ------------------------------------------------------------------------------
@@ -13328,9 +13524,11 @@ def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[st
 async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], period_days: int,
                               show_ai_analysis: bool = True, show_descriptions: bool = True,
                               flagged_article_ids: List[int] = None,
-                              existing_summaries: Dict[str, Dict[str, str]] = None,
                               phase3_json: Dict = None) -> str:
-    """Enhanced digest with metadata display removed but keeping all badges/emojis
+    """Build Email #2 HTML (Content QA) from articles and Phase 3 executive summary.
+
+    This is a PURE HTML building function - NO AI generation happens here.
+    AI generation is handled separately by generate_executive_summary_all_phases().
 
     Args:
         articles_by_ticker: Articles organized by ticker and category
@@ -13338,15 +13536,16 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
         show_ai_analysis: If True, show AI analysis boxes under articles (default True)
         show_descriptions: If True, show article descriptions (default True)
         flagged_article_ids: Optional list of flagged article IDs for sorting priority
-        existing_summaries: Optional pre-generated summaries (for regenerate workflow).
-                           If provided, skips summary generation and uses these instead.
-                           Format: {ticker: {"ai_analysis_summary": "...", "model_used": "..."}}
-        phase3_json: Phase 3 merged JSON (REQUIRED for Email #2 with deduplication).
-                    Email #2 is only sent after Phase 3 completes, so this should always be provided.
+        phase3_json: Phase 3 merged JSON (REQUIRED). Must be pre-generated.
+
+    Returns:
+        HTML string for Email #2
     """
 
-    # CRITICAL FIX: Split value_chain into upstream/downstream BEFORE executive summary generation
-    # The executive summary module expects separate upstream/downstream categories
+    if not phase3_json:
+        raise ValueError("phase3_json is required - call generate_executive_summary_all_phases() first")
+
+    # Split value_chain into upstream/downstream for display
     for ticker, categories in articles_by_ticker.items():
         value_chain_articles = categories.get("value_chain", [])
         if value_chain_articles:
@@ -13354,23 +13553,7 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
             downstream_articles = [a for a in value_chain_articles if a.get('value_chain_type') == 'downstream']
             categories["upstream"] = upstream_articles
             categories["downstream"] = downstream_articles
-            LOG.debug(f"[{ticker}] Split value_chain for executive summary: upstream={len(upstream_articles)}, downstream={len(downstream_articles)}")
-
-    # Generate summaries OR use existing (for regenerate workflow)
-    # CRITICAL FIX (Nov 2025): Skip generation if phase3_json is provided - Phase 3 already completed
-    # and summaries are already in the database. Regenerating would OVERWRITE Phase 3 content!
-    if existing_summaries is not None:
-        # Use pre-generated summaries (regenerate workflow - skips redundant generation)
-        openai_summaries = existing_summaries
-    elif phase3_json is not None:
-        # Phase 3 already completed - skip generation entirely
-        # The phase3_json will be used directly for formatting (line ~13553)
-        # openai_summaries is only used in the else branch which won't execute
-        openai_summaries = {}
-        LOG.info(f"Skipping executive summary generation - Phase 3 JSON provided (already in database)")
-    else:
-        # Generate summaries using Gemini (primary) with Claude fallback (production workflow)
-        openai_summaries = await generate_ai_final_summaries(articles_by_ticker)  # Legacy variable name
+            LOG.debug(f"[{ticker}] Split value_chain for display: upstream={len(upstream_articles)}, downstream={len(downstream_articles)}")
 
     # Format ticker list with company names
     ticker_display_list = []
@@ -13762,37 +13945,40 @@ def render_structured_summary_html(sections: list) -> str:
     return ''.join(html_parts)
 
 
-async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[str] = None,
-                                               show_ai_analysis: bool = True,
-                                               show_descriptions: bool = True,
-                                               flagged_article_ids: List[int] = None,
-                                               mode: str = 'daily',
-                                               report_type: str = 'daily',
-                                               send_email_enabled: bool = True) -> Dict[str, Dict[str, List[Dict]]]:
-    """Email #2: Content QA - Fetch categorized articles for digest with ticker-specific AI analysis (NEW Nov 2025: report_type for subject labels)
+async def fetch_digest_articles(hours: int = 24, tickers: List[str] = None,
+                                flagged_article_ids: List[int] = None) -> Dict:
+    """Fetch categorized articles for digest processing.
+
+    This is a PURE data fetching function - no AI generation, no email sending.
+    Returns articles organized by ticker and category for use in:
+    - generate_executive_summary_all_phases() for AI generation
+    - build_enhanced_digest_html() for Email #2 building
 
     Args:
         hours: Time window for articles
         tickers: Specific tickers to fetch, or None for all
-        show_ai_analysis: If True, include AI analysis boxes in HTML (default True)
-        show_descriptions: If True, include article descriptions in HTML (default True)
         flagged_article_ids: If provided, only fetch articles with these IDs (from triage)
-        mode: 'daily' or 'test' mode
-        report_type: 'daily' or 'weekly' for subject line labeling (NEW Nov 2025)
-        send_email_enabled: If False, skip Email #2 sending (Nov 2025: for new post-Phase-3 workflow)
+
+    Returns:
+        Dict with:
+        - articles_by_ticker: Dict[ticker] = Dict[category] = List[articles]
+        - articles: Total article count
+        - tickers: List of tickers found
+        - by_category: Category counts
+        - content_scraping_stats: Scraping statistics
     """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
 
     days = int(hours / 24) if hours >= 24 else 0
     period_label = f"{days} days" if days > 0 else f"{hours:.0f} hours"
 
-    LOG.info(f"=== FETCHING DIGEST ARTICLES (EMAIL #2: CONTENT QA) ===")
+    LOG.info(f"=== FETCHING DIGEST ARTICLES ===")
     LOG.info(f"Time window: {period_label} (cutoff: {cutoff})")
     LOG.info(f"Target tickers: {tickers or 'ALL'}")
     if flagged_article_ids is not None and len(flagged_article_ids) > 0:
         LOG.info(f"Flagged article filter: ENABLED ({len(flagged_article_ids)} IDs)")
     else:
-        LOG.info(f"ℹ️ No flagged articles provided - Email #2 will show 0 articles (expected for quiet news days)")
+        LOG.info(f"ℹ️ No flagged articles provided (quiet news day)")
 
     with db() as conn, conn.cursor() as cur:
         # Enhanced query to get articles from new schema - MATCHES triage query
@@ -13822,7 +14008,7 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
                 """, (tickers, flagged_article_ids))
             else:
                 # No flagged IDs - return empty results (quiet news day)
-                LOG.info(f"ℹ️ [{tickers}] No flagged articles - Email #2 will be empty")
+                LOG.info(f"ℹ️ [{tickers}] No flagged articles")
                 # Return empty query structure (no articles)
                 cur.execute("SELECT NULL LIMIT 0")
         else:
@@ -13850,7 +14036,7 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
                 """, (flagged_article_ids,))
             else:
                 # No flagged IDs - return empty results (quiet news day)
-                LOG.info(f"ℹ️ [ALL TICKERS] No flagged articles - Email #2 will be empty")
+                LOG.info(f"ℹ️ [ALL TICKERS] No flagged articles")
                 # Return empty query structure (no articles)
                 cur.execute("SELECT NULL LIMIT 0")
 
@@ -13980,81 +14166,13 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
         for categories in articles_by_ticker.values()
     )
 
-    # FIX #3: Don't exit early - let Phase 1 generate quiet day summary
+    # Info logging for quiet days
     if total_articles == 0:
-        LOG.info(f"ℹ️ 0 articles found - Phase 1 will generate quiet day summary")
+        LOG.info(f"ℹ️ 0 articles found (quiet news day)")
 
-    # NEW (Dec 2025): Skip HTML generation entirely when email sending is disabled
-    # Email #2 will be generated fresh after Phase 3 with deduplication info
-    if not send_email_enabled:
-        LOG.info(f"[{tickers}] Email #2 generation skipped - will be generated after Phase 3 with deduplication")
-        # Collect stats for return value
-        category_counts = {"company": 0, "industry": 0, "competitor": 0, "value_chain": 0, "upstream": 0, "downstream": 0}
-        content_stats = {"scraped": 0, "failed": 0, "skipped": 0, "ai_summaries": 0}
-        for ticker_cats in articles_by_ticker.values():
-            for cat, arts in ticker_cats.items():
-                category_counts[cat] = category_counts.get(cat, 0) + len(arts)
-                for art in arts:
-                    if art.get('scraped_content'):
-                        content_stats['scraped'] += 1
-                    elif art.get('scraping_failed'):
-                        content_stats['failed'] += 1
-                    else:
-                        content_stats['skipped'] += 1
-                    if art.get('ai_summary'):
-                        content_stats['ai_summaries'] += 1
-
-        return {
-            "status": "skipped",  # Indicates email was not sent (will be sent later)
-            "articles": total_articles,
-            "tickers": list(articles_by_ticker.keys()),
-            "by_category": category_counts,
-            "content_scraping_stats": content_stats,
-            "recipient": DIGEST_TO,
-            "articles_by_ticker": articles_by_ticker  # For Phase 3 Email #2 generation
-        }
-
-    # Generate HTML only when email sending is enabled (legacy path)
-    html = await build_enhanced_digest_html(articles_by_ticker, days if days > 0 else 1,
-                                      show_ai_analysis, show_descriptions, flagged_article_ids)
-
-    # Enhanced subject with ticker list (company names) - UPDATED HEADER
-    ticker_display_list = []
-    for ticker in articles_by_ticker.keys():
-        config = get_ticker_config(ticker)
-        company_name = config.get("company_name", ticker) if config else ticker
-        ticker_display_list.append(f"{company_name} ({ticker})")
-    ticker_list = ', '.join(ticker_display_list)
-    # NEW (Nov 2025): Add report_type label to subject
-    report_label = "(WEEKLY)" if report_type == 'weekly' else "(DAILY)"
-    subject = f"QA Content Review {report_label}: {ticker_list} - {total_articles} articles analyzed"
-
-    # Save Email #2 snapshot to database (for admin dashboard preview)
-    # Skip saving for test runs - only save production runs
-    if mode != 'test' and tickers and len(tickers) == 1:
-        ticker = tickers[0]
-        try:
-            with db() as conn, conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO email_queue (ticker, email_2_html, created_at)
-                    VALUES (%s, %s, NOW())
-                    ON CONFLICT (ticker) DO UPDATE
-                    SET email_2_html = EXCLUDED.email_2_html,
-                        updated_at = NOW()
-                """, (ticker, html))
-            LOG.debug(f"[{ticker}] Saved Email #2 snapshot to database")
-        except Exception as e:
-            LOG.error(f"[{ticker}] Failed to save Email #2 snapshot: {e}")
-            # Continue sending email even if snapshot save fails
-    elif mode == 'test':
-        LOG.debug(f"[TEST MODE] Skipping Email #2 snapshot save")
-
-    success = send_email(subject, html)
-
-    # Count by category and content scraping
+    # Collect stats for return value
     category_counts = {"company": 0, "industry": 0, "competitor": 0, "value_chain": 0, "upstream": 0, "downstream": 0}
     content_stats = {"scraped": 0, "failed": 0, "skipped": 0, "ai_summaries": 0}
-
     for ticker_cats in articles_by_ticker.values():
         for cat, arts in ticker_cats.items():
             category_counts[cat] = category_counts.get(cat, 0) + len(arts)
@@ -14065,22 +14183,35 @@ async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: 
                     content_stats['failed'] += 1
                 else:
                     content_stats['skipped'] += 1
-
                 if art.get('ai_summary'):
                     content_stats['ai_summaries'] += 1
 
     LOG.info(f"DIGEST STATS: {content_stats['ai_summaries']} articles with AI summaries out of {total_articles} total")
 
     return {
-        "status": "sent" if success else "failed",
         "articles": total_articles,
         "tickers": list(articles_by_ticker.keys()),
         "by_category": category_counts,
         "content_scraping_stats": content_stats,
-        "recipient": DIGEST_TO
+        "articles_by_ticker": articles_by_ticker
     }
 
 
+# Backward-compatible alias (deprecated - use fetch_digest_articles instead)
+async def fetch_digest_articles_with_enhanced_content(hours: int = 24, tickers: List[str] = None,
+                                               show_ai_analysis: bool = True,
+                                               show_descriptions: bool = True,
+                                               flagged_article_ids: List[int] = None,
+                                               mode: str = 'daily',
+                                               report_type: str = 'daily',
+                                               send_email_enabled: bool = True) -> Dict:
+    """DEPRECATED: Use fetch_digest_articles() instead.
+
+    This wrapper exists for backward compatibility only.
+    All parameters except hours, tickers, and flagged_article_ids are ignored.
+    """
+    LOG.warning("fetch_digest_articles_with_enhanced_content is DEPRECATED - use fetch_digest_articles() instead")
+    return await fetch_digest_articles(hours=hours, tickers=tickers, flagged_article_ids=flagged_article_ids)
 
 
 def parse_research_summary_sections(summary_text: str) -> Dict[str, List[str]]:
@@ -15937,10 +16068,19 @@ async def resolve_flagged_google_news_urls(ticker: str, flagged_article_ids: Lis
 
     return flagged_article_ids
 
-async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_article_ids: List[int] = None, mode: str = 'daily', report_type: str = 'daily'):
-    """Wrapper for digest logic with error handling - sends Stock Intelligence Email with executive summary
+async def process_scrape_phase(job_id: str, ticker: str, flagged_article_ids: List[int] = None) -> Dict:
+    """Scrape content for flagged articles.
 
-    NEW (Oct 2025): Scraping happens HERE in digest phase, AFTER Phase 1.5 URL resolution
+    This is a PURE scraping function - no AI generation, no email sending.
+    Runs AFTER Phase 1.5 URL resolution, ensuring all URLs are resolved before scraping.
+
+    Args:
+        job_id: Job ID for logging
+        ticker: Stock ticker symbol
+        flagged_article_ids: List of article IDs to scrape
+
+    Returns:
+        Dict with scraping stats (scraped, reused, failed counts)
     """
     try:
         # ============================================================================
@@ -16043,47 +16183,36 @@ async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_a
                         total_failed += len(batch)
 
                 total_successful = total_scraped + total_reused
-                LOG.info(f"[{ticker}] 📊 Processing complete: {total_successful} total successful ({total_scraped} scraped + {total_reused} reused), {total_failed} failed")
+                LOG.info(f"[{ticker}] 📊 Scraping complete: {total_successful} successful ({total_scraped} scraped + {total_reused} reused), {total_failed} failed")
+
+                return {
+                    "scraped": total_scraped,
+                    "reused": total_reused,
+                    "failed": total_failed,
+                    "total": len(articles_to_scrape)
+                }
             else:
                 LOG.info(f"[{ticker}] ✅ All flagged articles already processed")
+                return {"scraped": 0, "reused": 0, "failed": 0, "total": 0}
         else:
             LOG.info(f"[{ticker}] ⚠️ No flagged articles to scrape")
-
-        # ============================================================================
-        # PHASE 5: EMAIL #2 GENERATION (CONTENT QA)
-        # ============================================================================
-        # Now that articles are scraped, generate Email #2 with AI summaries
-        # ============================================================================
-
-        # CRITICAL: fetch_digest_articles_with_enhanced_content sends the Stock Intelligence Email
-        # which includes the executive summary via generate_ai_final_summaries()
-        fetch_digest_func = globals().get('fetch_digest_articles_with_enhanced_content')
-        if not fetch_digest_func:
-            raise RuntimeError("fetch_digest_articles_with_enhanced_content not yet defined")
-
-        # NEW (Nov 2025): Disable Email #2 sending here - it will be sent after Phase 3 with deduplication info
-        LOG.info(f"[JOB {job_id}] Calling fetch_digest (Email #2 deferred to after Phase 3) for {ticker}...")
-        if flagged_article_ids:
-            LOG.info(f"[JOB {job_id}] Filtering to {len(flagged_article_ids)} flagged articles from triage")
-
-        result = await fetch_digest_func(
-            minutes / 60,
-            [ticker],
-            show_ai_analysis=True,
-            show_descriptions=True,
-            flagged_article_ids=flagged_article_ids,
-            mode=mode,
-            report_type=report_type,
-            send_email_enabled=False  # NEW: Defer Email #2 to after Phase 3
-        )
-
-        LOG.info(f"[JOB {job_id}] fetch_digest completed for {ticker} - Phase 1+2 summary generated (Email #2 deferred)")
-        return result
+            return {"scraped": 0, "reused": 0, "failed": 0, "total": 0}
 
     except Exception as e:
-        LOG.error(f"[JOB {job_id}] DIGEST FAILED for {ticker}: {e}")
+        LOG.error(f"[JOB {job_id}] SCRAPE PHASE FAILED for {ticker}: {e}")
         LOG.error(f"[JOB {job_id}] Stacktrace: {traceback.format_exc()}")
         raise
+
+
+# Backward-compatible alias (deprecated - use process_scrape_phase instead)
+async def process_digest_phase(job_id: str, ticker: str, minutes: int, flagged_article_ids: List[int] = None, mode: str = 'daily', report_type: str = 'daily'):
+    """DEPRECATED: Use process_scrape_phase() instead.
+
+    This wrapper exists for backward compatibility only.
+    The minutes, mode, and report_type parameters are ignored.
+    """
+    LOG.warning("process_digest_phase is DEPRECATED - use process_scrape_phase() instead")
+    return await process_scrape_phase(job_id=job_id, ticker=ticker, flagged_article_ids=flagged_article_ids)
 
 # NOTE (Nov 2025): process_commit_phase() REMOVED
 # - Per-ticker GitHub commits are no longer needed
@@ -18316,429 +18445,239 @@ async def process_ticker_job(job: dict):
 
         update_job_status(job_id, progress=64)
 
-        # PHASE 2: Digest (already implemented in /cron/digest)
+        # ========================================================================
+        # PHASE 2: SCRAPING (content extraction for flagged articles)
+        # ========================================================================
         update_job_status(job_id, progress=65)
-        LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Phase 2: Digest starting...")
+        LOG.info(f"[{ticker}] 📄 [JOB {job_id}] Phase 2: Scraping starting...")
 
-        # Call digest function (defined later in file) - pass deduplicated flagged articles
-        digest_result = await process_digest_phase(
+        scrape_result = await process_scrape_phase(
             job_id=job_id,
             ticker=ticker,
-            minutes=minutes,
-            flagged_article_ids=flagged_article_ids,
-            mode=config.get('mode', 'daily'),
-            report_type=config.get('report_type', 'daily')  # NEW: Pass report_type from config
+            flagged_article_ids=flagged_article_ids
         )
 
-        update_job_status(job_id, progress=95)
+        update_job_status(job_id, progress=75)
+        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 2: Scraping complete ({scrape_result.get('scraped', 0)} scraped, {scrape_result.get('reused', 0)} reused)")
 
-        # Log detailed digest stats
-        if digest_result:
-            LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 2: Digest complete")
-            if isinstance(digest_result, dict):
-                LOG.info(f"   Status: {digest_result.get('status', 'unknown')}")
-                LOG.info(f"   Articles: {digest_result.get('articles', 0)}")
+        # ========================================================================
+        # PHASE 3: ARTICLE FETCHING (prepare data for AI generation)
+        # ========================================================================
+        LOG.info(f"[{ticker}] 📥 [JOB {job_id}] Phase 3: Fetching articles for AI generation...")
+
+        articles_result = await fetch_digest_articles(
+            hours=minutes / 60,
+            tickers=[ticker],
+            flagged_article_ids=flagged_article_ids
+        )
+
+        articles_by_ticker = articles_result.get('articles_by_ticker', {})
+        total_articles = articles_result.get('articles', 0)
+
+        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 3: Fetched {total_articles} articles")
+
+        # ========================================================================
+        # PHASE 4: EXECUTIVE SUMMARY GENERATION (Phase 1 + 2 + 3)
+        # ========================================================================
+        update_job_status(job_id, progress=80)
+        LOG.info(f"[{ticker}] 🧠 [JOB {job_id}] Phase 4: Generating executive summary (all phases)...")
+
+        ticker_config = get_ticker_config(ticker)
+        summary_result = await generate_executive_summary_all_phases(
+            ticker=ticker,
+            articles_by_ticker=articles_by_ticker,
+            config=ticker_config or {},
+            report_type=report_type
+        )
+
+        update_job_status(job_id, progress=92)
+
+        if not summary_result.get('success'):
+            LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Executive summary generation failed: {summary_result.get('error')}")
+            # Continue to emails even if summary failed - we can at least send Email #2 with articles
         else:
-            LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 2: Digest complete (no detailed stats)")
+            LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 4: Executive summary complete (all phases saved)")
 
-        # Check if cancelled after Phase 2
+        phase3_json = summary_result.get('phase3_json')
+
+        # Check if cancelled after Phase 4
         with db() as conn, conn.cursor() as cur:
             cur.execute("SELECT status FROM ticker_processing_jobs WHERE job_id = %s", (job_id,))
             current_status = cur.fetchone()
             if current_status and current_status['status'] == 'cancelled':
-                LOG.warning(f"[{ticker}] 🚫 [JOB {job_id}] Job cancelled after Phase 2, exiting")
+                LOG.warning(f"[{ticker}] 🚫 [JOB {job_id}] Job cancelled after Phase 4, exiting")
                 return
 
-        # Log resource usage after digest
-        memory_after_digest = memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else 0
+        # Log resource usage
+        memory_after_phase4 = memory_monitor.get_current_mb() if hasattr(memory_monitor, 'get_current_mb') else 0
         if DB_POOL:
             try:
                 pool_stats = DB_POOL.get_stats()
-                LOG.info(f"[{ticker}] 📊 Resource Status: Memory={memory_after_digest:.1f}MB, DB Pool={pool_stats.get('pool_size', 0)}/{pool_stats.get('pool_max', 0)} connections")
+                LOG.info(f"[{ticker}] 📊 Resource Status: Memory={memory_after_phase4:.1f}MB, DB Pool={pool_stats.get('pool_size', 0)}/{pool_stats.get('pool_max', 0)} connections")
             except:
-                LOG.info(f"[{ticker}] 📊 Resource Status: Memory={memory_after_digest:.1f}MB")
+                LOG.info(f"[{ticker}] 📊 Resource Status: Memory={memory_after_phase4:.1f}MB")
         else:
-            LOG.info(f"[{ticker}] 📊 Resource Status: Memory={memory_after_digest:.1f}MB")
+            LOG.info(f"[{ticker}] 📊 Resource Status: Memory={memory_after_phase4:.1f}MB")
 
-        # EMAIL #3: USER INTELLIGENCE REPORT (no AI analysis, no descriptions)
-        update_job_status(job_id, progress=97)
+        # ========================================================================
+        # PHASE 5: EMAIL GENERATION AND DELIVERY
+        # ========================================================================
+        update_job_status(job_id, progress=95)
 
-        # Check mode to determine Email #3 behavior
         mode = config.get('mode', 'test')
         recipients = config.get('recipients', [])
 
         try:
-            if mode == 'daily':
-                # DAILY WORKFLOW: Generate Phase 3 and queue Email #3 for users
-                # ========== Phase 3 Generation + Email #3 (DAILY MODE) ==========
-                LOG.info(f"[{ticker}] 🎨 [JOB {job_id}] Generating Phase 3 context-integrated JSON...")
+            # ========================================================================
+            # EMAIL #2: Content QA (sent to admin)
+            # ========================================================================
+            if phase3_json:
+                LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Generating Email #2 (Content QA)...")
 
                 try:
-                    from modules.executive_summary_phase3 import generate_executive_summary_phase3
-                    from modules.executive_summary_utils import filter_bullets_for_email3
+                    days = int(minutes / 60 / 24) if minutes >= 1440 else 1
+                    email2_html = await build_enhanced_digest_html(
+                        articles_by_ticker=articles_by_ticker,
+                        period_days=days,
+                        show_ai_analysis=True,
+                        show_descriptions=True,
+                        flagged_article_ids=flagged_article_ids,
+                        phase3_json=phase3_json
+                    )
 
-                    # Fetch Phase 2 merged JSON from database
-                    with db() as conn, conn.cursor() as cur:
-                        cur.execute("""
-                            SELECT summary_text FROM executive_summaries
-                            WHERE ticker = %s AND summary_date = CURRENT_DATE
-                            ORDER BY generated_at DESC LIMIT 1
-                        """, (ticker,))
-                        result = cur.fetchone()
+                    # Build subject
+                    company_name = ticker_config.get('company_name', ticker) if ticker_config else ticker
+                    report_label = "(WEEKLY)" if report_type == 'weekly' else "(DAILY)"
+                    email2_subject = f"QA Content Review {report_label}: {company_name} ({ticker}) - {total_articles} articles"
+                    if mode == 'test':
+                        email2_subject += " (TEST)"
 
-                    if result and result['summary_text']:
-                        # Parse Phase 2 merged JSON
-                        phase2_merged_json = json.loads(result['summary_text'])
+                    # Save Email #2 to database (daily mode only)
+                    if mode == 'daily':
+                        with db() as conn, conn.cursor() as cur:
+                            cur.execute("""
+                                INSERT INTO email_queue (ticker, email_2_html, created_at)
+                                VALUES (%s, %s, NOW())
+                                ON CONFLICT (ticker) DO UPDATE
+                                SET email_2_html = EXCLUDED.email_2_html,
+                                    updated_at = NOW()
+                            """, (ticker, email2_html))
+                        LOG.debug(f"[{ticker}] Saved Email #2 to database")
 
-                        # FILTER bullets before Phase 3 (remove relevance='none' or low impact + indirect)
-                        LOG.info(f"[{ticker}] 🔍 [JOB {job_id}] Filtering bullets before Phase 3...")
-                        filtered_json_for_phase3 = filter_bullets_for_email3(phase2_merged_json)
-
-                        # Count removed bullets for logging
-                        def count_bullets(json_dict):
-                            count = 0
-                            sections = json_dict.get('sections', {})
-                            for section_name in ['major_developments', 'financial_performance', 'risk_factors',
-                                               'wall_street_sentiment', 'competitive_industry_dynamics',
-                                               'upcoming_catalysts', 'key_variables']:
-                                count += len(sections.get(section_name, []))
-                            return count
-
-                        original_count = count_bullets(phase2_merged_json)
-                        filtered_count = count_bullets(filtered_json_for_phase3)
-                        removed_count = original_count - filtered_count
-
-                        if removed_count > 0:
-                            LOG.info(f"[{ticker}] 🗑️ [JOB {job_id}] Filtered {removed_count} low-quality bullets ({filtered_count}/{original_count} remaining)")
-                        else:
-                            LOG.info(f"[{ticker}] ✅ [JOB {job_id}] No bullets filtered (all {original_count} are high quality)")
-
-                        # Get Phase 3 primary model from system config
-                        primary_model = get_phase3_primary_model()
-                        LOG.info(f"[{ticker}] Phase 3 primary model: {primary_model}")
-
-                        # Generate Phase 3 with FILTERED JSON (returns merged JSON with integrated content)
-                        phase3_merged_json, phase3_usage = generate_executive_summary_phase3(
-                            ticker=ticker,
-                            phase2_merged_json=filtered_json_for_phase3,
-                            anthropic_api_key=ANTHROPIC_API_KEY,
-                            gemini_api_key=GEMINI_API_KEY,
-                            primary_model=primary_model
-                        )
-
-                        # Track Phase 3 cost based on which model was used
-                        if phase3_usage:
-                            phase3_model = phase3_usage.get("model", "")
-                            if "claude" in phase3_model.lower():
-                                # Claude primary succeeded (uses Sonnet 4.5 for Phase 3)
-                                calculate_claude_api_cost(phase3_usage, "executive_summary_phase3", model_name=phase3_model)
-                            elif "gemini" in phase3_model.lower():
-                                # Gemini fallback succeeded (uses Pro for Phase 3)
-                                calculate_gemini_api_cost(phase3_usage, "executive_summary_phase3", model="pro", model_name=phase3_model)
-                            else:
-                                # Unknown or missing model (shouldn't happen, but log warning)
-                                LOG.warning(f"[{ticker}] Phase 3 cost tracking: Unknown model '{phase3_model}', skipping cost tracking")
-
-                        if phase3_merged_json:
-                            # Update database with Phase 3 content
-                            phase3_model = phase3_usage.get("model", "") if phase3_usage else None
-                            success = update_executive_summary_with_phase3(
-                                ticker=ticker,
-                                phase3_merged_json=phase3_merged_json,
-                                phase3_model=phase3_model
-                            )
-
-                            if success:
-                                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 3 content saved to database")
-
-                                # NEW (Nov 2025): Generate and send FULL Email #2 with Phase 3 + deduplication info
-                                # Uses build_enhanced_digest_html with phase3_json to get articles list + metadata header
-                                try:
-                                    LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Generating full Email #2 with Phase 3 deduplication info...")
-
-                                    # Get articles_by_ticker from digest result (returned when send_email_enabled=False)
-                                    articles_by_ticker = digest_result.get('articles_by_ticker', {}) if digest_result else {}
-
-                                    if not articles_by_ticker:
-                                        LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No articles_by_ticker in digest result, falling back to simple Email #2")
-                                        # Fallback to simple format if articles not available
-                                        from modules.executive_summary_phase1 import convert_phase3_to_email2_sections
-                                        email2_sections = convert_phase3_to_email2_sections(phase3_merged_json)
-                                        email2_summary_html = build_executive_summary_html(email2_sections, strip_emojis=False)
-                                        ticker_config = get_ticker_config(ticker)
-                                        company_name = ticker_config.get('company_name', ticker) if ticker_config else ticker
-                                        email2_html = f"<html><body><h1>📊 QA Content Review: {company_name} ({ticker})</h1><div>{email2_summary_html}</div></body></html>"
-                                    else:
-                                        # Full Email #2 with articles list, metadata header, financial context, AND Phase 3 executive summary
-                                        days = int(minutes / 60 / 24) if minutes >= 1440 else 1
-                                        email2_html = await build_enhanced_digest_html(
-                                            articles_by_ticker=articles_by_ticker,
-                                            period_days=days,
-                                            show_ai_analysis=True,
-                                            show_descriptions=True,
-                                            flagged_article_ids=flagged_article_ids,
-                                            existing_summaries=None,  # Not needed when using phase3_json
-                                            phase3_json=phase3_merged_json  # NEW: Use Phase 3 format with deduplication
-                                        )
-
-                                    # Build subject
-                                    ticker_config = get_ticker_config(ticker)
-                                    company_name = ticker_config.get('company_name', ticker) if ticker_config else ticker
-                                    report_label = "(WEEKLY)" if report_type == 'weekly' else "(DAILY)"
-                                    total_articles = digest_result.get('articles', 0) if digest_result else 0
-                                    email2_subject = f"QA Content Review {report_label}: {company_name} ({ticker}) - {total_articles} articles analyzed"
-
-                                    # Save Email #2 to database
-                                    if mode != 'test':
-                                        with db() as conn, conn.cursor() as cur:
-                                            cur.execute("""
-                                                INSERT INTO email_queue (ticker, email_2_html, created_at)
-                                                VALUES (%s, %s, NOW())
-                                                ON CONFLICT (ticker) DO UPDATE
-                                                SET email_2_html = EXCLUDED.email_2_html,
-                                                    updated_at = NOW()
-                                            """, (ticker, email2_html))
-                                        LOG.debug(f"[{ticker}] Saved Email #2 snapshot to database")
-
-                                    # Send Email #2
-                                    email2_success = send_email(email2_subject, email2_html)
-                                    if email2_success:
-                                        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #2 sent with Phase 3 deduplication + articles list")
-                                    else:
-                                        LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Email #2 send failed")
-
-                                except Exception as e:
-                                    LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Email #2 generation failed: {e}")
-                                    LOG.error(f"[{ticker}] Stacktrace: {traceback.format_exc()}")
-                                    # Continue to Email #3 even if Email #2 fails
-
-                                # Queue Email #3 (user-facing) for 8:30 AM send
-                                if not recipients:
-                                    LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No recipients for Email #3, skipping queue save")
-                                else:
-                                    LOG.info(f"[{ticker}] 💾 [JOB {job_id}] Saving Email #3 to queue ({len(recipients)} recipients)...")
-
-                                    # Generate Email #3 HTML with placeholder token
-                                    email3_data = generate_email_html_core(
-                                        ticker=ticker,
-                                        hours=int(minutes/60),
-                                        recipient_email=None,  # Use {{UNSUBSCRIBE_TOKEN}} placeholder
-                                        report_type=report_type  # NEW: Pass report_type for section filtering
-                                    )
-
-                                    if email3_data:
-                                        # Save Email #3 to email_queue table
-                                        config = get_ticker_config(ticker)
-                                        company_name = config.get('company_name', ticker) if config else ticker
-                                        is_production = (mode == 'daily')
-
-                                        with db() as conn, conn.cursor() as cur:
-                                            cur.execute("""
-                                                INSERT INTO email_queue (
-                                                    ticker, company_name, recipients, email_html, email_subject,
-                                                    article_count, status, is_production, report_type, summary_date,
-                                                    heartbeat, created_at
-                                                )
-                                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_DATE, NOW(), NOW())
-                                                ON CONFLICT (ticker) DO UPDATE
-                                                SET company_name = EXCLUDED.company_name,
-                                                    recipients = EXCLUDED.recipients,
-                                                    email_html = EXCLUDED.email_html,
-                                                    email_subject = EXCLUDED.email_subject,
-                                                    article_count = EXCLUDED.article_count,
-                                                    status = 'ready',
-                                                    error_message = NULL,
-                                                    is_production = EXCLUDED.is_production,
-                                                    report_type = EXCLUDED.report_type,
-                                                    summary_date = EXCLUDED.summary_date,
-                                                    heartbeat = NOW(),
-                                                    updated_at = NOW()
-                                            """, (
-                                                ticker, company_name, recipients,
-                                                email3_data['html'], email3_data['subject'],
-                                                email3_data['article_count'], 'ready', is_production, report_type
-                                            ))
-                                            conn.commit()
-
-                                        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #3 saved to queue (status=ready, {email3_data['article_count']} articles)")
-
-                                        # Send preview to admin
-                                        admin_email = os.getenv("ADMIN_EMAIL", DIGEST_TO)
-                                        if admin_email:
-                                            try:
-                                                preview_subject = f"[PREVIEW] {email3_data['subject']}"
-                                                send_email(preview_subject, email3_data['html'], to=admin_email)
-                                                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #3 preview sent to admin")
-                                            except Exception as e:
-                                                LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send Email #3 preview: {e}")
-                                    else:
-                                        LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Failed to generate Email #3 HTML")
-                            else:
-                                LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Failed to update database with Phase 3")
-                        else:
-                            LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Phase 3 returned no merged JSON")
+                    # Send Email #2 to admin
+                    email2_success = send_email(email2_subject, email2_html)
+                    if email2_success:
+                        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #2 sent to admin")
                     else:
-                        LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No Phase 2 JSON found for Phase 3 processing")
+                        LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Email #2 send failed")
 
                 except Exception as e:
-                    LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Phase 3 generation/queue failed: {e}", exc_info=True)
-                    # Non-fatal - Email #2 already sent to admin, continue to GitHub commit
-                # ========== END Phase 3 ==========
+                    LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Email #2 generation failed: {e}")
+                    LOG.error(f"[{ticker}] Stacktrace: {traceback.format_exc()}")
             else:
-                # TEST WORKFLOW: Generate Phase 3 and send Email #3 to admin
-                # ========== Phase 3 Generation + Email #3 (TEST MODE) ==========
-                LOG.info(f"[{ticker}] 🎨 [JOB {job_id}] Generating Phase 3 context-integrated JSON...")
+                LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No Phase 3 JSON - skipping Email #2")
 
+            # ========================================================================
+            # EMAIL #3: User Intelligence Report
+            # ========================================================================
+            update_job_status(job_id, progress=97)
+            LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Generating Email #3 (Stock Intelligence)...")
+
+            if phase3_json:
                 try:
-                    from modules.executive_summary_phase3 import generate_executive_summary_phase3
-                    from modules.executive_summary_utils import filter_bullets_for_email3
+                    # Generate Email #3 HTML
+                    email3_data = generate_email_html_core(
+                        ticker=ticker,
+                        hours=int(minutes/60),
+                        recipient_email=None,  # Use {{UNSUBSCRIBE_TOKEN}} placeholder
+                        report_type=report_type
+                    )
 
-                    # Fetch Phase 2 merged JSON from database
-                    with db() as conn, conn.cursor() as cur:
-                        cur.execute("""
-                            SELECT summary_text FROM executive_summaries
-                            WHERE ticker = %s AND summary_date = CURRENT_DATE
-                            ORDER BY generated_at DESC LIMIT 1
-                        """, (ticker,))
-                        result = cur.fetchone()
+                    if email3_data:
+                        if mode == 'daily':
+                            # DAILY MODE: Queue for 8:30 AM send
+                            if recipients:
+                                company_name = ticker_config.get('company_name', ticker) if ticker_config else ticker
 
-                    if result and result['summary_text']:
-                        # Parse Phase 2 merged JSON
-                        phase2_merged_json = json.loads(result['summary_text'])
+                                with db() as conn, conn.cursor() as cur:
+                                    cur.execute("""
+                                        INSERT INTO email_queue (
+                                            ticker, company_name, recipients, email_html, email_subject,
+                                            article_count, status, is_production, report_type, summary_date,
+                                            heartbeat, created_at
+                                        )
+                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_DATE, NOW(), NOW())
+                                        ON CONFLICT (ticker) DO UPDATE
+                                        SET company_name = EXCLUDED.company_name,
+                                            recipients = EXCLUDED.recipients,
+                                            email_html = EXCLUDED.email_html,
+                                            email_subject = EXCLUDED.email_subject,
+                                            article_count = EXCLUDED.article_count,
+                                            status = 'ready',
+                                            error_message = NULL,
+                                            is_production = EXCLUDED.is_production,
+                                            report_type = EXCLUDED.report_type,
+                                            summary_date = EXCLUDED.summary_date,
+                                            heartbeat = NOW(),
+                                            updated_at = NOW()
+                                    """, (
+                                        ticker, company_name, recipients,
+                                        email3_data['html'], email3_data['subject'],
+                                        email3_data['article_count'], 'ready', True, report_type
+                                    ))
+                                    conn.commit()
 
-                        # FILTER bullets before Phase 3 (remove relevance='none' or low impact + indirect)
-                        LOG.info(f"[{ticker}] 🔍 [JOB {job_id}] Filtering bullets before Phase 3...")
-                        filtered_json_for_phase3 = filter_bullets_for_email3(phase2_merged_json)
+                                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #3 queued for {len(recipients)} recipients")
 
-                        # Get Phase 3 primary model from system config
-                        primary_model = get_phase3_primary_model()
-                        LOG.info(f"[{ticker}] Phase 3 primary model: {primary_model}")
-
-                        # Generate Phase 3 with FILTERED JSON (returns merged JSON with integrated content)
-                        phase3_merged_json, phase3_usage = generate_executive_summary_phase3(
-                            ticker=ticker,
-                            phase2_merged_json=filtered_json_for_phase3,
-                            anthropic_api_key=ANTHROPIC_API_KEY,
-                            gemini_api_key=GEMINI_API_KEY,
-                            primary_model=primary_model
-                        )
-
-                        # Track Phase 3 cost based on which model was used
-                        if phase3_usage:
-                            phase3_model = phase3_usage.get("model", "")
-                            if "claude" in phase3_model.lower():
-                                # Claude primary succeeded (uses Sonnet 4.5 for Phase 3)
-                                calculate_claude_api_cost(phase3_usage, "executive_summary_phase3", model_name=phase3_model)
-                            elif "gemini" in phase3_model.lower():
-                                # Gemini fallback succeeded (uses Pro for Phase 3)
-                                calculate_gemini_api_cost(phase3_usage, "executive_summary_phase3", model="pro", model_name=phase3_model)
+                                # Send preview to admin
+                                try:
+                                    preview_subject = f"[PREVIEW] {email3_data['subject']}"
+                                    send_email(preview_subject, email3_data['html'])
+                                    LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #3 preview sent to admin")
+                                except Exception as e:
+                                    LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send preview: {e}")
                             else:
-                                # Unknown or missing model (shouldn't happen, but log warning)
-                                LOG.warning(f"[{ticker}] Phase 3 cost tracking: Unknown model '{phase3_model}', skipping cost tracking")
+                                LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No recipients - skipping Email #3 queue")
 
-                        if phase3_merged_json:
-                            # Update database with Phase 3 content
-                            phase3_model = phase3_usage.get("model", "") if phase3_usage else None
-                            success = update_executive_summary_with_phase3(
-                                ticker=ticker,
-                                phase3_merged_json=phase3_merged_json,
-                                phase3_model=phase3_model
+                        else:
+                            # TEST MODE: Send directly to admin
+                            editorial_result = send_user_intelligence_report(
+                                hours=int(minutes/60),
+                                tickers=[ticker],
+                                recipient_email=DIGEST_TO,
+                                summary_date=datetime.now().date(),
+                                report_type=report_type
                             )
 
-                            if success:
-                                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 3 content saved to database")
-
-                                # NEW (Nov 2025): Generate and send FULL Email #2 with Phase 3 + deduplication info (TEST MODE)
-                                try:
-                                    LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Generating full Email #2 with Phase 3 deduplication info (test mode)...")
-
-                                    # Get articles_by_ticker from digest result (returned when send_email_enabled=False)
-                                    articles_by_ticker = digest_result.get('articles_by_ticker', {}) if digest_result else {}
-
-                                    if not articles_by_ticker:
-                                        LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No articles_by_ticker in digest result, falling back to simple Email #2 (test mode)")
-                                        # Fallback to simple format if articles not available
-                                        from modules.executive_summary_phase1 import convert_phase3_to_email2_sections
-                                        email2_sections = convert_phase3_to_email2_sections(phase3_merged_json)
-                                        email2_summary_html = build_executive_summary_html(email2_sections, strip_emojis=False)
-                                        ticker_config = get_ticker_config(ticker)
-                                        company_name = ticker_config.get('company_name', ticker) if ticker_config else ticker
-                                        email2_html = f"<html><body><h1>📊 QA Content Review (TEST): {company_name} ({ticker})</h1><div>{email2_summary_html}</div></body></html>"
-                                    else:
-                                        # Full Email #2 with articles list, metadata header, financial context, AND Phase 3 executive summary
-                                        days = int(minutes / 60 / 24) if minutes >= 1440 else 1
-                                        email2_html = await build_enhanced_digest_html(
-                                            articles_by_ticker=articles_by_ticker,
-                                            period_days=days,
-                                            show_ai_analysis=True,
-                                            show_descriptions=True,
-                                            flagged_article_ids=flagged_article_ids,
-                                            existing_summaries=None,  # Not needed when using phase3_json
-                                            phase3_json=phase3_merged_json  # NEW: Use Phase 3 format with deduplication
-                                        )
-
-                                    # Build subject
-                                    ticker_config = get_ticker_config(ticker)
-                                    company_name = ticker_config.get('company_name', ticker) if ticker_config else ticker
-                                    report_label = "(WEEKLY)" if report_type == 'weekly' else "(DAILY)"
-                                    total_articles = digest_result.get('articles', 0) if digest_result else 0
-                                    email2_subject = f"QA Content Review {report_label}: {company_name} ({ticker}) - {total_articles} articles (TEST)"
-
-                                    # Send Email #2 (test mode - no database save)
-                                    email2_success = send_email(email2_subject, email2_html)
-                                    if email2_success:
-                                        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #2 sent with Phase 3 deduplication + articles list (test mode)")
-                                    else:
-                                        LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Email #2 send failed (test mode)")
-
-                                except Exception as e:
-                                    LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Email #2 generation failed (test mode): {e}")
-                                    LOG.error(f"[{ticker}] Stacktrace: {traceback.format_exc()}")
-                                    # Continue to Email #3 even if Email #2 fails
-
-                                # Send Email #3 (Stock Intelligence) immediately to admin (test mode)
-                                LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Sending Email #3 (Stock Intelligence) to admin (test mode)...")
-                                editorial_result = send_user_intelligence_report(
-                                    hours=int(minutes/60),
-                                    tickers=[ticker],
-                                    recipient_email=DIGEST_TO,
-                                    summary_date=datetime.now().date(),
-                                    report_type=report_type
-                                )
-
-                                if editorial_result and editorial_result.get('status') == 'sent':
-                                    LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #3 (Stock Intelligence) sent to admin")
-                                else:
-                                    LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Email #3 send failed (non-fatal)")
+                            if editorial_result and editorial_result.get('status') == 'sent':
+                                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #3 sent to admin (test mode)")
                             else:
-                                LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Failed to update database with Phase 3")
-                        else:
-                            LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Phase 3 returned no merged JSON")
+                                LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Email #3 send failed")
                     else:
-                        LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No Phase 2 JSON found for Phase 3 processing")
+                        LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Failed to generate Email #3 HTML")
 
                 except Exception as e:
-                    LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Phase 3 generation/send failed: {e}", exc_info=True)
-                    # Non-fatal - Email #2 already sent to admin, continue to GitHub commit
-                # ========== END Phase 3 ==========
-        except Exception as e:
-            LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Digest phase failed: {e}")
-            # Continue to GitHub commit even if digest fails (Option A)
+                    LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Email #3 generation failed: {e}")
+                    LOG.error(f"[{ticker}] Stacktrace: {traceback.format_exc()}")
+            else:
+                LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] No Phase 3 JSON - skipping Email #3")
 
-        # Check if cancelled after Phase 3
+        except Exception as e:
+            LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Email phase failed: {e}")
+            LOG.error(f"[{ticker}] Stacktrace: {traceback.format_exc()}")
+            # Continue to finalization even if emails fail
+
+        # Check if cancelled after emails
         with db() as conn, conn.cursor() as cur:
             cur.execute("SELECT status FROM ticker_processing_jobs WHERE job_id = %s", (job_id,))
             current_status = cur.fetchone()
             if current_status and current_status['status'] == 'cancelled':
-                LOG.warning(f"[{ticker}] 🚫 [JOB {job_id}] Job cancelled after digest, exiting")
+                LOG.warning(f"[{ticker}] 🚫 [JOB {job_id}] Job cancelled after emails, exiting")
                 return
 
-        # NOTE (Nov 2025): Per-ticker GitHub commits REMOVED
-        # - CSV is source of truth, database doesn't change during processing
-        # - Eliminates unnecessary commits and git history noise
-        # - Daily cron commit (if needed) handles any legitimate changes
-
-        # PHASE 3: Complete
+        # ========================================================================
+        # FINALIZATION
+        # ========================================================================
         update_job_status(job_id, progress=99)
         LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Finalizing job...")
 
@@ -18756,8 +18695,9 @@ async def process_ticker_job(job: dict):
         result = {
             "ticker": ticker,
             "ingest": ingest_result,
-            "digest": digest_result,
-            "metadata_committed": True,  # Committed after Phase 1
+            "scrape": scrape_result,
+            "articles": articles_result,
+            "summary": {"success": summary_result.get('success'), "error": summary_result.get('error')},
             "duration_seconds": duration,
             "memory_mb": memory_used
         }
@@ -29445,8 +29385,7 @@ async def regenerate_email_api(request: Request):
                                 show_ai_analysis=True,
                                 show_descriptions=True,
                                 flagged_article_ids=flagged_article_ids,
-                                existing_summaries=None,  # Not needed when using phase3_json
-                                phase3_json=phase3_merged_json  # NEW: Use Phase 3 format with deduplication
+                                phase3_json=phase3_merged_json
                             )
 
                             # Build subject

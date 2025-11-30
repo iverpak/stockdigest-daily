@@ -14611,7 +14611,7 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                 '''
 
             return f'''
-                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top: 12px; margin-bottom: 28px;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 28px;">
                     <tr>
                         <td>
                             <!-- Section Header -->
@@ -14658,15 +14658,14 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                 border_color = "#c0392b"
                 header_color = "#9b2c2c"
 
+            # Return just the box (no outer margin - will be wrapped in container at call site)
             return f'''
-                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 16px;">
-                    <tr>
-                        <td style="padding: 20px; background-color: {bg_color}; border-left: 3px solid {border_color};">
-                            <p style="margin: 0 0 10px 0; font-family: Arial, Helvetica, sans-serif; font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 700; color: {header_color};">{display_title}</p>
-                            <p style="margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 1.65; color: #3d3d3d;">{text}</p>
-                        </td>
-                    </tr>
-                </table>
+                <tr>
+                    <td style="padding: 20px; background-color: {bg_color}; border-left: 3px solid {border_color};">
+                        <p style="margin: 0 0 10px 0; font-family: Arial, Helvetica, sans-serif; font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 700; color: {header_color};">{display_title}</p>
+                        <p style="margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 1.65; color: #3d3d3d;">{text}</p>
+                    </td>
+                </tr>
             '''
 
         # ============================================================
@@ -14767,7 +14766,7 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                 '''
 
             return f'''
-                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top: 12px; margin-bottom: 28px;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 28px;">
                     <tr>
                         <td>
                             <!-- Section Header -->
@@ -14803,7 +14802,7 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
             text = "<br><br>".join(paragraphs)
 
         return f'''
-            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top: 12px; margin-bottom: 28px;">
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 28px;">
                 <tr>
                     <td>
                         <!-- Section Header -->
@@ -14852,10 +14851,25 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
     # Three new top-level sections (Oct 2025 - upgraded from sub-sections)
     # Upside/Downside are PARAGRAPHS (context_only=True to avoid bolding colons in prose)
     # Key Variables are BULLETS (full bolding for "Label: Detail" patterns)
-    html += build_section("📈 Upside Scenario" if not strip_emojis else "Upside Scenario",
+
+    # Wrap Upside/Downside in single container with 16px spacer between them (matching reference)
+    upside_row = build_section("📈 Upside Scenario" if not strip_emojis else "Upside Scenario",
                          sections.get("upside_scenario", []), use_bullets=False, bold_labels=True, context_only=True)
-    html += build_section("📉 Downside Scenario" if not strip_emojis else "Downside Scenario",
+    downside_row = build_section("📉 Downside Scenario" if not strip_emojis else "Downside Scenario",
                          sections.get("downside_scenario", []), use_bullets=False, bold_labels=True, context_only=True)
+
+    # Only add container if at least one scenario has content
+    if upside_row or downside_row:
+        html += f'''
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 28px;">
+                {upside_row}
+                <tr>
+                    <td height="16" style="font-size: 0; line-height: 0;">&nbsp;</td>
+                </tr>
+                {downside_row}
+            </table>
+        '''
+
     html += build_section("🔍 Key Variables to Monitor" if not strip_emojis else "Key Variables to Monitor",
                          sections.get("key_variables", []), use_bullets=True, bold_labels=True)
 

@@ -14462,7 +14462,7 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                 processed_item = bold_bullet_labels(text, context_only=False) if bold_labels else text
                 # Apply sentiment badge styling (color-coded Bullish/Bearish/Mixed/Neutral)
                 processed_item = style_sentiment_badges(processed_item)
-                bullet_html += f'<li style="margin-bottom: 8px; font-size: 14px; line-height: 1.7; color: #3d3d3d;">{processed_item}</li>'
+                bullet_html += f'<li style="margin-bottom: 8px; font-family: Georgia, \'Times New Roman\', serif; font-size: 14px; line-height: 1.7; color: #3d3d3d;">{processed_item}</li>'
 
             # Determine header color based on section title
             # Bottom Line gets terracotta (#8b2c24), all others get muted gray (#6b6b6b)
@@ -14518,12 +14518,13 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
             header_color = "#8b2c24" if is_bottom_line else "#6b6b6b"
 
             # Special background tints for upside/downside scenarios
+            base_style = "margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: 14px; line-height: 1.7; color: #3d3d3d;"
             if is_upside:
-                content_style = "margin: 0; font-size: 14px; line-height: 1.7; color: #3d3d3d; background-color: #f0fdf4; padding: 12px; border-left: 3px solid #1e6b4a; border-radius: 4px;"
+                content_style = f"{base_style} background-color: #f0fdf4; padding: 12px; border-left: 3px solid #1e6b4a; border-radius: 4px;"
             elif is_downside:
-                content_style = "margin: 0; font-size: 14px; line-height: 1.7; color: #3d3d3d; background-color: #fef2f2; padding: 12px; border-left: 3px solid #9b2c2c; border-radius: 4px;"
+                content_style = f"{base_style} background-color: #fef2f2; padding: 12px; border-left: 3px solid #9b2c2c; border-radius: 4px;"
             else:
-                content_style = "margin: 0; font-size: 14px; line-height: 1.7; color: #3d3d3d;"
+                content_style = base_style
 
             return f'''
                 <div style="margin-bottom: 24px;">

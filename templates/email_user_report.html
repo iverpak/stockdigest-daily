@@ -102,17 +102,17 @@
                             <!-- Header Main Row -->
                             <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
                                 <tr>
-                                    <td valign="bottom" style="width: 60%;" class="mobile-stack mobile-center">
+                                    <td valign="top" style="width: 60%;" class="mobile-stack mobile-center">
                                         <h1 style="margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: 34px; font-weight: normal; line-height: 1.1; color: #1a1a1a;">{{ company_name }}</h1>
                                         <p style="margin: 8px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #6b6b6b;">
                                             <span style="color: #8b2c24; font-weight: 600;">{{ ticker }}</span>{% if sector %} · {{ sector }}{% endif %}
                                         </p>
                                     </td>
-                                    <td valign="bottom" align="right" style="width: 40%;" class="mobile-stack mobile-center">
+                                    <td valign="top" style="width: 40%;" class="mobile-stack mobile-center">
                                         <!--[if mso]><br><![endif]-->
                                         {% if stock_price %}
                                         <p style="margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: 34px; font-weight: normal; color: #1a1a1a;">{{ stock_price }}</p>
-                                        <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="right" class="mobile-center" style="margin-top: 6px;">
+                                        <table role="presentation" cellpadding="0" cellspacing="0" border="0" class="mobile-center" style="margin-top: 6px;">
                                             <tr>
                                                 {% if price_change_pct %}
                                                 <td align="center" style="font-family: Arial, Helvetica, sans-serif; font-size: 12px; font-weight: 500; padding-right: 16px;">

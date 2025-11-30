@@ -10,21 +10,22 @@
     <style>
         :root {
             --ink: #0a0f1c;
-            --ink-light: #1a2234;
-            --ink-muted: #4a5568;
-            --paper: #fafbfc;
-            --paper-warm: #f7f6f3;
+            --ink-light: #3d3d3d;
+            --ink-muted: #6b6b6b;
+            --paper: #faf9f7;
+            --paper-warm: #f5f3ef;
             --accent: #1e40af;
             --accent-light: #3b82f6;
-            --success: #059669;
-            --success-light: #d1fae5;
-            --warning: #d97706;
+            --success: #1e6b4a;
+            --success-light: #e8f5ef;
+            --warning: #92400e;
             --warning-light: #fef3c7;
-            --danger: #dc2626;
-            --danger-light: #fee2e2;
-            --neutral-light: #e5e7eb;
-            --border: #e2e4e9;
-            --border-strong: #cbd5e1;
+            --danger: #9b2c2c;
+            --danger-light: #fdf2f2;
+            --neutral: #5a6570;
+            --neutral-light: #eef0f2;
+            --border: #e0ddd8;
+            --border-light: #ebe8e3;
         }
 
         * {
@@ -52,7 +53,7 @@
             left: 0;
             right: 0;
             z-index: 100;
-            background: rgba(250, 251, 252, 0.92);
+            background: rgba(250, 249, 247, 0.92);
             backdrop-filter: blur(12px);
             border-bottom: 1px solid var(--border);
             padding: 0 24px;
@@ -100,19 +101,6 @@
 
         .hero-content {
             max-width: 780px;
-        }
-
-        .hero-badge {
-            display: inline-block;
-            background: var(--accent);
-            color: white;
-            padding: 6px 14px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 600;
-            letter-spacing: 0.5px;
-            margin-bottom: 24px;
-            text-transform: uppercase;
         }
 
         .hero h1 {
@@ -315,17 +303,6 @@
             color: var(--ink-muted);
         }
 
-        .exclusions-note {
-            text-align: center;
-            font-size: 14px;
-            color: var(--ink-muted);
-            margin-top: 8px;
-        }
-
-        .exclusions-note strong {
-            color: var(--ink);
-        }
-
         @media (max-width: 900px) {
             .enrichment-grid {
                 grid-template-columns: repeat(2, 1fr);
@@ -367,7 +344,7 @@
         }
 
         .report-container {
-            background: #f8f9fa;
+            background: var(--paper-warm);
             border-radius: 12px;
             padding: 24px;
             box-shadow: 0 4px 24px rgba(0,0,0,0.08);
@@ -376,7 +353,7 @@
         .report-scroll {
             max-height: 700px;
             overflow-y: auto;
-            background: white;
+            background: var(--paper);
             border-radius: 8px;
             box-shadow: 0 4px 12px rgba(0,0,0,0.08);
         }
@@ -774,31 +751,56 @@
             </div>
             <div class="report-container">
                 <div class="report-scroll">
-                    <!-- Embedded AAPL Report -->
-                    <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                    <!-- Embedded AAPL Report - Email-Safe Version -->
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color: #faf9f7; font-family: Arial, Helvetica, sans-serif;">
+
                         <!-- Header -->
                         <tr>
-                            <td style="padding: 18px 24px 30px 24px; background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: #ffffff; border-radius: 8px 8px 0 0;">
-                                <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                            <td style="padding: 32px 32px 28px; border-bottom: 1px solid #e0ddd8;">
+                                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
                                     <tr>
-                                        <td style="width: 58%;">
-                                            <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">WEAVARA DAILY MORNING BRIEF</div>
+                                        <td style="font-family: Georgia, 'Times New Roman', serif; font-size: 12px; letter-spacing: 2px; text-transform: uppercase; color: #6b6b6b;">Weavara Daily Brief</td>
+                                        <td align="right" style="font-size: 12px; color: #6b6b6b;">Nov 27, 2025 · Last Close</td>
+                                    </tr>
+                                </table>
+                                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top: 20px;">
+                                    <tr>
+                                        <td valign="bottom">
+                                            <h1 style="margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: 32px; font-weight: normal; color: #1a1a1a;">Apple Inc.</h1>
+                                            <p style="margin: 8px 0 0 0; font-size: 13px; color: #6b6b6b;"><span style="color: #8b2c24; font-weight: 600;">AAPL</span> · Information Technology</p>
                                         </td>
-                                        <td align="right" style="width: 42%;">
-                                            <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0px; opacity: 0.85; font-weight: 600; color: #ffffff;">NOV 27, 2025 • LAST CLOSE</div>
+                                        <td align="right" valign="bottom">
+                                            <p style="margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: 32px; color: #1a1a1a;">$277.55</p>
+                                            <p style="margin: 6px 0 0 0; font-size: 12px;">
+                                                <span style="color: #6b6b6b;">1D</span> <span style="color: #1e6b4a; font-weight: 500;">+0.21%</span>
+                                                <span style="color: #6b6b6b; margin-left: 12px;">YTD</span> <span style="color: #1e6b4a; font-weight: 500;">+13.82%</span>
+                                            </p>
                                         </td>
                                     </tr>
+                                </table>
+                            </td>
+                        </tr>
+
+                        <!-- Metrics Strip -->
+                        <tr>
+                            <td style="background-color: #f5f3ef; border-bottom: 1px solid #e0ddd8;">
+                                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
                                     <tr>
-                                        <td style="width: 58%; vertical-align: top;">
-                                            <h1 style="margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; line-height: 1; color: #ffffff;">Apple Inc.</h1>
-                                            <div style="margin-top: 10px; font-size: 13px; opacity: 0.9; font-weight: 500; color: #ffffff;">AAPL • Information Technology</div>
+                                        <td width="25%" align="center" style="padding: 14px 10px; border-right: 1px solid #e0ddd8;">
+                                            <p style="margin: 0 0 4px 0; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #6b6b6b;">Market Cap</p>
+                                            <p style="margin: 0; font-size: 13px; font-weight: 600; color: #1a1a1a;">$4.11T</p>
                                         </td>
-                                        <td align="right" style="vertical-align: top; width: 42%;">
-                                            <div style="display: inline-block; text-align: right;">
-                                                <div style="font-size: 28px; font-weight: 700; line-height: 1; margin: 0; color: #ffffff;">$277.55</div>
-                                                <div style="font-size: 14px; color: #4ade80; font-weight: 600; margin-top: 10px;">1D: +0.21%</div>
-                                                <div style="font-size: 14px; color: #4ade80; font-weight: 600; margin-top: 4px;">YTD: +13.82%</div>
-                                            </div>
+                                        <td width="25%" align="center" style="padding: 14px 10px; border-right: 1px solid #e0ddd8;">
+                                            <p style="margin: 0 0 4px 0; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #6b6b6b;">Enterprise Value</p>
+                                            <p style="margin: 0; font-size: 13px; font-weight: 600; color: #1a1a1a;">$4.19T</p>
+                                        </td>
+                                        <td width="25%" align="center" style="padding: 14px 10px; border-right: 1px solid #e0ddd8;">
+                                            <p style="margin: 0 0 4px 0; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #6b6b6b;">Daily Volume</p>
+                                            <p style="margin: 0; font-size: 13px; font-weight: 600; color: #1a1a1a;">0.8x Avg</p>
+                                        </td>
+                                        <td width="25%" align="center" style="padding: 14px 10px;">
+                                            <p style="margin: 0 0 4px 0; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #6b6b6b;">52-Week Range</p>
+                                            <p style="margin: 0; font-size: 13px; font-weight: 600; color: #1a1a1a;">$169.21 – $280.38</p>
                                         </td>
                                     </tr>
                                 </table>
@@ -807,209 +809,493 @@
 
                         <!-- Content -->
                         <tr>
-                            <td style="padding: 24px 24px 24px 24px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+                            <td style="padding: 32px;">
 
                                 <!-- Bottom Line -->
-                                <div style="margin-bottom: 20px;">
-                                    <h2 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">Bottom Line</h2>
-                                    <div style="margin: 0; font-size: 13px; line-height: 1.6; color: #374151;">Apple is projected to overtake Samsung as the world's top smartphone vendor in 2025 for the first time since 2011, with Counterpoint Research forecasting 19.4% market share vs. Samsung's 18.7% driven by 10% YoY shipment growth vs. Samsung's 4.6-5%. This outlook is supported by strong iPhone 17 demand, particularly in China where Apple captured 26% share during Singles' Day and single-handedly drove the market's 3% sales growth, while Huawei fell to 13% from 17% and Xiaomi held 17% but saw sales decline per Counterpoint. The stock reached $4.12 trillion valuation as JPMorgan noted increased CEO succession clarity. However, Apple faces a significant legal challenge in India over a new antitrust law that could impose penalties up to $38B (34% of FY2025's $112B net income per 10-K), with a hearing scheduled for December 3 per Reuters. (Nov 26-27)</div>
-                                </div>
+                                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 36px; padding-bottom: 32px; border-bottom: 2px solid #1a1a1a;">
+                                    <tr>
+                                        <td>
+                                            <p style="margin: 0 0 12px 0; font-size: 11px; text-transform: uppercase; letter-spacing: 2px; color: #8b2c24; font-weight: 600;">Bottom Line</p>
+                                            <p style="margin: 0; font-size: 13px; line-height: 1.7; color: #3d3d3d;">Apple is projected to overtake Samsung as the world's top smartphone vendor in 2025 for the first time since 2011, with Counterpoint Research forecasting 19.4% market share vs. Samsung's 18.7% driven by 10% YoY shipment growth vs. Samsung's 4.6-5%. This outlook is supported by strong iPhone 17 demand, particularly in China where Apple captured 26% share during Singles' Day and single-handedly drove the market's 3% sales growth, while Huawei fell to 13% from 17% and Xiaomi held 17% but saw sales decline per Counterpoint. The stock reached $4.12 trillion valuation as JPMorgan noted increased CEO succession clarity. However, Apple faces a significant legal challenge in India over a new antitrust law that could impose penalties up to $38B (34% of FY2025's $112B net income per 10-K), with a hearing scheduled for December 3 per Reuters. (Nov 26-27)</p>
+                                        </td>
+                                    </tr>
+                                </table>
 
                                 <!-- Major Developments -->
-                                <div style="margin-bottom: 20px;">
-                                    <h2 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">Major Developments</h2>
-                                    <ul style="margin: 0; padding-left: 20px; list-style-type: disc;">
-                                        <li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;"><strong>India Antitrust Law Challenge</strong> • <span style="background: #fee2e2; color: #dc2626; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">Bearish</span><br>Apple filed a 545-page legal challenge in the Delhi High Court against India's new antitrust penalty law, which allows the Competition Commission of India (CCI) to levy fines based on global turnover, potentially reaching $38B for Apple (representing ~34% of the company's $112B FY2025 net income per 10-K). The company argues penalties should be based only on local revenue from the specific business unit in violation, calling the global turnover basis "manifestly arbitrary" and unconstitutional. The challenge stems from an ongoing CCI case where investigators found alleged "abusive conduct" related to Apple's iOS app market management per Reuters. The FY2025 10-K details multiple ongoing antitrust cases, including with the EU (DMA) and US (DOJ), indicating this is part of a broader regulatory landscape. (Nov 27)</li>
-                                        <li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;"><strong>Future iPhone Roadmap</strong> • <span style="background: #d1fae5; color: #059669; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">Bullish</span><br>Apple plans to introduce three new iPhone models within the next three years and is altering its release schedule, in what is described as a major transformation for the device's history per Benzinga. Bloomberg reports Apple is preparing several high-impact products for 2026 and 2027, including a potential iPhone Fold, the iPhone 17e, and a special 20th-anniversary iPhone, expected to maintain sales momentum per Batam News Asia. The iPhone represents 50% of total net sales ($209.6B of $416.2B) in FY2025 per the 10-K, with management calling the current lineup the "strongest ever" on the Oct 30 call, driving record Q4 revenue and guiding for double-digit growth. (Nov 26-27)</li>
-                                    </ul>
-                                </div>
+                                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 28px;">
+                                    <tr>
+                                        <td>
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 16px;">
+                                                <tr>
+                                                    <td style="font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 500; color: #6b6b6b; padding-right: 12px; white-space: nowrap;">Major Developments</td>
+                                                    <td width="100%" style="border-bottom: 1px solid #ebe8e3;"></td>
+                                                </tr>
+                                            </table>
+
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 22px;">
+                                                <tr>
+                                                    <td>
+                                                        <p style="margin: 0 0 8px 0;">
+                                                            <span style="font-size: 14px; font-weight: 600; color: #1a1a1a; vertical-align: middle; margin-right: 6px;">India Antitrust Law Challenge</span><span style="display: inline-block; padding: 2px 8px; background-color: #fdf2f2; color: #9b2c2c; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; border-radius: 2px; vertical-align: middle;">Bearish</span>
+                                                        </p>
+                                                        <p style="margin: 0; font-size: 13px; line-height: 1.7; color: #3d3d3d;">Apple filed a 545-page legal challenge in the Delhi High Court against India's new antitrust penalty law, which allows the Competition Commission of India (CCI) to levy fines based on global turnover, potentially reaching $38B for Apple (representing ~34% of the company's $112B FY2025 net income per 10-K). The company argues penalties should be based only on local revenue from the specific business unit in violation, calling the global turnover basis "manifestly arbitrary" and unconstitutional. The challenge stems from an ongoing CCI case where investigators found alleged "abusive conduct" related to Apple's iOS app market management per Reuters. The FY2025 10-K details multiple ongoing antitrust cases, including with the EU (DMA) and US (DOJ), indicating this is part of a broader regulatory landscape. (Nov 27)</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                                                <tr>
+                                                    <td>
+                                                        <p style="margin: 0 0 8px 0;">
+                                                            <span style="font-size: 14px; font-weight: 600; color: #1a1a1a; vertical-align: middle; margin-right: 6px;">Future iPhone Roadmap</span><span style="display: inline-block; padding: 2px 8px; background-color: #e8f5ef; color: #1e6b4a; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; border-radius: 2px; vertical-align: middle;">Bullish</span>
+                                                        </p>
+                                                        <p style="margin: 0; font-size: 13px; line-height: 1.7; color: #3d3d3d;">Apple plans to introduce three new iPhone models within the next three years and is altering its release schedule, in what is described as a major transformation for the device's history per Benzinga. Bloomberg reports Apple is preparing several high-impact products for 2026 and 2027, including a potential iPhone Fold, the iPhone 17e, and a special 20th-anniversary iPhone, expected to maintain sales momentum per Batam News Asia. The iPhone represents 50% of total net sales ($209.6B of $416.2B) in FY2025 per the 10-K, with management calling the current lineup the "strongest ever" on the Oct 30 call, driving record Q4 revenue and guiding for double-digit growth. (Nov 26-27)</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </td>
+                                    </tr>
+                                </table>
 
                                 <!-- Financial/Operational Performance -->
-                                <div style="margin-bottom: 20px;">
-                                    <h2 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">Financial/Operational Performance</h2>
-                                    <ul style="margin: 0; padding-left: 20px; list-style-type: disc;">
-                                        <li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;"><strong>Stock Hits All-Time High</strong> • <span style="background: #d1fae5; color: #059669; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">Bullish</span><br>Apple's stock reached a new all-time high of $280.38, pushing its market capitalization to $4.12 trillion. The stock has gained over 11% in 2025, 18-19% over the last 12 months, and 21.2% over the past three months, outpacing the Dow Jones index per multiple reports. The company maintains an annual dividend yield of 0.38%, paying a quarterly dividend of 26 cents per share confirmed on the Oct 30 call. Per the FY2025 10-K, Apple returned $89.3B via share repurchases during the fiscal year and intends to increase its dividend annually; the company generated $112B in net income in FY2025. (Nov 26)</li>
-                                        <li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;"><strong>Q3 Shipment Growth</strong> • <span style="background: #d1fae5; color: #059669; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">Bullish</span><br>Apple's smartphone shipments posted 9% year-over-year growth during the third quarter, according to data from Counterpoint Research. This growth contributes to the firm's upgraded forecast for Apple to lead the global market in 2025 per multiple reports. While Apple does not report unit shipments, for its fiscal Q3 2025 (ended June 28), the company reported iPhone net sales of $44.6B, a 13.45% year-over-year increase per the 10-Q, corroborating the strong growth reported by the third-party research firm. (Nov 26)</li>
-                                    </ul>
-                                </div>
+                                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 28px;">
+                                    <tr>
+                                        <td>
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 16px;">
+                                                <tr>
+                                                    <td style="font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 500; color: #6b6b6b; padding-right: 12px; white-space: nowrap;">Financial / Operational Performance</td>
+                                                    <td width="100%" style="border-bottom: 1px solid #ebe8e3;"></td>
+                                                </tr>
+                                            </table>
+
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 22px;">
+                                                <tr>
+                                                    <td>
+                                                        <p style="margin: 0 0 8px 0;">
+                                                            <span style="font-size: 14px; font-weight: 600; color: #1a1a1a;">Stock Hits All-Time High</span>
+                                                        </p>
+                                                        <p style="margin: 0; font-size: 13px; line-height: 1.7; color: #3d3d3d;">Apple's stock reached a new all-time high of $280.38, pushing its market capitalization to $4.12 trillion. The stock has gained over 11% in 2025, 18-19% over the last 12 months, and 21.2% over the past three months, outpacing the Dow Jones index per multiple reports. The company maintains an annual dividend yield of 0.38%, paying a quarterly dividend of 26 cents per share confirmed on the Oct 30 call. Per the FY2025 10-K, Apple returned $89.3B via share repurchases during the fiscal year and intends to increase its dividend annually; the company generated $112B in net income in FY2025. (Nov 26)</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                                                <tr>
+                                                    <td>
+                                                        <p style="margin: 0 0 8px 0;">
+                                                            <span style="font-size: 14px; font-weight: 600; color: #1a1a1a;">Q3 Shipment Growth</span>
+                                                        </p>
+                                                        <p style="margin: 0; font-size: 13px; line-height: 1.7; color: #3d3d3d;">Apple's smartphone shipments posted 9% year-over-year growth during the third quarter, according to data from Counterpoint Research. This growth contributes to the firm's upgraded forecast for Apple to lead the global market in 2025 per multiple reports. While Apple does not report unit shipments, for its fiscal Q3 2025 (ended June 28), the company reported iPhone net sales of $44.6B, a 13.45% year-over-year increase per the 10-Q, corroborating the strong growth reported by the third-party research firm. (Nov 26)</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </td>
+                                    </tr>
+                                </table>
 
                                 <!-- Risk Factors -->
-                                <div style="margin-bottom: 20px;">
-                                    <h2 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">Risk Factors</h2>
-                                    <ul style="margin: 0; padding-left: 20px; list-style-type: disc;">
-                                        <li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;"><strong>TSMC Trade Secret Probe</strong> • <span style="background: #fee2e2; color: #dc2626; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">Bearish</span><br>A potential supply chain and intellectual property risk has emerged as key supplier TSMC filed a lawsuit against a former senior vice president, Wei-Jen Lo, for allegedly leaking trade secrets to Intel, where Lo is now employed. Taiwanese prosecutors have raided Lo's home in connection with the probe. Lo was instrumental in TSMC's development of 2-nm to 5-nm chips, and any compromise of this technology could impact the technological leadership Apple relies on for its processors per Yahoo Finance. Apple's FY2025 10-K discloses a material dependency on single or limited-source component suppliers located primarily in Asia; the company's AI strategy, per the Oct 30 call, is heavily reliant on its custom Apple Silicon chips manufactured by these key partners. (Nov 27)</li>
-                                    </ul>
-                                </div>
+                                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 28px;">
+                                    <tr>
+                                        <td>
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 16px;">
+                                                <tr>
+                                                    <td style="font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 500; color: #6b6b6b; padding-right: 12px; white-space: nowrap;">Risk Factors</td>
+                                                    <td width="100%" style="border-bottom: 1px solid #ebe8e3;"></td>
+                                                </tr>
+                                            </table>
+
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                                                <tr>
+                                                    <td>
+                                                        <p style="margin: 0 0 8px 0;">
+                                                            <span style="font-size: 14px; font-weight: 600; color: #1a1a1a;">TSMC Trade Secret Probe</span>
+                                                        </p>
+                                                        <p style="margin: 0; font-size: 13px; line-height: 1.7; color: #3d3d3d;">A potential supply chain and intellectual property risk has emerged as key supplier TSMC filed a lawsuit against a former senior vice president, Wei-Jen Lo, for allegedly leaking trade secrets to Intel, where Lo is now employed. Taiwanese prosecutors have raided Lo's home in connection with the probe. Lo was instrumental in TSMC's development of 2-nm to 5-nm chips, and any compromise of this technology could impact the technological leadership Apple relies on for its processors per Yahoo Finance. Apple's FY2025 10-K discloses a material dependency on single or limited-source component suppliers located primarily in Asia; the company's AI strategy, per the Oct 30 call, is heavily reliant on its custom Apple Silicon chips manufactured by these key partners. (Nov 27)</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </td>
+                                    </tr>
+                                </table>
 
                                 <!-- Wall Street Sentiment -->
-                                <div style="margin-bottom: 20px;">
-                                    <h2 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">Wall Street Sentiment</h2>
-                                    <ul style="margin: 0; padding-left: 20px; list-style-type: disc;">
-                                        <li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;"><strong>JPMorgan on Succession</strong><br>JPMorgan analyst Samik Chatterjee stated that increased clarity on CEO succession is a key positive for investors, suggesting the market should be positioning for the leadership transition to hardware chief John Ternus. Chatterjee noted this clarity helps resolve a key investor fixation and unlocks a new chapter for the company focused on a hardware-first, AI-supercharged future per Benzinga. (Nov 26)</li>
-                                        <li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;"><strong>Analyst Estimates Raised</strong><br>Wall Street analysts have increased Apple's revenue estimates for the current quarter by 10.4%, reflecting positive market confidence in the company's performance. This optimism is partly fueled by expectations of strong holiday sales driven by promotions from partners like T-Mobile per Pintu. (Nov 26)</li>
-                                        <li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;"><strong>Cramer on iPhone 17 and AI</strong><br>Jim Cramer described the new iPhone 17 as a "huge bargain" considering trade-ins and subsidies, stating, "As long as Apple makes the best products, people will buy them." The CNBC Investing Club maintains its "own, don't trade" thesis on the stock, and despite calling Apple's AI strategy "lackluster," it views the company as uniquely positioned to benefit from AI by monetizing its large installed base through partnerships per CNBC. (Nov 26)</li>
-                                    </ul>
-                                </div>
+                                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 28px;">
+                                    <tr>
+                                        <td>
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 16px;">
+                                                <tr>
+                                                    <td style="font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 500; color: #6b6b6b; padding-right: 12px; white-space: nowrap;">Wall Street Sentiment</td>
+                                                    <td width="100%" style="border-bottom: 1px solid #ebe8e3;"></td>
+                                                </tr>
+                                            </table>
+
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 22px;">
+                                                <tr>
+                                                    <td>
+                                                        <p style="margin: 0 0 8px 0;">
+                                                            <span style="font-size: 14px; font-weight: 600; color: #1a1a1a;">JPMorgan on Succession</span>
+                                                        </p>
+                                                        <p style="margin: 0; font-size: 13px; line-height: 1.7; color: #3d3d3d;">JPMorgan analyst Samik Chatterjee stated that increased clarity on CEO succession is a key positive for investors, suggesting the market should be positioning for the leadership transition to hardware chief John Ternus. Chatterjee noted this clarity helps resolve a key investor fixation and unlocks a new chapter for the company focused on a hardware-first, AI-supercharged future per Benzinga. (Nov 26)</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 22px;">
+                                                <tr>
+                                                    <td>
+                                                        <p style="margin: 0 0 8px 0;">
+                                                            <span style="font-size: 14px; font-weight: 600; color: #1a1a1a;">Analyst Estimates Raised</span>
+                                                        </p>
+                                                        <p style="margin: 0; font-size: 13px; line-height: 1.7; color: #3d3d3d;">Wall Street analysts have increased Apple's revenue estimates for the current quarter by 10.4%, reflecting positive market confidence in the company's performance. This optimism is partly fueled by expectations of strong holiday sales driven by promotions from partners like T-Mobile per Pintu. (Nov 26)</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                                                <tr>
+                                                    <td>
+                                                        <p style="margin: 0 0 8px 0;">
+                                                            <span style="font-size: 14px; font-weight: 600; color: #1a1a1a;">Cramer on iPhone 17 and AI</span>
+                                                        </p>
+                                                        <p style="margin: 0; font-size: 13px; line-height: 1.7; color: #3d3d3d;">Jim Cramer described the new iPhone 17 as a "huge bargain" considering trade-ins and subsidies, stating, "As long as Apple makes the best products, people will buy them." The CNBC Investing Club maintains its "own, don't trade" thesis on the stock, and despite calling Apple's AI strategy "lackluster," it views the company as uniquely positioned to benefit from AI by monetizing its large installed base through partnerships per CNBC. (Nov 26)</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </td>
+                                    </tr>
+                                </table>
 
                                 <!-- Competitive/Industry Dynamics -->
-                                <div style="margin-bottom: 20px;">
-                                    <h2 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">Competitive/Industry Dynamics</h2>
-                                    <ul style="margin: 0; padding-left: 20px; list-style-type: disc;">
-                                        <li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;"><strong>[Competitor] Projected to Overtake Samsung in 2025</strong> • <span style="background: #d1fae5; color: #059669; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">Bullish</span><br>Counterpoint Research forecasts Apple will surpass Samsung in annual smartphone shipments in 2025 for the first time since 2011, achieving 19.4% global market share versus Samsung's 18.7%. Apple's iPhone shipments are projected to grow 10% YoY in 2025, outpacing Samsung's 4.6-5% growth and the overall market's 3.3% rise. Counterpoint expects Apple to maintain this leadership position through 2029 per multiple reports. While the FY2025 10-K notes Apple has a minority share in the global smartphone market, management cited a survey on the Oct 30 call showing iPhone as the top-selling model in key markets like the U.S. and Urban China; iPhone revenue grew 4% in FY2025 to $209.6B. (Nov 26-27)</li>
-                                        <li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;"><strong>[Market] Dominance in China's Singles' Day</strong> • <span style="background: #d1fae5; color: #059669; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">Bullish</span><br>During China's month-long Singles' Day shopping festival, Apple captured 26% of all smartphones sold, single-handedly driving the market's total 3% YoY sales growth. Excluding Apple, smartphone sales declined 5%, reflecting weak consumer demand for rival brands amid economic caution. Competitor Huawei's share fell to 13% from 17% last year, while Xiaomi held a 17% share but saw sales decline per Counterpoint. Greater China represented 15.5% of total net sales ($64.4B) in FY2025, though sales declined 4% YoY per the 10-K; on the Oct 30 call, CEO Tim Cook stated he expects a "return to growth in Q1," citing significantly increased store traffic and strong iPhone reception. (Nov 27)</li>
-                                        <li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;"><strong>[Market] Smartphone Market Growth Drivers</strong> • <span style="background: #d1fae5; color: #059669; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">Bullish</span><br>Key drivers for projected smartphone market growth include a replacement cycle reaching an inflection point as consumers who bought devices during the COVID-19 boom begin to upgrade. Counterpoint Research also identified a sizable future demand base from the 358 million second-hand iPhones sold between 2023 and Q2 2025. Macroeconomic factors such as a truce in the US-China tech war and lower tariffs are also helping streamline supply chains and boost demand per multiple reports. On the Oct 30 call, CEO Tim Cook confirmed a "September quarter record for upgraders," supporting the thesis of an active replacement cycle; the FY2025 10-K identifies stimulating demand for new and upgraded products as a key element for continued success. (Nov 26-27)</li>
-                                        <li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;"><strong>[Downstream] Positive Demand Signals from Best Buy</strong> • <span style="background: #d1fae5; color: #059669; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">Bullish</span><br>Key retail partner Best Buy reported a 2.4% YoY sales increase to $9.67B for its fiscal Q3, beating estimates, and raised its full-year guidance. The strong performance was driven by robust sales in computing, gaming, and mobile phones, with CEO Corie Barry specifically citing new iPhones as a factor encouraging upgrades. This indicates healthy consumer demand for Apple's products in the North American market per multiple reports. Indirect channels, including resellers like Best Buy, accounted for 60% of Apple's total net sales in FY2025 per the 10-K; the company's filings disclose a material dependency on these third-party resellers for product distribution and sales. (Nov 26)</li>
-                                        <li style="margin-bottom: 8px; font-size: 13px; line-height: 1.5; color: #374151;"><strong>[Competitor] Samsung Partners on On-Device AI</strong> • <span style="background: #e5e7eb; color: #4b5563; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600;">Neutral</span><br>Samsung Electronics entered a technology collaboration with Nota AI to integrate AI model optimization technology into its Exynos AI Studio. This partnership aims to enhance the performance of on-device generative AI on Samsung's latest Exynos 2500 application processor, enabling advanced AI experiences on smartphones without cloud reliance. This move signals a key strategic focus for a primary competitor in the smartphone AI race per PR Newswire. This competitive move directly targets Apple's core AI strategy; on its Oct 30 call, Apple management detailed its own focus on "on-device foundation models" to power its new "Apple Intelligence" features, enabled by its proprietary A19 Pro and M5 chips. (Nov 26)</li>
-                                    </ul>
-                                </div>
+                                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 28px;">
+                                    <tr>
+                                        <td>
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 16px;">
+                                                <tr>
+                                                    <td style="font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 500; color: #6b6b6b; padding-right: 12px; white-space: nowrap;">Competitive / Industry Dynamics</td>
+                                                    <td width="100%" style="border-bottom: 1px solid #ebe8e3;"></td>
+                                                </tr>
+                                            </table>
 
-                                <!-- Transition to Sources -->
-                                <div style="margin: 32px 0 20px 0; padding: 12px 16px; background-color: #eff6ff; border-left: 4px solid #1e40af; border-radius: 4px;">
-                                    <p style="margin: 0; font-size: 12px; color: #1e40af; font-weight: 600; line-height: 1.4;">
-                                        Analysis based on 17 articles from the past 1 day.
-                                    </p>
-                                </div>
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 22px;">
+                                                <tr>
+                                                    <td>
+                                                        <p style="margin: 0 0 8px 0;">
+                                                            <span style="font-size: 14px; font-weight: 600; color: #1a1a1a; vertical-align: middle; margin-right: 6px;">[Competitor] Projected to Overtake Samsung in 2025</span><span style="display: inline-block; padding: 2px 8px; background-color: #e8f5ef; color: #1e6b4a; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; border-radius: 2px; vertical-align: middle;">Bullish</span>
+                                                        </p>
+                                                        <p style="margin: 0; font-size: 13px; line-height: 1.7; color: #3d3d3d;">Counterpoint Research forecasts Apple will surpass Samsung in annual smartphone shipments in 2025 for the first time since 2011, achieving 19.4% global market share versus Samsung's 18.7%. Apple's iPhone shipments are projected to grow 10% YoY in 2025, outpacing Samsung's 4.6-5% growth and the overall market's 3.3% rise. Counterpoint expects Apple to maintain this leadership position through 2029 per multiple reports. While the FY2025 10-K notes Apple has a minority share in the global smartphone market, management cited a survey on the Oct 30 call showing iPhone as the top-selling model in key markets like the U.S. and Urban China; iPhone revenue grew 4% in FY2025 to $209.6B. (Nov 26-27)</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
 
-                                <!-- Divider -->
-                                <div style="height: 2px; background: linear-gradient(90deg, #1e40af 0%, #e5e7eb 100%); margin-bottom: 20px;"></div>
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 22px;">
+                                                <tr>
+                                                    <td>
+                                                        <p style="margin: 0 0 8px 0;">
+                                                            <span style="font-size: 14px; font-weight: 600; color: #1a1a1a; vertical-align: middle; margin-right: 6px;">[Market] Dominance in China's Singles' Day</span><span style="display: inline-block; padding: 2px 8px; background-color: #e8f5ef; color: #1e6b4a; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; border-radius: 2px; vertical-align: middle;">Bullish</span>
+                                                        </p>
+                                                        <p style="margin: 0; font-size: 13px; line-height: 1.7; color: #3d3d3d;">During China's month-long Singles' Day shopping festival, Apple captured 26% of all smartphones sold, single-handedly driving the market's total 3% YoY sales growth. Excluding Apple, smartphone sales declined 5%, reflecting weak consumer demand for rival brands amid economic caution. Competitor Huawei's share fell to 13% from 17% last year, while Xiaomi held a 17% share but saw sales decline per Counterpoint. Greater China represented 15.5% of total net sales ($64.4B) in FY2025, though sales declined 4% YoY per the 10-K; on the Oct 30 call, CEO Tim Cook stated he expects a "return to growth in Q1," citing significantly increased store traffic and strong iPhone reception. (Nov 27)</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
 
-                                <!-- Source Articles -->
-                                <div style="margin-bottom: 0;">
-                                    <h2 style="margin: 0 0 16px 0; font-size: 14px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">Source Articles</h2>
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 22px;">
+                                                <tr>
+                                                    <td>
+                                                        <p style="margin: 0 0 8px 0;">
+                                                            <span style="font-size: 14px; font-weight: 600; color: #1a1a1a; vertical-align: middle; margin-right: 6px;">[Market] Smartphone Market Growth Drivers</span><span style="display: inline-block; padding: 2px 8px; background-color: #e8f5ef; color: #1e6b4a; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; border-radius: 2px; vertical-align: middle;">Bullish</span>
+                                                        </p>
+                                                        <p style="margin: 0; font-size: 13px; line-height: 1.7; color: #3d3d3d;">Key drivers for projected smartphone market growth include a replacement cycle reaching an inflection point as consumers who bought devices during the COVID-19 boom begin to upgrade. Counterpoint Research also identified a sizable future demand base from the 358 million second-hand iPhones sold between 2023 and Q2 2025. Macroeconomic factors such as a truce in the US-China tech war and lower tariffs are also helping streamline supply chains and boost demand per multiple reports. On the Oct 30 call, CEO Tim Cook confirmed a "September quarter record for upgraders," supporting the thesis of an active replacement cycle; the FY2025 10-K identifies stimulating demand for new and upgraded products as a key element for continued success. (Nov 26-27)</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
 
-                                    <!-- COMPANY -->
-                                    <div style="margin-bottom: 16px;">
-                                        <h3 style="margin: 0 0 8px 0; font-size: 13px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.75px;">COMPANY (6)</h3>
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 22px;">
+                                                <tr>
+                                                    <td>
+                                                        <p style="margin: 0 0 8px 0;">
+                                                            <span style="font-size: 14px; font-weight: 600; color: #1a1a1a; vertical-align: middle; margin-right: 6px;">[Downstream] Positive Demand Signals from Best Buy</span><span style="display: inline-block; padding: 2px 8px; background-color: #e8f5ef; color: #1e6b4a; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; border-radius: 2px; vertical-align: middle;">Bullish</span>
+                                                        </p>
+                                                        <p style="margin: 0; font-size: 13px; line-height: 1.7; color: #3d3d3d;">Key retail partner Best Buy reported a 2.4% YoY sales increase to $9.67B for its fiscal Q3, beating estimates, and raised its full-year guidance. The strong performance was driven by robust sales in computing, gaming, and mobile phones, with CEO Corie Barry specifically citing new iPhones as a factor encouraging upgrades. This indicates healthy consumer demand for Apple's products in the North American market per multiple reports. Indirect channels, including resellers like Best Buy, accounted for 60% of Apple's total net sales in FY2025 per the 10-K; the company's filings disclose a material dependency on these third-party resellers for product distribution and sales. (Nov 26)</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
 
-                                        <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                                            <a href="#" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;"><span style="display: inline-block; background: #1e40af; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">AAPL</span> Apple challenges Indian antitrust law that could trigger $38bn fines</a>
-                                            <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">Verdict • (Nov 27)</div>
-                                        </div>
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                                                <tr>
+                                                    <td>
+                                                        <p style="margin: 0 0 8px 0;">
+                                                            <span style="font-size: 14px; font-weight: 600; color: #1a1a1a; vertical-align: middle; margin-right: 6px;">[Competitor] Samsung Partners on On-Device AI</span><span style="display: inline-block; padding: 2px 8px; background-color: #eef0f2; color: #5a6570; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; border-radius: 2px; vertical-align: middle;">Neutral</span>
+                                                        </p>
+                                                        <p style="margin: 0; font-size: 13px; line-height: 1.7; color: #3d3d3d;">Samsung Electronics entered a technology collaboration with Nota AI to integrate AI model optimization technology into its Exynos AI Studio. This partnership aims to enhance the performance of on-device generative AI on Samsung's latest Exynos 2500 application processor, enabling advanced AI experiences on smartphones without cloud reliance. This move signals a key strategic focus for a primary competitor in the smartphone AI race per PR Newswire. This competitive move directly targets Apple's core AI strategy; on its Oct 30 call, Apple management detailed its own focus on "on-device foundation models" to power its new "Apple Intelligence" features, enabled by its proprietary A19 Pro and M5 chips. (Nov 26)</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </td>
+                                    </tr>
+                                </table>
 
-                                        <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                                            <a href="#" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;"><span style="display: inline-block; background: #1e40af; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">AAPL</span> <span style="color: #f59e0b;">★</span> Apple and Broadcom shares keep hitting records. Why each have more room to run - CNBC</a>
-                                            <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">CNBC • (Nov 26)</div>
-                                        </div>
+                            </td>
+                        </tr>
 
-                                        <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                                            <a href="#" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;"><span style="display: inline-block; background: #1e40af; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">AAPL</span> Apple Set To Overtake Samsung As Top Smartphone Seller In 2025 - Stocktwits</a>
-                                            <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">StockTwits • (Nov 26)</div>
-                                        </div>
+                        <!-- Sources Section -->
+                        <tr>
+                            <td style="background-color: #f5f3ef; padding: 28px 32px; border-top: 1px solid #e0ddd8;">
+                                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 20px;">
+                                    <tr>
+                                        <td style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 600; color: #6b6b6b;">Source Articles</td>
+                                        <td align="right" style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b;">Analysis based on 17 articles from the past 1 day</td>
+                                    </tr>
+                                </table>
 
-                                        <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                                            <a href="#" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;"><span style="display: inline-block; background: #1e40af; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">AAPL</span> Should you buy Apple stock as it beats Samsung in a core segment for the first time in 14 years? - Invezz</a>
-                                            <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">Invezz • (Nov 26)</div>
-                                        </div>
+                                <!-- Company Sources -->
+                                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 20px;">
+                                    <tr>
+                                        <td>
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 10px;">
+                                                <tr>
+                                                    <td style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #6b6b6b; font-weight: 600; padding-right: 8px; white-space: nowrap;">Company (6)</td>
+                                                    <td width="100%" style="border-bottom: 1px solid #e0ddd8;"></td>
+                                                </tr>
+                                            </table>
 
-                                        <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                                            <a href="#" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;"><span style="display: inline-block; background: #1e40af; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">AAPL</span> Apple Stock Breaks To All-Time Highs — Succession Clarity Unlocks New Chapter - Benzinga</a>
-                                            <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">Benzinga • (Nov 26)</div>
-                                        </div>
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                                                <tr>
+                                                    <td style="padding: 10px 0; border-bottom: 1px solid #e0ddd8; line-height: normal;">
+                                                        <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">
+                                                            <span style="display: inline-block; background-color: #1a1a1a; color: #faf9f7; padding: 2px 6px; font-size: 9px; font-weight: 600; letter-spacing: 0.5px; border-radius: 2px; margin-right: 8px;">AAPL</span>Apple challenges Indian antitrust law that could trigger $38bn fines
+                                                        </a>
+                                                        <p style="margin: 4px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b;">Verdict · Nov 27</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td style="padding: 10px 0; border-bottom: 1px solid #e0ddd8; line-height: normal;">
+                                                        <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">
+                                                            <span style="display: inline-block; background-color: #1a1a1a; color: #faf9f7; padding: 2px 6px; font-size: 9px; font-weight: 600; letter-spacing: 0.5px; border-radius: 2px; margin-right: 8px;">AAPL</span>Apple and Broadcom shares keep hitting records. Why each have more room to run - CNBC
+                                                        </a>
+                                                        <p style="margin: 4px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b;">CNBC · Nov 26</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td style="padding: 10px 0; border-bottom: 1px solid #e0ddd8; line-height: normal;">
+                                                        <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">
+                                                            <span style="display: inline-block; background-color: #1a1a1a; color: #faf9f7; padding: 2px 6px; font-size: 9px; font-weight: 600; letter-spacing: 0.5px; border-radius: 2px; margin-right: 8px;">AAPL</span>Apple Set To Overtake Samsung As Top Smartphone Seller In 2025 - Stocktwits
+                                                        </a>
+                                                        <p style="margin: 4px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b;">StockTwits · Nov 26</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td style="padding: 10px 0; border-bottom: 1px solid #e0ddd8; line-height: normal;">
+                                                        <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">
+                                                            <span style="display: inline-block; background-color: #1a1a1a; color: #faf9f7; padding: 2px 6px; font-size: 9px; font-weight: 600; letter-spacing: 0.5px; border-radius: 2px; margin-right: 8px;">AAPL</span>Should you buy Apple stock as it beats Samsung in a core segment for the first time in 14 years? - Invezz
+                                                        </a>
+                                                        <p style="margin: 4px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b;">Invezz · Nov 26</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td style="padding: 10px 0; border-bottom: 1px solid #e0ddd8; line-height: normal;">
+                                                        <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">
+                                                            <span style="display: inline-block; background-color: #1a1a1a; color: #faf9f7; padding: 2px 6px; font-size: 9px; font-weight: 600; letter-spacing: 0.5px; border-radius: 2px; margin-right: 8px;">AAPL</span>Apple Stock Breaks To All-Time Highs — Succession Clarity Unlocks New Chapter - Benzinga
+                                                        </a>
+                                                        <p style="margin: 4px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b;">Benzinga · Nov 26</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td style="padding: 10px 0; line-height: normal;">
+                                                        <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">
+                                                            <span style="display: inline-block; background-color: #1a1a1a; color: #faf9f7; padding: 2px 6px; font-size: 9px; font-weight: 600; letter-spacing: 0.5px; border-radius: 2px; margin-right: 8px;">AAPL</span>Next week could decide whether SEC lets your Apple shares live on-chain — with the same protections - CryptoSlate
+                                                        </a>
+                                                        <p style="margin: 4px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b;">CryptoSlate · Nov 26</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </td>
+                                    </tr>
+                                </table>
 
-                                        <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                                            <a href="#" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;"><span style="display: inline-block; background: #1e40af; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">AAPL</span> Next week could decide whether SEC lets your Apple shares live on-chain — with the same protections - CryptoSlate</a>
-                                            <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">CryptoSlate • (Nov 26)</div>
-                                        </div>
-                                    </div>
+                                <!-- Industry Sources -->
+                                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 20px;">
+                                    <tr>
+                                        <td>
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 10px;">
+                                                <tr>
+                                                    <td style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #6b6b6b; font-weight: 600; padding-right: 8px; white-space: nowrap;">Industry (6)</td>
+                                                    <td width="100%" style="border-bottom: 1px solid #e0ddd8;"></td>
+                                                </tr>
+                                            </table>
 
-                                    <!-- INDUSTRY -->
-                                    <div style="margin-bottom: 16px;">
-                                        <h3 style="margin: 0 0 8px 0; font-size: 13px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.75px;">INDUSTRY (6)</h3>
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                                                <tr>
+                                                    <td style="padding: 10px 0; border-bottom: 1px solid #e0ddd8; line-height: normal;">
+                                                        <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">
+                                                            <span style="display: inline-block; background-color: #6366f1; color: #ffffff; padding: 2px 6px; font-size: 9px; font-weight: 600; letter-spacing: 0.5px; border-radius: 2px; margin-right: 8px;">Smartphone Sales</span>Apple to finally dethrone Samsung in 2025 global smartphone shipments after 14 years - Techish Kenya
+                                                        </a>
+                                                        <p style="margin: 4px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b;">Tech-Ish · Nov 27</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td style="padding: 10px 0; border-bottom: 1px solid #e0ddd8; line-height: normal;">
+                                                        <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">
+                                                            <span style="display: inline-block; background-color: #6366f1; color: #ffffff; padding: 2px 6px; font-size: 9px; font-weight: 600; letter-spacing: 0.5px; border-radius: 2px; margin-right: 8px;">Smartphone Sales</span>Apple single-handedly drives China's Singles' Day smartphone sales growth - The Business Times
+                                                        </a>
+                                                        <p style="margin: 4px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b;">The Business Times · Nov 27</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td style="padding: 10px 0; border-bottom: 1px solid #e0ddd8; line-height: normal;">
+                                                        <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">
+                                                            <span style="display: inline-block; background-color: #6366f1; color: #ffffff; padding: 2px 6px; font-size: 9px; font-weight: 600; letter-spacing: 0.5px; border-radius: 2px; margin-right: 8px;">Smartphone Sales</span>Global Tech Shift: Apple Poised to Lead Smartphone Market Through 2029 - Batam News Asia
+                                                        </a>
+                                                        <p style="margin: 4px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b;">Batamnewsasia · Nov 27</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td style="padding: 10px 0; border-bottom: 1px solid #e0ddd8; line-height: normal;">
+                                                        <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">
+                                                            <span style="display: inline-block; background-color: #6366f1; color: #ffffff; padding: 2px 6px; font-size: 9px; font-weight: 600; letter-spacing: 0.5px; border-radius: 2px; margin-right: 8px;">Smartphone Sales</span>Apple Carried China's Singles' Day Smartphone Market - Finimize
+                                                        </a>
+                                                        <p style="margin: 4px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b;">Finimize · Nov 27</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td style="padding: 10px 0; border-bottom: 1px solid #e0ddd8; line-height: normal;">
+                                                        <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">
+                                                            <span style="display: inline-block; background-color: #6366f1; color: #ffffff; padding: 2px 6px; font-size: 9px; font-weight: 600; letter-spacing: 0.5px; border-radius: 2px; margin-right: 8px;">Smartphone Sales</span>Apple's lousy AI didn't stop it beating Samsung's smartphone sales for the first time since 2011 - theregister.com
+                                                        </a>
+                                                        <p style="margin: 4px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b;">The Register · Nov 26</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td style="padding: 10px 0; line-height: normal;">
+                                                        <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">
+                                                            <span style="display: inline-block; background-color: #6366f1; color: #ffffff; padding: 2px 6px; font-size: 9px; font-weight: 600; letter-spacing: 0.5px; border-radius: 2px; margin-right: 8px;">Smartphone Sales</span>Counterpoint Says Apple Will Overtake Samsung in Global Smartphone Sales - PYMNTS.com
+                                                        </a>
+                                                        <p style="margin: 4px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b;">PYMNTS.com · Nov 26</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </td>
+                                    </tr>
+                                </table>
 
-                                        <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                                            <a href="#" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;"><span style="display: inline-block; background: #6c757d; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">Smartphone Sales</span> Apple to finally dethrone Samsung in 2025 global smartphone shipments after 14 years - Techish Kenya</a>
-                                            <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">Tech-Ish • (Nov 27)</div>
-                                        </div>
+                                <!-- Competitors Sources -->
+                                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 20px;">
+                                    <tr>
+                                        <td>
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 10px;">
+                                                <tr>
+                                                    <td style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #6b6b6b; font-weight: 600; padding-right: 8px; white-space: nowrap;">Competitors (2)</td>
+                                                    <td width="100%" style="border-bottom: 1px solid #e0ddd8;"></td>
+                                                </tr>
+                                            </table>
 
-                                        <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                                            <a href="#" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;"><span style="display: inline-block; background: #6c757d; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">Smartphone Sales</span> Apple single-handedly drives China's Singles' Day smartphone sales growth - The Business Times</a>
-                                            <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">The Business Times • (Nov 27)</div>
-                                        </div>
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                                                <tr>
+                                                    <td style="padding: 10px 0; border-bottom: 1px solid #e0ddd8; line-height: normal;">
+                                                        <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">
+                                                            <span style="display: inline-block; background-color: #dc2626; color: #ffffff; padding: 2px 6px; font-size: 9px; font-weight: 600; letter-spacing: 0.5px; border-radius: 2px; margin-right: 8px;">005930.KS</span>Apple projected to beat Samsung in smartphone shipments for first time since 2011
+                                                        </a>
+                                                        <p style="margin: 4px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b;">Fox Business · Nov 26</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td style="padding: 10px 0; line-height: normal;">
+                                                        <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">
+                                                            <span style="display: inline-block; background-color: #dc2626; color: #ffffff; padding: 2px 6px; font-size: 9px; font-weight: 600; letter-spacing: 0.5px; border-radius: 2px; margin-right: 8px;">005930.KS</span>Nota AI Signs Technology Collaboration Agreement with Samsung Electronics for Exynos AI Optimization
+                                                        </a>
+                                                        <p style="margin: 4px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b;">Yahoo Finance · Nov 26</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </td>
+                                    </tr>
+                                </table>
 
-                                        <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                                            <a href="#" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;"><span style="display: inline-block; background: #6c757d; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">Smartphone Sales</span> Global Tech Shift: Apple Poised to Lead Smartphone Market Through 2029 - Batam News Asia</a>
-                                            <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">Batamnewsasia • (Nov 27)</div>
-                                        </div>
+                                <!-- Upstream Sources -->
+                                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 20px;">
+                                    <tr>
+                                        <td>
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 10px;">
+                                                <tr>
+                                                    <td style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #6b6b6b; font-weight: 600; padding-right: 8px; white-space: nowrap;">Upstream (1)</td>
+                                                    <td width="100%" style="border-bottom: 1px solid #e0ddd8;"></td>
+                                                </tr>
+                                            </table>
 
-                                        <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                                            <a href="#" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;"><span style="display: inline-block; background: #6c757d; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">Smartphone Sales</span> Apple Carried China's Singles' Day Smartphone Market - Finimize</a>
-                                            <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">Finimize • (Nov 27)</div>
-                                        </div>
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                                                <tr>
+                                                    <td style="padding: 10px 0; line-height: normal;">
+                                                        <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">
+                                                            <span style="display: inline-block; background-color: #d97706; color: #ffffff; padding: 2px 6px; font-size: 9px; font-weight: 600; letter-spacing: 0.5px; border-radius: 2px; margin-right: 8px;">TSM</span>Taiwan raids former TSMC exec's home in trade secrets probe
+                                                        </a>
+                                                        <p style="margin: 4px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b;">Yahoo Finance · Nov 26</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </td>
+                                    </tr>
+                                </table>
 
-                                        <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                                            <a href="#" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;"><span style="display: inline-block; background: #6c757d; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">Smartphone Sales</span> Apple's lousy AI didn't stop it beating Samsung's smartphone sales for the first time since 2011 - theregister.com</a>
-                                            <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">The Register • (Nov 26)</div>
-                                        </div>
+                                <!-- Downstream Sources -->
+                                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                                    <tr>
+                                        <td>
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 10px;">
+                                                <tr>
+                                                    <td style="font-family: Arial, Helvetica, sans-serif; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #6b6b6b; font-weight: 600; padding-right: 8px; white-space: nowrap;">Downstream (2)</td>
+                                                    <td width="100%" style="border-bottom: 1px solid #e0ddd8;"></td>
+                                                </tr>
+                                            </table>
 
-                                        <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                                            <a href="#" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;"><span style="display: inline-block; background: #6c757d; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">Smartphone Sales</span> Counterpoint Says Apple Will Overtake Samsung in Global Smartphone Sales - PYMNTS.com</a>
-                                            <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">PYMNTS.com • (Nov 26)</div>
-                                        </div>
-                                    </div>
-
-                                    <!-- COMPETITORS -->
-                                    <div style="margin-bottom: 16px;">
-                                        <h3 style="margin: 0 0 8px 0; font-size: 13px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.75px;">COMPETITORS (2)</h3>
-
-                                        <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                                            <a href="#" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;"><span style="display: inline-block; background: #dc3545; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">005930.KS</span> Apple projected to beat Samsung in smartphone shipments for first time since 2011</a>
-                                            <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">Fox Business • (Nov 26)</div>
-                                        </div>
-
-                                        <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                                            <a href="#" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;"><span style="display: inline-block; background: #dc3545; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">005930.KS</span> Nota AI Signs Technology Collaboration Agreement with Samsung Electronics for Exynos AI Optimization</a>
-                                            <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">Yahoo Finance • (Nov 26)</div>
-                                        </div>
-                                    </div>
-
-                                    <!-- UPSTREAM -->
-                                    <div style="margin-bottom: 16px;">
-                                        <h3 style="margin: 0 0 8px 0; font-size: 13px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.75px;">UPSTREAM (1)</h3>
-
-                                        <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                                            <a href="#" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;"><span style="display: inline-block; background: #f97316; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">TSM</span> Taiwan raids former TSMC exec's home in trade secrets probe</a>
-                                            <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">Yahoo Finance • (Nov 26)</div>
-                                        </div>
-                                    </div>
-
-                                    <!-- DOWNSTREAM -->
-                                    <div style="margin-bottom: 16px;">
-                                        <h3 style="margin: 0 0 8px 0; font-size: 13px; font-weight: 700; color: #1e40af; text-transform: uppercase; letter-spacing: 0.75px;">DOWNSTREAM (2)</h3>
-
-                                        <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                                            <a href="#" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;"><span style="display: inline-block; background: #10b981; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">BBY</span> Best Buy Sees Expanding Margin, Strong Vendor Support, Analysts Say - Benzinga</a>
-                                            <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">Benzinga • (Nov 26)</div>
-                                        </div>
-
-                                        <div style="padding: 6px 0; margin-bottom: 4px; border-bottom: 1px solid #e5e7eb;">
-                                            <a href="#" style="font-size: 13px; font-weight: 600; color: #1e40af; text-decoration: none; line-height: 1.4;"><span style="display: inline-block; background: #10b981; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; margin-right: 6px;">BBY</span> Best Buy Co Inc (NYSE:BBY) Tops Estimates - FXDailyReport.Com</a>
-                                            <div style="font-size: 11px; color: #6b7280; margin-top: 3px;">FX Daily Report • (Nov 26)</div>
-                                        </div>
-                                    </div>
-                                </div>
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                                                <tr>
+                                                    <td style="padding: 10px 0; border-bottom: 1px solid #e0ddd8; line-height: normal;">
+                                                        <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">
+                                                            <span style="display: inline-block; background-color: #059669; color: #ffffff; padding: 2px 6px; font-size: 9px; font-weight: 600; letter-spacing: 0.5px; border-radius: 2px; margin-right: 8px;">BBY</span>Best Buy Sees Expanding Margin, Strong Vendor Support, Analysts Say - Benzinga
+                                                        </a>
+                                                        <p style="margin: 4px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b;">Benzinga · Nov 26</p>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td style="padding: 10px 0; line-height: normal;">
+                                                        <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1a1a1a; text-decoration: none; font-weight: 500; line-height: 1.4;">
+                                                            <span style="display: inline-block; background-color: #059669; color: #ffffff; padding: 2px 6px; font-size: 9px; font-weight: 600; letter-spacing: 0.5px; border-radius: 2px; margin-right: 8px;">BBY</span>Best Buy Co Inc (NYSE:BBY) Tops Estimates - FXDailyReport.Com
+                                                        </a>
+                                                        <p style="margin: 4px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b;">FX Daily Report · Nov 26</p>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </td>
+                                    </tr>
+                                </table>
 
                             </td>
                         </tr>
 
                         <!-- Footer -->
                         <tr>
-                            <td style="background-color: #1e40af; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); padding: 16px 24px; color: rgba(255,255,255,0.9); border-radius: 0 0 8px 8px;">
-                                <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                            <td style="background-color: #f5f3ef; padding: 20px 32px; border-top: 1px solid #e0ddd8;">
+                                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
                                     <tr>
-                                        <td>
-                                            <div style="font-size: 14px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">Weavara</div>
-                                            <div style="font-size: 12px; opacity: 0.8; margin-bottom: 8px; color: #ffffff;">Intelligence Delivered Daily</div>
-                                            <div style="font-size: 10px; opacity: 0.7; line-height: 1.4; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2); color: #ffffff;">
-                                                For informational and educational purposes only. Not investment advice. See Terms of Service for full disclaimer.
-                                            </div>
-                                            <div style="font-size: 10px; opacity: 0.6; margin-top: 12px; color: #ffffff;">
-                                                © 2025 Weavara. All rights reserved.
-                                            </div>
+                                        <td align="center">
+                                            <p style="margin: 0 0 2px 0; font-family: Georgia, 'Times New Roman', serif; font-size: 18px; color: #1a1a1a;">Weavara</p>
+                                            <p style="margin: 0 0 10px 0; font-family: Arial, Helvetica, sans-serif; font-size: 12px; color: #6b6b6b;">Intelligence Delivered Daily</p>
+                                            <p style="margin: 0 0 10px 0;">
+                                                <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b; text-decoration: none;">Terms</a>
+                                                <span style="font-family: Arial, Helvetica, sans-serif; color: #c0c0c0; margin: 0 8px;">·</span>
+                                                <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b; text-decoration: none;">Privacy</a>
+                                                <span style="font-family: Arial, Helvetica, sans-serif; color: #c0c0c0; margin: 0 8px;">·</span>
+                                                <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b; text-decoration: none;">Contact</a>
+                                                <span style="font-family: Arial, Helvetica, sans-serif; color: #c0c0c0; margin: 0 8px;">·</span>
+                                                <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b; text-decoration: none;">Unsubscribe</a>
+                                            </p>
+                                            <p style="margin: 0 0 4px 0; font-family: Arial, Helvetica, sans-serif; font-size: 10px; line-height: 1.5; color: #8a8a8a;">For informational and educational purposes only. Not investment advice.</p>
+                                            <p style="margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: #a0a0a0;">© 2025 Weavara. All rights reserved.</p>
                                         </td>
                                     </tr>
                                 </table>
                             </td>
                         </tr>
+
                     </table>
                 </div>
             </div>
@@ -1116,40 +1402,40 @@
 
             if (ticker.length === 0) {
                 feedback.innerHTML = '';
-                input.style.borderColor = '#e2e4e9';
+                input.style.borderColor = '#e0ddd8';
                 tickerValidation[inputId] = null;
                 return;
             }
 
-            feedback.innerHTML = '<span style="color: #6b7280;">Checking...</span>';
+            feedback.innerHTML = '<span style="color: #6b6b6b;">Checking...</span>';
 
             try {
                 const response = await fetch(`/api/validate-ticker?ticker=${encodeURIComponent(ticker)}`);
                 const data = await response.json();
 
                 if (data.valid) {
-                    feedback.innerHTML = `<span style="color: #059669; font-weight: 600;">✓ ${data.company_name}</span>`;
-                    input.style.borderColor = '#059669';
+                    feedback.innerHTML = `<span style="color: #1e6b4a; font-weight: 600;">✓ ${data.company_name}</span>`;
+                    input.style.borderColor = '#1e6b4a';
                     tickerValidation[inputId] = data.ticker;
                 } else if (data.suggestion) {
                     feedback.innerHTML = `
-                        <span style="color: #f59e0b; font-weight: 600;">
+                        <span style="color: #92400e; font-weight: 600;">
                             ${data.suggestion.message}<br>
                             <button class="suggestion-btn" onclick="acceptSuggestion('${inputId}', '${feedbackId}', '${data.suggestion.ticker}')">
                                 Use ${data.suggestion.ticker}
                             </button>
                         </span>
                     `;
-                    input.style.borderColor = '#f59e0b';
+                    input.style.borderColor = '#92400e';
                     tickerValidation[inputId] = null;
                 } else {
-                    feedback.innerHTML = `<span style="color: #dc2626; font-weight: 600;">✗ ${data.message}</span>`;
-                    input.style.borderColor = '#dc2626';
+                    feedback.innerHTML = `<span style="color: #9b2c2c; font-weight: 600;">✗ ${data.message}</span>`;
+                    input.style.borderColor = '#9b2c2c';
                     tickerValidation[inputId] = null;
                 }
             } catch (error) {
-                feedback.innerHTML = '<span style="color: #dc2626;">Validation error</span>';
-                input.style.borderColor = '#dc2626';
+                feedback.innerHTML = '<span style="color: #9b2c2c;">Validation error</span>';
+                input.style.borderColor = '#9b2c2c';
                 tickerValidation[inputId] = null;
             }
         }
@@ -1212,12 +1498,12 @@
                         <div style="text-align: center; padding: 40px 0;">
                             <div style="font-size: 56px; margin-bottom: 20px;">✓</div>
                             <h2 style="font-family: 'DM Serif Display', serif; margin-bottom: 12px;">You're In</h2>
-                            <p style="color: #4a5568; font-size: 16px; margin-bottom: 24px;">
+                            <p style="color: #6b6b6b; font-size: 16px; margin-bottom: 24px;">
                                 Your first report arrives tomorrow morning.
                             </p>
-                            <div style="background: #f7f6f3; padding: 20px; border-radius: 8px; text-align: left;">
-                                <p style="font-size: 14px; margin: 0 0 8px; color: #1a2234;"><strong>Email:</strong> ${formData.email}</p>
-                                <p style="font-size: 14px; margin: 0; color: #1a2234;"><strong>Tracking:</strong> ${data.tickers.map(t => t.ticker).join(', ')}</p>
+                            <div style="background: #f5f3ef; padding: 20px; border-radius: 8px; text-align: left;">
+                                <p style="font-size: 14px; margin: 0 0 8px; color: #1a1a1a;"><strong>Email:</strong> ${formData.email}</p>
+                                <p style="font-size: 14px; margin: 0; color: #1a1a1a;"><strong>Tracking:</strong> ${data.tickers.map(t => t.ticker).join(', ')}</p>
                             </div>
                         </div>
                     `;

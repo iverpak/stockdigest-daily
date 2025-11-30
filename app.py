@@ -14611,7 +14611,7 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                 '''
 
             return f'''
-                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 28px;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 20px;">
                     <tr>
                         <td>
                             <!-- Section Header -->
@@ -14659,9 +14659,10 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
                 header_color = "#9b2c2c"
 
             # Return just the box (no outer margin - will be wrapped in container at call site)
+            # mobile-scenario-padding class reduces padding from 20px to 12px on mobile
             return f'''
                 <tr>
-                    <td style="padding: 20px; background-color: {bg_color}; border-left: 3px solid {border_color};">
+                    <td class="mobile-scenario-padding" style="padding: 20px; background-color: {bg_color}; border-left: 3px solid {border_color};">
                         <p style="margin: 0 0 10px 0; font-family: Arial, Helvetica, sans-serif; font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 700; color: {header_color};">{display_title}</p>
                         <p style="margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 1.65; color: #3d3d3d;">{text}</p>
                     </td>
@@ -14755,7 +14756,7 @@ def build_executive_summary_html(sections: Dict[str, List[str]], strip_emojis: b
 
                 # Build bullet item with TWO separate paragraphs (matching mockup)
                 items_html += f'''
-                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 22px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom: 16px;">
                         <tr>
                             <td>
                                 <p style="margin: 0 0 8px 0;">{header_html}</p>

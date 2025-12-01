@@ -135,16 +135,20 @@ You will receive:
 1. Phase 1 JSON with bullets and paragraphs
 2. Filing sources (Transcript, 10-Q, 10-K) - check claims against these
 
-BULLET SECTIONS to process:
+BULLET SECTIONS TO FILTER (apply claim analysis):
 - major_developments
 - financial_performance
 - risk_factors
-- wall_street_sentiment
 - competitive_industry_dynamics
-- upcoming_catalysts
-- key_variables
 
-PARAGRAPH SECTIONS to process:
+BULLET SECTIONS TO EXEMPT (pass through unchanged, action=KEEP, no claim analysis):
+- wall_street_sentiment (analyst opinions ARE the news, even when citing known data)
+- upcoming_catalysts (forward-looking editorial value)
+- key_variables (forward-looking monitoring guidance)
+
+For EXEMPT sections: Do NOT analyze claims. Set action="KEEP", claims=[], rewritten_content=original_content.
+
+PARAGRAPH SECTIONS TO FILTER (apply claim analysis):
 - bottom_line
 - upside_scenario
 - downside_scenario
@@ -214,6 +218,8 @@ IMPORTANT:
 - For KEEP: rewritten_content = original_content (copy exactly)
 - For REMOVE: rewritten_content = "" (empty string)
 - For REWRITE: rewritten_content = new coherent text with only NEW claims
+- For EXEMPT sections (wall_street_sentiment, upcoming_catalysts, key_variables):
+  Always set action="KEEP", claims=[], rewritten_content=original_content
 
 Return ONLY the JSON object, no other text.
 """
@@ -811,29 +817,25 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
             html += f'<div class="bullet {action_class}">\n'
             html += f'<div class="bullet-header"><span>[{p.get("section", "?")}]</span><span class="action-badge {badge_class}">{action}</span></div>\n'
 
-            # Original content
-            original = p.get('original_content', '')[:500]
-            if len(p.get('original_content', '')) > 500:
-                original += '...'
+            # Original content (no truncation)
+            original = p.get('original_content', '')
             html += f'<div class="content-box"><strong>Original:</strong><br>{_escape_html(original)}</div>\n'
 
-            # Claims
+            # Claims (no truncation)
             claims = p.get('claims', [])
             if claims:
                 html += '<div class="claims"><strong>Claims:</strong><br>\n'
-                for c in claims[:10]:  # Limit to 10 claims
+                for c in claims:
                     status = c.get('status', 'NEW')
                     claim_class = 'claim-known' if status == 'KNOWN' else 'claim-new'
                     icon = '❌' if status == 'KNOWN' else '✅'
                     source = f" → {c.get('source', '')}" if c.get('source') else ""
-                    html += f'<div class="claim {claim_class}">{icon} {status}: {_escape_html(c.get("claim", "")[:100])}{source}</div>\n'
-                if len(claims) > 10:
-                    html += f'<div class="claim">... and {len(claims) - 10} more claims</div>\n'
+                    html += f'<div class="claim {claim_class}">{icon} {status}: {_escape_html(c.get("claim", ""))}{source}</div>\n'
                 html += '</div>\n'
 
-            # Rewritten content
+            # Rewritten content (no truncation)
             if action == 'REWRITE':
-                rewritten = p.get('rewritten_content', '')[:500]
+                rewritten = p.get('rewritten_content', '')
                 if rewritten:
                     html += f'<div class="rewritten"><strong>Rewritten:</strong><br>{_escape_html(rewritten)}</div>\n'
 
@@ -850,29 +852,25 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
             html += f'<div class="bullet {action_class}">\n'
             html += f'<div class="bullet-header"><span>[{b.get("bullet_id", "?")}] {b.get("section", "")}</span><span class="action-badge {badge_class}">{action}</span></div>\n'
 
-            # Original content
-            original = b.get('original_content', '')[:300]
-            if len(b.get('original_content', '')) > 300:
-                original += '...'
+            # Original content (no truncation)
+            original = b.get('original_content', '')
             html += f'<div class="content-box"><strong>Original:</strong><br>{_escape_html(original)}</div>\n'
 
-            # Claims
+            # Claims (no truncation)
             claims = b.get('claims', [])
             if claims:
                 html += '<div class="claims"><strong>Claims:</strong><br>\n'
-                for c in claims[:8]:  # Limit to 8 claims per bullet
+                for c in claims:
                     status = c.get('status', 'NEW')
                     claim_class = 'claim-known' if status == 'KNOWN' else 'claim-new'
                     icon = '❌' if status == 'KNOWN' else '✅'
                     source = f" → {c.get('source', '')}" if c.get('source') else ""
-                    html += f'<div class="claim {claim_class}">{icon} {status}: {_escape_html(c.get("claim", "")[:80])}{source}</div>\n'
-                if len(claims) > 8:
-                    html += f'<div class="claim">... and {len(claims) - 8} more claims</div>\n'
+                    html += f'<div class="claim {claim_class}">{icon} {status}: {_escape_html(c.get("claim", ""))}{source}</div>\n'
                 html += '</div>\n'
 
-            # Rewritten content
+            # Rewritten content (no truncation)
             if action == 'REWRITE':
-                rewritten = b.get('rewritten_content', '')[:300]
+                rewritten = b.get('rewritten_content', '')
                 if rewritten:
                     html += f'<div class="rewritten"><strong>Rewritten:</strong><br>{_escape_html(rewritten)}</div>\n'
 

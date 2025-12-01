@@ -48,9 +48,11 @@ Phase 1.5 checks claims against these SEC filings:
 8-K filings are included based on the last earnings call date:
 
 - **Start:** After `transcript.report_date` (last earnings call)
-- **End:** T-3 (3 days before today) - buffer for articles to cover the 8-K first
+- **End:** T-7 (7 days before today) - buffer for articles to cover the 8-K first
 - **Max:** 90-day lookback (safety cap)
 - **Fallback:** 90-day window if no transcript exists
+
+**Note:** T-7 ensures weekly reports (7-day lookback) don't filter articles covering recent 8-Ks.
 
 ### 3-Layer Filtering
 
@@ -193,11 +195,30 @@ Mark as REMOVE if NEW claims are merely:
 - Context that only supports KNOWN claims
 - Less than 20% of the original content's substance
 
-### What Counts as KNOWN
+### The Specificity Test
+
+Before marking ANY claim as KNOWN, ask:
+
+> "Does the filing contain THIS EXACT fact - same event, same data, same source, same timing?"
+
+**TOPIC OVERLAP IS NOT ENOUGH.**
+
+Examples of topic overlap that is NOT a match:
+- Filing discusses "governance" ≠ Article reports "bylaw amendment on Nov 25"
+- Filing mentions "consumer risk" ≠ Article cites "Fed data showing traffic down 5%"
+- Filing mentions "competition" ≠ Article reports "competitor acquired XYZ yesterday"
+- Filing says "CEO views macro as cautious" ≠ Article says "Fed Beige Book shows 9/12 districts negative"
+
+The filing describes the LANDSCAPE at filing time. Articles report EVENTS and DATA within that landscape.
+
+**Key insight:** Independent external data (Fed reports, court rulings, regulatory actions) that validates or quantifies a known risk is STILL NEW. It carries different epistemic weight than the company's own disclosure.
+
+### What Counts as KNOWN (Specificity Examples)
 
 The **specific fact** must be in filings, not just the general topic:
 - ❌ "Competition exists" does NOT make "Temu has 57% market share" KNOWN
 - ❌ "We face regulatory risk" does NOT make "EU investigation in November 2025" KNOWN
+- ❌ "Bylaws exist" does NOT make "Company amended bylaws on Nov 25" KNOWN
 - ✅ Only mark KNOWN if the specific data point, number, or fact appears in filings
 
 ### Staleness Check (Independent of Filings)

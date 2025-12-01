@@ -56,6 +56,34 @@ NEW (keep) - Information NOT in the filings AND temporally fresh:
 - Specific competitor metrics (growth rates, market share) NOT in company filings
 
 ═══════════════════════════════════════════════════════════════════════════════
+THE SPECIFICITY TEST (Apply to EVERY claim)
+═══════════════════════════════════════════════════════════════════════════════
+
+Before marking ANY claim as KNOWN, ask:
+
+"Does the filing contain THIS EXACT fact - same event, same data, same source, same timing?"
+
+If YES → KNOWN (with evidence quote)
+If NO, only topic overlap → NEW
+
+TOPIC OVERLAP IS NOT ENOUGH.
+
+Examples of topic overlap that is NOT a match:
+- Filing discusses "governance" ≠ Article reports "bylaw amendment on Nov 25"
+- Filing mentions "consumer risk" ≠ Article cites "Fed data showing traffic down 5%"
+- Filing mentions "competition" ≠ Article reports "competitor acquired XYZ yesterday"
+- Filing mentions "litigation risk" ≠ Article reports "court ruled against company Tuesday"
+- Filing mentions "regulatory exposure" ≠ Article reports "EU fined company €2B today"
+- Filing says "CEO views macro as cautious" ≠ Article says "Fed Beige Book shows 9/12 districts negative"
+
+The filing describes the LANDSCAPE at filing time. Articles report EVENTS and DATA within that landscape.
+New events, new external data, and new developments are NEW - even in known topic areas.
+
+KEY INSIGHT: Independent external data (Fed reports, court rulings, regulatory actions, analyst research)
+that validates or quantifies a known risk is STILL NEW. It carries different epistemic weight than
+the company's own disclosure of the risk.
+
+═══════════════════════════════════════════════════════════════════════════════
 CRITICAL: PAIRED CLAIMS RULE
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -443,6 +471,7 @@ IMPORTANT:
 - Include ALL bullets from ALL 7 bullet sections
 - Include ALL 3 paragraph sections
 - Every bullet/paragraph must have an action
+- ALWAYS include "original_content" field with the FULL original text from the input
 - For KEEP: rewritten_content = original_content (copy exactly)
 - For REMOVE: rewritten_content = "" (empty string)
 - For REWRITE: rewritten_content = new coherent text with only NEW claims
@@ -450,6 +479,7 @@ IMPORTANT:
   Always set action="KEEP", claims=[], rewritten_content=original_content
 - List ALL claims individually - NEVER truncate with "and X more claims" or similar
 - NEVER summarize or abbreviate the claims array
+- NEVER omit original_content - it is REQUIRED for every bullet and paragraph
 
 EVIDENCE FIELD (required for KNOWN claims):
 - For KNOWN claims: Include the actual quote or close paraphrase from the filing that proves
@@ -616,8 +646,10 @@ def _fetch_filtered_8k_filings(ticker: str, db_func, last_transcript_date=None) 
 
     Time window:
     - Start: Last transcript date (or 90-day fallback)
-    - End: T-3 (3 days before today, to allow articles to cover the 8-K first)
+    - End: T-7 (7 days before today, to allow articles to cover the 8-K first)
     - Max: 90 days
+
+    Note: T-7 ensures weekly reports (7-day lookback) don't filter articles covering recent 8-Ks.
 
     Args:
         ticker: Stock ticker
@@ -633,7 +665,7 @@ def _fetch_filtered_8k_filings(ticker: str, db_func, last_transcript_date=None) 
         with db_func() as conn, conn.cursor() as cur:
             # Calculate time window
             today = date.today()
-            end_date = today - timedelta(days=3)  # T-3 buffer
+            end_date = today - timedelta(days=7)  # T-7 buffer (matches weekly report lookback)
             max_lookback = today - timedelta(days=90)  # 90-day safety cap
 
             # Start date: after last transcript, or 90-day fallback
@@ -1268,8 +1300,11 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
             html += f'<div class="bullet-header"><span>[{p.get("section", "?")}]</span><span class="action-badge {badge_class}">{action}</span></div>\n'
 
             # Original content (no truncation)
-            original = p.get('original_content', '')
-            html += f'<div class="content-box"><strong>Original:</strong><br>{_escape_html(original)}</div>\n'
+            original = p.get('original_content', '') or p.get('content', '')
+            if original:
+                html += f'<div class="content-box"><strong>Original:</strong><br>{_escape_html(original)}</div>\n'
+            else:
+                html += f'<div class="content-box"><strong>Original:</strong><br><em style="color: #999;">(content not returned by AI)</em></div>\n'
 
             # Claims (no truncation)
             claims = p.get('claims', [])
@@ -1320,8 +1355,11 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
             html += f'<div class="bullet-header"><span>[{b.get("bullet_id", "?")}] {b.get("section", "")}</span><span class="action-badge {badge_class}">{action}</span></div>\n'
 
             # Original content (no truncation)
-            original = b.get('original_content', '')
-            html += f'<div class="content-box"><strong>Original:</strong><br>{_escape_html(original)}</div>\n'
+            original = b.get('original_content', '') or b.get('content', '')
+            if original:
+                html += f'<div class="content-box"><strong>Original:</strong><br>{_escape_html(original)}</div>\n'
+            else:
+                html += f'<div class="content-box"><strong>Original:</strong><br><em style="color: #999;">(content not returned by AI)</em></div>\n'
 
             # Claims (no truncation)
             claims = b.get('claims', [])

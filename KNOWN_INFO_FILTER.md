@@ -233,6 +233,16 @@ Company-specific releases that occurred at a specific time:
 → Released ≤4 weeks ago = NEW
 → Released >4 weeks ago = KNOWN (stale)
 
+**Important:** The COMPLETE earnings announcement includes:
+- Actual results (revenue, EPS, margins)
+- Comparison to guidance (beat, miss, in-line)
+- Comparison to estimates (beat, miss, in-line)
+- Prior guidance that was compared against
+- Surprise magnitude ("beat by 5%")
+
+These are ALL announced simultaneously, so they share the SAME release date.
+"Beat guidance" is NOT new information - it was announced WITH the results.
+
 #### Staleness Examples
 
 | Claim | Status | Evidence |
@@ -241,9 +251,12 @@ Company-specific releases that occurred at a specific time:
 | "Crack spreads averaged $15/bbl in Q2" | KNOWN | Q2 commodity spread - 6 months stale |
 | "10Y Treasury was 4.5% in September" | KNOWN | September interest rate - 3 months stale |
 | "Q3 EBITDA $10.7B" (released Sep 4, now Dec 1) | KNOWN | Released Sep 4 - 12 weeks stale |
+| "Beat guidance by 5%" (Q3 released Oct 30, now Dec 1) | KNOWN | Guidance beat announced with Q3 results - 5 weeks stale |
+| "Surpassed expectations of $47.5-50.5B" (Q3 released Oct 30) | KNOWN | Surprise vs guidance announced with Q3 - 5 weeks stale |
 | "Crack spreads collapsed to $8 this week" | NEW | Current market data |
 | "Oil futures suggest $90 by Q1 2026" | NEW | Forward-looking |
 | "Analyst upgraded yesterday" | NEW | Released <4 weeks ago |
+| "Beat Q4 estimates by 8%" (Q4 released yesterday) | NEW | Guidance beat is part of earnings release, <4 weeks old |
 
 ## AI Implementation
 

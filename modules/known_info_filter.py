@@ -139,6 +139,16 @@ For company-specific information that WAS released at a specific time:
 - M&A, partnerships, contracts → Press release date
 - Analyst ratings → Publication date of the rating
 
+IMPORTANT: The COMPLETE earnings announcement includes ALL of the following:
+- Actual results (revenue, EPS, margins)
+- Comparison to guidance (beat, miss, in-line)
+- Comparison to estimates (beat, miss, in-line)
+- Prior guidance that was being compared against
+- Surprise magnitude ("beat by 5%", "missed by $0.02")
+
+These are ALL announced simultaneously at earnings, so they share the SAME release date.
+"Beat guidance" is NOT new information discovered later - it was announced WITH the results.
+
 Compare release date to CURRENT DATE:
 - Released ≤4 weeks ago → NEW (recent, investors may not have digested)
 - Released >4 weeks ago → KNOWN (stale - investors have had time to see this)
@@ -194,8 +204,17 @@ DISCRETE RELEASES (stale after 4 weeks):
 ✗ "Company announced $2B buyback" (announced 2 months ago)
   → KNOWN | Evidence: "Released Oct 1, 2025 - 8 weeks stale"
 
+✗ "Revenue significantly beat guidance" (Q3 earnings released Oct 30, now Dec 1)
+  → KNOWN | Evidence: "Guidance beat announced with Q3 results Oct 30 - 5 weeks stale"
+
+✗ "Surpassed expectations of $47.5-50.5B" (Q3 earnings released Oct 30, now Dec 1)
+  → KNOWN | Evidence: "Surprise vs guidance announced with Q3 results Oct 30 - 5 weeks stale"
+
 ✓ "Q4 revenue of $15.2B" (Q4 earnings released yesterday)
   → NEW (discrete release <4 weeks old)
+
+✓ "Beat Q4 estimates by 8%" (Q4 earnings released yesterday)
+  → NEW (guidance beat is part of the earnings release, which is <4 weeks old)
 
 ✓ "Analyst upgraded to Buy with $200 target" (issued 2 weeks ago)
   → NEW (discrete release <4 weeks old)

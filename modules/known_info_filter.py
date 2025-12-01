@@ -640,6 +640,18 @@ def _merge_original_content(ai_response: Dict, phase1_json: Dict) -> Dict:
     The AI doesn't need to echo back original content - we already have it.
     This function restores it from the source for display in emails.
 
+    Phase 1 JSON structure:
+    {
+      "sections": {
+        "major_developments": [  # Bullet sections are arrays of bullet objects
+          {"bullet_id": "...", "content": "...", ...},
+        ],
+        "bottom_line": {  # Paragraph sections are objects with content
+          "content": "...",
+        }
+      }
+    }
+
     Args:
         ai_response: Parsed JSON from AI (bullets, paragraphs with claims/actions)
         phase1_json: Original Phase 1 JSON that was sent to the filter
@@ -647,24 +659,36 @@ def _merge_original_content(ai_response: Dict, phase1_json: Dict) -> Dict:
     Returns:
         ai_response with original_content fields populated
     """
+    sections = phase1_json.get('sections', {})
+
+    # Bullet sections are arrays directly under sections
+    bullet_section_names = [
+        'major_developments', 'financial_performance', 'risk_factors',
+        'wall_street_sentiment', 'competitive_industry_dynamics',
+        'upcoming_catalysts', 'key_variables'
+    ]
+
     # Build lookup for Phase 1 bullets by bullet_id
     phase1_bullets = {}
-    sections = phase1_json.get('sections', {})
-    for section_name, section_data in sections.items():
-        if isinstance(section_data, dict) and 'bullets' in section_data:
-            for bullet in section_data.get('bullets', []):
-                bullet_id = bullet.get('bullet_id', '')
-                if bullet_id:
-                    # Store content - could be 'content' or 'content_integrated'
-                    content = bullet.get('content_integrated') or bullet.get('content', '')
-                    phase1_bullets[bullet_id] = content
+    for section_name in bullet_section_names:
+        section_data = sections.get(section_name, [])
+        if isinstance(section_data, list):
+            for bullet in section_data:
+                if isinstance(bullet, dict):
+                    bullet_id = bullet.get('bullet_id', '')
+                    if bullet_id:
+                        # Store content - could be 'content' or 'content_integrated'
+                        content = bullet.get('content_integrated') or bullet.get('content', '')
+                        phase1_bullets[bullet_id] = content
+
+    # Paragraph sections are objects with 'content' directly
+    paragraph_section_names = ['bottom_line', 'upside_scenario', 'downside_scenario']
 
     # Build lookup for Phase 1 paragraphs by section name
     phase1_paragraphs = {}
-    for section_name in ['bottom_line', 'upside_scenario', 'downside_scenario']:
+    for section_name in paragraph_section_names:
         section_data = sections.get(section_name, {})
         if isinstance(section_data, dict):
-            # Paragraph sections have 'content' directly
             content = section_data.get('content_integrated') or section_data.get('content', '')
             phase1_paragraphs[section_name] = content
 

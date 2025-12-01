@@ -41,6 +41,7 @@ KNOWN (filter out) - Information already in the filings:
 - Risk factors already disclosed in 10-K/10-Q
 - Business model descriptions from filings
 - Historical comparisons already discussed (YoY, QoQ changes mentioned in filings)
+- Material events disclosed in 8-K filings (mergers, acquisitions, executive changes, restructuring)
 
 NEW (keep) - Information NOT in the filings:
 - Market reaction (stock price movement, trading volume changes)

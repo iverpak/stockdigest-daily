@@ -427,7 +427,6 @@ Return valid JSON with this exact structure:
     {
       "bullet_id": "FIN_001",
       "section": "financial_performance",
-      "original_content": "Full original bullet text here",
       "claims": [
         {
           "claim": "Q3 revenue $51.2B",
@@ -451,7 +450,6 @@ Return valid JSON with this exact structure:
   "paragraphs": [
     {
       "section": "bottom_line",
-      "original_content": "Full original paragraph text here",
       "claims": [
         {
           "claim": "...",
@@ -467,19 +465,19 @@ Return valid JSON with this exact structure:
   ]
 }
 
+NOTE: You do NOT need to include "original_content" - we already have it from the input.
+
 IMPORTANT:
 - Include ALL bullets from ALL 7 bullet sections
 - Include ALL 3 paragraph sections
-- Every bullet/paragraph must have an action
-- ALWAYS include "original_content" field with the FULL original text from the input
-- For KEEP: rewritten_content = original_content (copy exactly)
+- Every bullet/paragraph must have bullet_id (for bullets) or section (for paragraphs), claims, action, and rewritten_content
+- For KEEP: rewritten_content can be empty string (we'll use original from input)
 - For REMOVE: rewritten_content = "" (empty string)
 - For REWRITE: rewritten_content = new coherent text with only NEW claims
 - For EXEMPT sections (wall_street_sentiment, upcoming_catalysts):
-  Always set action="KEEP", claims=[], rewritten_content=original_content
+  Always set action="KEEP", claims=[]
 - List ALL claims individually - NEVER truncate with "and X more claims" or similar
 - NEVER summarize or abbreviate the claims array
-- NEVER omit original_content - it is REQUIRED for every bullet and paragraph
 
 EVIDENCE FIELD (required for KNOWN claims):
 - For KNOWN claims: Include the actual quote or close paraphrase from the filing that proves
@@ -633,6 +631,60 @@ def _get_filings_info(filings: Dict, eight_k_filings: List[Dict] = None) -> Dict
             })
 
     return info
+
+
+def _merge_original_content(ai_response: Dict, phase1_json: Dict) -> Dict:
+    """
+    Merge original_content from Phase 1 JSON into AI response.
+
+    The AI doesn't need to echo back original content - we already have it.
+    This function restores it from the source for display in emails.
+
+    Args:
+        ai_response: Parsed JSON from AI (bullets, paragraphs with claims/actions)
+        phase1_json: Original Phase 1 JSON that was sent to the filter
+
+    Returns:
+        ai_response with original_content fields populated
+    """
+    # Build lookup for Phase 1 bullets by bullet_id
+    phase1_bullets = {}
+    sections = phase1_json.get('sections', {})
+    for section_name, section_data in sections.items():
+        if isinstance(section_data, dict) and 'bullets' in section_data:
+            for bullet in section_data.get('bullets', []):
+                bullet_id = bullet.get('bullet_id', '')
+                if bullet_id:
+                    # Store content - could be 'content' or 'content_integrated'
+                    content = bullet.get('content_integrated') or bullet.get('content', '')
+                    phase1_bullets[bullet_id] = content
+
+    # Build lookup for Phase 1 paragraphs by section name
+    phase1_paragraphs = {}
+    for section_name in ['bottom_line', 'upside_scenario', 'downside_scenario']:
+        section_data = sections.get(section_name, {})
+        if isinstance(section_data, dict):
+            # Paragraph sections have 'content' directly
+            content = section_data.get('content_integrated') or section_data.get('content', '')
+            phase1_paragraphs[section_name] = content
+
+    # Merge into AI response bullets
+    for bullet in ai_response.get('bullets', []):
+        bullet_id = bullet.get('bullet_id', '')
+        if bullet_id and bullet_id in phase1_bullets:
+            bullet['original_content'] = phase1_bullets[bullet_id]
+        elif not bullet.get('original_content'):
+            bullet['original_content'] = ''
+
+    # Merge into AI response paragraphs
+    for paragraph in ai_response.get('paragraphs', []):
+        section = paragraph.get('section', '')
+        if section and section in phase1_paragraphs:
+            paragraph['original_content'] = phase1_paragraphs[section]
+        elif not paragraph.get('original_content'):
+            paragraph['original_content'] = ''
+
+    return ai_response
 
 
 def _fetch_filtered_8k_filings(ticker: str, db_func, last_transcript_date=None) -> List[Dict]:
@@ -1160,6 +1212,9 @@ def filter_known_information(
 
     # Build final output
     json_output = result["json_output"]
+
+    # Merge original_content from Phase 1 JSON (AI doesn't need to echo it back)
+    json_output = _merge_original_content(json_output, phase1_json)
 
     return {
         "ticker": ticker,

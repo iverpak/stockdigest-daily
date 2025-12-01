@@ -334,18 +334,23 @@ CRITICAL: Compare ONLY the "content" field (Phase 1 article data).
 DO NOT include in comparison:
 - "context" field (Phase 2 filing data - legitimately differs)
 - Metadata fields (impact, sentiment, reason, entity, filing_hints)
+- Sentiment/framing differences (bearish vs mixed about SAME news = still duplicate)
 
 Phase 2 context is supplementary filing data. Two bullets about the same news
 may have different filing excerpts attached - they are still duplicates.
 
-FACT EXTRACTION (from "content" field only):
-- Numbers: percentages, dollar amounts, counts, dates, timeframes
-- Named entities: people, companies, products, agencies
-- Events: announcements, deals, actions, regulatory filings
-- Direct quotes: exact phrases in quotation marks
+OVERLAP TEST - Two bullets are DUPLICATES if EITHER:
 
-OVERLAP TEST:
-If >50% of Phase 1 content facts appear in both bullets → DUPLICATE
+1. SOURCE OVERLAP: source_articles arrays share ≥50% of indices
+   - Same underlying articles = same news, regardless of framing
+   - Example: [7, 8] vs [7, 8] → 100% overlap → DUPLICATE
+   - Example: [2, 5, 7] vs [5, 7, 9] → 2 shared / 4 unique = 50% → DUPLICATE
+
+2. FACT OVERLAP: >50% of extracted facts appear in both bullets
+   - Extract from "content" field only: numbers, entities, events, quotes
+   - Same news from different sources still duplicates
+
+Either condition alone is sufficient. Do not require both.
 
 HIERARCHY FOR SELECTING PRIMARY:
 When duplicates found, the bullet in the FIRST matching section wins:

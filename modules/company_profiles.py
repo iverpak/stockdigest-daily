@@ -1647,7 +1647,7 @@ def generate_company_profile_email(
     price_change_color: str = "#4ade80",
     ytd_return_pct: str = None,
     ytd_return_color: str = "#4ade80",
-    market_status: str = "LAST CLOSE",
+    market_status: str = "Last Close",
     return_label: str = "1D",
     filing_type: str = "10-K",  # "10-K", "10-Q", or "PRESENTATION"
     fiscal_quarter: Optional[str] = None  # e.g., "Q2" (for 10-Q only)
@@ -2608,7 +2608,7 @@ def generate_company_release_email(
     price_change_color: str = "#4ade80",
     ytd_return_pct: str = None,
     ytd_return_color: str = "#4ade80",
-    market_status: str = "LAST CLOSE",
+    market_status: str = "Last Close",
     return_label: str = "1D"
 ) -> Dict[str, str]:
     """

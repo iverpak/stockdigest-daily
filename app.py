@@ -15562,13 +15562,13 @@ def generate_email_html_core(
 
         # Subject: Full month name, date range (en-dash for proper typography)
         subject_date = f"{start_date.strftime('%B %d')}–{end_date.strftime('%d, %Y')}"
-        # Header: Abbreviated month, UPPERCASE, date range (en-dash for proper typography)
-        current_date = f"{start_date.strftime('%b %d').upper()}–{end_date.strftime('%d, %Y').upper()}"
+        # Header: Abbreviated month, title case, date range (en-dash for proper typography)
+        current_date = f"{start_date.strftime('%b %d')}–{end_date.strftime('%d, %Y')}"
     else:  # daily
         # Subject: Full month name
         subject_date = now_eastern.strftime("%B %d, %Y")
-        # Header: Abbreviated month, UPPERCASE
-        current_date = now_eastern.strftime("%b %d, %Y").upper()
+        # Header: Abbreviated month, title case
+        current_date = now_eastern.strftime("%b %d, %Y")
 
     # market_status and return_label already set from get_filing_stock_data() above
 
@@ -16574,7 +16574,7 @@ def get_filing_stock_data(ticker: str) -> dict:
         'price_change_color': "#1e6b4a" if daily_return is not None and daily_return >= 0 else "#9b2c2c",
         'ytd_return_pct': f"{'+' if ytd_return >= 0 else ''}{ytd_return:.2f}%" if ytd_return is not None else None,
         'ytd_return_color': "#1e6b4a" if ytd_return is not None and ytd_return >= 0 else "#9b2c2c",
-        'market_status': "INTRADAY" if market_is_open else "LAST CLOSE",
+        'market_status': "Intraday" if market_is_open else "Last Close",
         'return_label': "TODAY" if market_is_open else "1D",
         # 4-metric strip (Nov 2025)
         'market_cap': market_cap_formatted,
@@ -17681,7 +17681,7 @@ async def process_press_release_phase(job: dict):
                         price_change_color=stock_data.get('price_change_color', '#1e6b4a'),
                         ytd_return_pct=stock_data.get('ytd_return_pct'),
                         ytd_return_color=stock_data.get('ytd_return_color', '#1e6b4a'),
-                        market_status=stock_data.get('market_status', 'LAST CLOSE'),
+                        market_status=stock_data.get('market_status', 'Last Close'),
                         return_label=stock_data.get('return_label', '1D')
                     )
                     email_html = email_result.get('html', '')
@@ -18033,7 +18033,7 @@ async def process_8k_summary_phase(job: dict):
                                 price_change_color=stock_data.get('price_change_color', '#1e6b4a'),
                                 ytd_return_pct=stock_data.get('ytd_return_pct'),
                                 ytd_return_color=stock_data.get('ytd_return_color', '#1e6b4a'),
-                                market_status=stock_data.get('market_status', 'LAST CLOSE'),
+                                market_status=stock_data.get('market_status', 'Last Close'),
                                 return_label=stock_data.get('return_label', '1D')
                             )
                             email_html = email_result.get('html', '')
@@ -25734,7 +25734,7 @@ async def generate_parsed_pr_api(request: Request):
                 price_change_color=stock_data.get('price_change_color', '#1e6b4a'),
                 ytd_return_pct=stock_data.get('ytd_return_pct'),
                 ytd_return_color=stock_data.get('ytd_return_color', '#1e6b4a'),
-                market_status=stock_data.get('market_status', 'LAST CLOSE'),
+                market_status=stock_data.get('market_status', 'Last Close'),
                 return_label=stock_data.get('return_label', '1D')
             )
             email_html = email_result.get('html', '')

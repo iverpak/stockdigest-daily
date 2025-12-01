@@ -805,6 +805,12 @@ EXCLUDE ENTIRELY from all sections (do not include even as low impact):
    - Daily price action <5% without catalyst
    - Intraday volatility without news
    - Volume changes without fundamental driver
+   - Stock performance summaries (YTD, 1-year, 5-year returns, TSR comparisons)
+     → Only include price moves as REACTION to a catalyst, not as the story itself
+
+   ✗ "Stock rose 30% YTD, outperforming S&P 500" [performance is the story]
+   ✗ "TSR is down 16% YTD and -60% over five years" [performance is the story]
+   ✓ "Stock fell 12% after guidance cut" [reaction to catalyst]
 
 5. Immaterial fund activity
    - Single fund position changes <5% ownership

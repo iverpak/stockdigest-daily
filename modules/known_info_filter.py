@@ -864,13 +864,12 @@ def _filter_known_info_gemini(
 
                 if is_truncated:
                     LOG.warning(f"[{ticker}] Phase 1.5: Gemini response appears truncated (ends with: ...{response_ending[-30:]})")
-                    LOG.warning(f"[{ticker}] Phase 1.5: Retrying due to truncated response (content attempt {content_attempt + 1}/{max_content_retries + 1})")
-                    time.sleep(2)  # Brief pause before retry
-                    continue
                 else:
-                    LOG.warning(f"[{ticker}] Phase 1.5: JSON parsing failed but response not truncated - retrying anyway")
-                    time.sleep(2)
-                    continue
+                    LOG.warning(f"[{ticker}] Phase 1.5: JSON parsing failed (response not obviously truncated)")
+
+                LOG.warning(f"[{ticker}] Phase 1.5: Retrying Gemini (attempt {content_attempt + 2} of {max_content_retries + 1})...")
+                time.sleep(2)  # Brief pause before retry
+                continue
             else:
                 LOG.error(f"[{ticker}] Phase 1.5: Failed to parse Gemini JSON after {content_attempt + 1} content attempts")
                 return None

@@ -376,7 +376,7 @@ def _filter_known_info_gemini(
                     user_content,
                     generation_config={
                         'temperature': 0.0,
-                        'max_output_tokens': 16000
+                        'max_output_tokens': 40000
                     }
                 )
                 generation_time_ms = int((time.time() - start_time) * 1000)
@@ -480,7 +480,7 @@ def _filter_known_info_claude(
 
         data = {
             "model": "claude-sonnet-4-5-20250929",
-            "max_tokens": 16000,
+            "max_tokens": 40000,
             "temperature": 0.0,
             "system": [
                 {

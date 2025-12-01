@@ -77,8 +77,9 @@ For each claim:
 1. Search Transcript for exact or paraphrased match
 2. Search 10-Q for exact or paraphrased match
 3. Search 10-K for exact or paraphrased match
-4. If found in ANY filing → status: "KNOWN"
-5. If NOT found in any filing → status: "NEW"
+4. Search 8-K filings for exact or paraphrased match (material events since last earnings)
+5. If found in ANY filing → status: "KNOWN"
+6. If NOT found in any filing → status: "NEW"
 
 Matching rules:
 - Numbers: Exact match required (allow rounding: $51.2B = $51,200M = $51.2 billion)
@@ -133,7 +134,8 @@ INPUT FORMAT
 
 You will receive:
 1. Phase 1 JSON with bullets and paragraphs
-2. Filing sources (Transcript, 10-Q, 10-K) - check claims against these
+2. Filing sources (Transcript, 10-Q, 10-K, 8-K) - check claims against these
+   - 8-K filings are material events filed since the last earnings call
 
 BULLET SECTIONS TO FILTER (apply claim analysis):
 - major_developments
@@ -202,7 +204,7 @@ Return valid JSON with this exact structure:
           "claim": "...",
           "status": "KNOWN" or "NEW",
           "source": "filing section" or null,
-          "source_type": "Transcript" or "10-Q" or "10-K" or null
+          "source_type": "Transcript" or "10-Q" or "10-K" or "8-K" or null
         }
       ],
       "action": "KEEP" or "REWRITE" or "REMOVE",
@@ -231,7 +233,7 @@ Return ONLY the JSON object, no other text.
 # HELPER FUNCTIONS
 # =============================================================================
 
-def _build_filter_user_content(ticker: str, phase1_json: Dict, filings: Dict) -> str:
+def _build_filter_user_content(ticker: str, phase1_json: Dict, filings: Dict, eight_k_filings: List[Dict] = None) -> str:
     """
     Build user content combining Phase 1 JSON and filing sources.
 
@@ -239,6 +241,7 @@ def _build_filter_user_content(ticker: str, phase1_json: Dict, filings: Dict) ->
         ticker: Stock ticker symbol
         phase1_json: Phase 1 JSON output
         filings: Dict with keys '10k', '10q', 'transcript'
+        eight_k_filings: List of filtered 8-K filings (optional)
 
     Returns:
         Formatted user content string
@@ -293,13 +296,34 @@ def _build_filter_user_content(ticker: str, phase1_json: Dict, filings: Dict) ->
         content += f"[{ticker} ({company}) 10-K FILING FOR FISCAL YEAR {year}, Filed: {date_str}]\n\n"
         content += f"{k.get('text', '')}\n\n\n"
 
-    if not filings:
+    # Add 8-K filings if available (filtered material events since last earnings)
+    if eight_k_filings:
+        content += f"RECENT 8-K FILINGS (since last earnings call):\n"
+        content += f"[{len(eight_k_filings)} material 8-K filing(s) found]\n\n"
+
+        for filing in eight_k_filings:
+            filing_date = filing.get('filing_date')
+            if hasattr(filing_date, 'strftime'):
+                date_str = filing_date.strftime('%b %d, %Y')
+            else:
+                date_str = str(filing_date) if filing_date else 'Unknown Date'
+
+            report_title = filing.get('report_title', 'Untitled')
+            item_codes = filing.get('item_codes', 'Unknown')
+            summary = filing.get('summary_markdown', '')
+
+            content += f"[{ticker} 8-K Filed: {date_str} | Items: {item_codes}]\n"
+            content += f"{report_title}\n\n"
+            content += f"{summary}\n\n"
+            content += "---\n\n"
+
+    if not filings and not eight_k_filings:
         content += "NO FILINGS AVAILABLE - Mark all claims as NEW.\n"
 
     return content
 
 
-def _get_filings_info(filings: Dict) -> Dict:
+def _get_filings_info(filings: Dict, eight_k_filings: List[Dict] = None) -> Dict:
     """Extract filing metadata for email display."""
     info = {}
 
@@ -326,7 +350,132 @@ def _get_filings_info(filings: Dict) -> Dict:
             'date': k.get('filing_date').strftime('%b %d, %Y') if k.get('filing_date') else 'Unknown'
         }
 
+    # Add 8-K summary
+    if eight_k_filings:
+        info['8k'] = {
+            'count': len(eight_k_filings),
+            'filings': []
+        }
+        for filing in eight_k_filings:
+            filing_date = filing.get('filing_date')
+            if hasattr(filing_date, 'strftime'):
+                date_str = filing_date.strftime('%b %d, %Y')
+            else:
+                date_str = str(filing_date) if filing_date else 'Unknown'
+
+            info['8k']['filings'].append({
+                'date': date_str,
+                'title': filing.get('report_title', 'Untitled'),
+                'items': filing.get('item_codes', 'Unknown')
+            })
+
     return info
+
+
+def _fetch_filtered_8k_filings(ticker: str, db_func, last_transcript_date=None) -> List[Dict]:
+    """
+    Fetch filtered 8-K filings for inclusion in knowledge base.
+
+    Applies 3-layer filtering:
+    - Layer 1: Item code filter (material events only)
+    - Layer 2: Exhibit number filter (press releases, not legal docs)
+    - Layer 3: Title keyword filter (exclude boilerplate)
+
+    Time window:
+    - Start: Last transcript date (or 90-day fallback)
+    - End: T-3 (3 days before today, to allow articles to cover the 8-K first)
+    - Max: 90 days
+
+    Args:
+        ticker: Stock ticker
+        db_func: Database connection function
+        last_transcript_date: Date of last earnings call (optional)
+
+    Returns:
+        List of filtered 8-K filings with filing_date, report_title, item_codes, summary_markdown
+    """
+    from datetime import date, timedelta
+
+    try:
+        with db_func() as conn, conn.cursor() as cur:
+            # Calculate time window
+            today = date.today()
+            end_date = today - timedelta(days=3)  # T-3 buffer
+            max_lookback = today - timedelta(days=90)  # 90-day safety cap
+
+            # Start date: after last transcript, or 90-day fallback
+            if last_transcript_date:
+                start_date = max(last_transcript_date, max_lookback)
+            else:
+                start_date = max_lookback
+
+            LOG.info(f"[{ticker}] Phase 1.5: Fetching 8-Ks from {start_date} to {end_date}")
+
+            # Query with all filters applied in SQL
+            cur.execute("""
+                SELECT
+                    filing_date,
+                    report_title,
+                    item_codes,
+                    summary_markdown
+                FROM company_releases
+                WHERE ticker = %s
+                  AND source_type = '8k_exhibit'
+                  -- Time window
+                  AND filing_date > %s
+                  AND filing_date <= %s
+                  -- Layer 1: Item code filter (include if ANY of these material codes)
+                  AND (
+                      item_codes LIKE '%%1.01%%' OR
+                      item_codes LIKE '%%1.02%%' OR
+                      item_codes LIKE '%%2.01%%' OR
+                      item_codes LIKE '%%2.02%%' OR
+                      item_codes LIKE '%%2.03%%' OR
+                      item_codes LIKE '%%2.05%%' OR
+                      item_codes LIKE '%%2.06%%' OR
+                      item_codes LIKE '%%4.01%%' OR
+                      item_codes LIKE '%%4.02%%' OR
+                      item_codes LIKE '%%5.01%%' OR
+                      item_codes LIKE '%%5.02%%' OR
+                      item_codes LIKE '%%5.07%%' OR
+                      item_codes LIKE '%%7.01%%' OR
+                      item_codes LIKE '%%8.01%%' OR
+                      item_codes = 'Unknown'
+                  )
+                  -- Layer 2: Exhibit number filter (press releases + main body + merger agreements)
+                  AND (
+                      exhibit_number LIKE '99%%' OR
+                      exhibit_number = 'MAIN' OR
+                      exhibit_number = '2.1'
+                  )
+                  -- Layer 3: Title exclusions (legal boilerplate + routine dividends)
+                  AND report_title NOT ILIKE '%%Legal Opinion%%'
+                  AND report_title NOT ILIKE '%%Underwriting Agreement%%'
+                  AND report_title NOT ILIKE '%%Indenture%%'
+                  AND report_title NOT ILIKE '%%Officers'' Certificate%%'
+                  AND report_title NOT ILIKE '%%Notes Due%%'
+                  AND report_title NOT ILIKE '%%Bylaws%%'
+                  AND report_title NOT ILIKE '%%Dividend%%'
+                ORDER BY filing_date DESC
+            """, (ticker, start_date, end_date))
+
+            rows = cur.fetchall()
+
+            filings = []
+            for row in rows:
+                filings.append({
+                    'filing_date': row['filing_date'] if isinstance(row, dict) else row[0],
+                    'report_title': row['report_title'] if isinstance(row, dict) else row[1],
+                    'item_codes': row['item_codes'] if isinstance(row, dict) else row[2],
+                    'summary_markdown': row['summary_markdown'] if isinstance(row, dict) else row[3]
+                })
+
+            LOG.info(f"[{ticker}] Phase 1.5: Found {len(filings)} filtered 8-K filings")
+            return filings
+
+    except Exception as e:
+        LOG.error(f"[{ticker}] Phase 1.5: Error fetching 8-K filings: {e}")
+        return []
 
 
 # =============================================================================
@@ -337,7 +486,8 @@ def _filter_known_info_gemini(
     ticker: str,
     phase1_json: Dict,
     filings: Dict,
-    gemini_api_key: str
+    gemini_api_key: str,
+    eight_k_filings: List[Dict] = None
 ) -> Optional[Dict]:
     """
     Filter known information using Gemini 2.5 Flash.
@@ -347,6 +497,7 @@ def _filter_known_info_gemini(
         phase1_json: Phase 1 JSON output
         filings: Dict with filing data
         gemini_api_key: Gemini API key
+        eight_k_filings: List of filtered 8-K filings (optional)
 
     Returns:
         Filter result dict or None if failed
@@ -356,8 +507,8 @@ def _filter_known_info_gemini(
     try:
         genai.configure(api_key=gemini_api_key)
 
-        # Build user content
-        user_content = _build_filter_user_content(ticker, phase1_json, filings)
+        # Build user content (now includes 8-K filings)
+        user_content = _build_filter_user_content(ticker, phase1_json, filings, eight_k_filings)
 
         # Concatenate system prompt + user content (matches working pattern in article_summaries.py, triage.py)
         # NOTE: Using system_instruction parameter caused empty responses with finish_reason=1
@@ -653,14 +804,23 @@ def filter_known_information(
         LOG.error(f"[{ticker}] Phase 1.5: Failed to fetch filings: {e}")
         filings = {}
 
-    # Get filings info for email
-    filings_info = _get_filings_info(filings)
+    # Get last transcript date for 8-K time window
+    last_transcript_date = None
+    if 'transcript' in filings and filings['transcript'].get('date'):
+        last_transcript_date = filings['transcript']['date']
+        LOG.info(f"[{ticker}] Phase 1.5: Last transcript date: {last_transcript_date}")
+
+    # Fetch filtered 8-K filings (material events since last earnings)
+    eight_k_filings = _fetch_filtered_8k_filings(ticker, db_func, last_transcript_date)
+
+    # Get filings info for email (now includes 8-K)
+    filings_info = _get_filings_info(filings, eight_k_filings)
 
     # Try Gemini first
     result = None
     if gemini_api_key:
         LOG.info(f"[{ticker}] Phase 1.5: Attempting Gemini 2.5 Flash (primary)")
-        result = _filter_known_info_gemini(ticker, phase1_json, filings, gemini_api_key)
+        result = _filter_known_info_gemini(ticker, phase1_json, filings, gemini_api_key, eight_k_filings)
 
         if result and result.get("json_output"):
             LOG.info(f"[{ticker}] Phase 1.5: Gemini succeeded")
@@ -736,6 +896,9 @@ def generate_known_info_filter_email(ticker: str, filter_result: Dict) -> str:
     if '10k' in filings:
         k = filings['10k']
         filing_parts.append(f"10-K (FY{k['year']})")
+    if '8k' in filings:
+        eight_k = filings['8k']
+        filing_parts.append(f"8-K ({eight_k['count']} filing{'s' if eight_k['count'] != 1 else ''})")
     filing_str = ", ".join(filing_parts) if filing_parts else "None"
 
     # Start HTML

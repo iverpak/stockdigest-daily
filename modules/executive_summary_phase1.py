@@ -980,6 +980,10 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
         if content_p3:
             result += f"<br><br><strong>Phase 3 (Integrated):</strong><br>{content_p3}"
 
+        # Source articles (always show for QA visibility, even if empty)
+        source_articles = bl.get('source_articles', [])
+        result += f"<br><br>Source Articles: {source_articles}"
+
         sections["bottom_line"] = [result]
 
     # Helper function to format bullets with full QA display
@@ -1146,6 +1150,10 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
                 result += f" Context: {context}"
             if content_p3:
                 result += f"<br><br><strong>Phase 3 (Integrated):</strong><br>{content_p3}"
+
+            # Source articles (always show for QA visibility, even if empty)
+            source_articles = scenario.get('source_articles', [])
+            result += f"<br><br>Source Articles: {source_articles}"
 
             sections[sections_key] = [result]
 

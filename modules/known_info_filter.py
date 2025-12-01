@@ -413,51 +413,70 @@ def _fetch_filtered_8k_filings(ticker: str, db_func, last_transcript_date=None) 
             LOG.info(f"[{ticker}] Phase 1.5: Fetching 8-Ks from {start_date} to {end_date}")
 
             # Query with all filters applied in SQL
+            # Uses window function to limit to 3 exhibits per filing date (ordered by exhibit_number)
+            # This prevents token explosion from merger filings with 15+ exhibits (e.g., HBAN)
             cur.execute("""
-                SELECT
-                    filing_date,
-                    report_title,
-                    item_codes,
-                    summary_markdown
-                FROM company_releases
-                WHERE ticker = %s
-                  AND source_type = '8k_exhibit'
-                  -- Time window
-                  AND filing_date > %s
-                  AND filing_date <= %s
-                  -- Layer 1: Item code filter (include if ANY of these material codes)
-                  AND (
-                      item_codes LIKE '%%1.01%%' OR
-                      item_codes LIKE '%%1.02%%' OR
-                      item_codes LIKE '%%2.01%%' OR
-                      item_codes LIKE '%%2.02%%' OR
-                      item_codes LIKE '%%2.03%%' OR
-                      item_codes LIKE '%%2.05%%' OR
-                      item_codes LIKE '%%2.06%%' OR
-                      item_codes LIKE '%%4.01%%' OR
-                      item_codes LIKE '%%4.02%%' OR
-                      item_codes LIKE '%%5.01%%' OR
-                      item_codes LIKE '%%5.02%%' OR
-                      item_codes LIKE '%%5.07%%' OR
-                      item_codes LIKE '%%7.01%%' OR
-                      item_codes LIKE '%%8.01%%' OR
-                      item_codes = 'Unknown'
-                  )
-                  -- Layer 2: Exhibit number filter (press releases + main body + merger agreements)
-                  AND (
-                      exhibit_number LIKE '99%%' OR
-                      exhibit_number = 'MAIN' OR
-                      exhibit_number = '2.1'
-                  )
-                  -- Layer 3: Title exclusions (legal boilerplate + routine dividends)
-                  AND report_title NOT ILIKE '%%Legal Opinion%%'
-                  AND report_title NOT ILIKE '%%Underwriting Agreement%%'
-                  AND report_title NOT ILIKE '%%Indenture%%'
-                  AND report_title NOT ILIKE '%%Officers'' Certificate%%'
-                  AND report_title NOT ILIKE '%%Notes Due%%'
-                  AND report_title NOT ILIKE '%%Bylaws%%'
-                  AND report_title NOT ILIKE '%%Dividend%%'
-                ORDER BY filing_date DESC
+                WITH filtered_8k AS (
+                    SELECT
+                        filing_date,
+                        report_title,
+                        item_codes,
+                        exhibit_number,
+                        summary_markdown,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY filing_date
+                            ORDER BY
+                                -- Prioritize MAIN and 2.1, then 99.x by number
+                                CASE
+                                    WHEN exhibit_number = 'MAIN' THEN 0
+                                    WHEN exhibit_number = '2.1' THEN 1
+                                    ELSE 2
+                                END,
+                                exhibit_number ASC
+                        ) as rn
+                    FROM company_releases
+                    WHERE ticker = %s
+                      AND source_type = '8k_exhibit'
+                      -- Time window
+                      AND filing_date > %s
+                      AND filing_date <= %s
+                      -- Layer 1: Item code filter (include if ANY of these material codes)
+                      AND (
+                          item_codes LIKE '%%1.01%%' OR
+                          item_codes LIKE '%%1.02%%' OR
+                          item_codes LIKE '%%2.01%%' OR
+                          item_codes LIKE '%%2.02%%' OR
+                          item_codes LIKE '%%2.03%%' OR
+                          item_codes LIKE '%%2.05%%' OR
+                          item_codes LIKE '%%2.06%%' OR
+                          item_codes LIKE '%%4.01%%' OR
+                          item_codes LIKE '%%4.02%%' OR
+                          item_codes LIKE '%%5.01%%' OR
+                          item_codes LIKE '%%5.02%%' OR
+                          item_codes LIKE '%%5.07%%' OR
+                          item_codes LIKE '%%7.01%%' OR
+                          item_codes LIKE '%%8.01%%' OR
+                          item_codes = 'Unknown'
+                      )
+                      -- Layer 2: Exhibit number filter (press releases + main body + merger agreements)
+                      AND (
+                          exhibit_number LIKE '99%%' OR
+                          exhibit_number = 'MAIN' OR
+                          exhibit_number = '2.1'
+                      )
+                      -- Layer 3: Title exclusions (legal boilerplate + routine dividends)
+                      AND report_title NOT ILIKE '%%Legal Opinion%%'
+                      AND report_title NOT ILIKE '%%Underwriting Agreement%%'
+                      AND report_title NOT ILIKE '%%Indenture%%'
+                      AND report_title NOT ILIKE '%%Officers'' Certificate%%'
+                      AND report_title NOT ILIKE '%%Notes Due%%'
+                      AND report_title NOT ILIKE '%%Bylaws%%'
+                      AND report_title NOT ILIKE '%%Dividend%%'
+                )
+                SELECT filing_date, report_title, item_codes, summary_markdown
+                FROM filtered_8k
+                WHERE rn <= 3  -- Max 3 exhibits per filing date
+                ORDER BY filing_date DESC, rn ASC
             """, (ticker, start_date, end_date))
 
             rows = cur.fetchall()
@@ -471,7 +490,7 @@ def _fetch_filtered_8k_filings(ticker: str, db_func, last_transcript_date=None) 
                     'summary_markdown': row['summary_markdown'] if isinstance(row, dict) else row[3]
                 })
 
-            LOG.info(f"[{ticker}] Phase 1.5: Found {len(filings)} filtered 8-K filings")
+            LOG.info(f"[{ticker}] Phase 1.5: Found {len(filings)} filtered 8-K filings (max 3 per filing date)")
             return filings
 
     except Exception as e:

@@ -777,77 +777,107 @@ def _filter_known_info_gemini(
 
         LOG.info(f"[{ticker}] Phase 1.5: Calling Gemini 2.5 Flash for known info filter")
 
-        # Retry logic
-        max_retries = 2
-        response = None
-        generation_time_ms = 0
+        # Import JSON parser
+        from modules.json_utils import extract_json_from_claude_response
 
-        for attempt in range(max_retries + 1):
-            try:
-                start_time = time.time()
-                response = model.generate_content(
-                    full_prompt,
-                    generation_config={
-                        'temperature': 0.0,
-                        'max_output_tokens': 40000
-                    }
+        # Outer loop: Retry on truncated/malformed responses (content validation)
+        max_content_retries = 1
+
+        for content_attempt in range(max_content_retries + 1):
+            # Inner loop: Retry on API errors (rate limits, timeouts, etc.)
+            max_api_retries = 2
+            response = None
+            generation_time_ms = 0
+
+            for api_attempt in range(max_api_retries + 1):
+                try:
+                    start_time = time.time()
+                    response = model.generate_content(
+                        full_prompt,
+                        generation_config={
+                            'temperature': 0.0,
+                            'max_output_tokens': 40000
+                        }
+                    )
+                    generation_time_ms = int((time.time() - start_time) * 1000)
+                    break
+
+                except Exception as e:
+                    error_str = str(e)
+                    is_retryable = (
+                        'ResourceExhausted' in error_str or
+                        'quota' in error_str.lower() or
+                        '429' in error_str or
+                        'ServiceUnavailable' in error_str or
+                        '503' in error_str or
+                        'DeadlineExceeded' in error_str or
+                        'timeout' in error_str.lower()
+                    )
+
+                    if is_retryable and api_attempt < max_api_retries:
+                        wait_time = 2 ** api_attempt
+                        LOG.warning(f"[{ticker}] Phase 1.5 Gemini API error (attempt {api_attempt + 1}): {error_str[:200]}")
+                        LOG.warning(f"[{ticker}] Retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        LOG.error(f"[{ticker}] Phase 1.5 Gemini failed after {api_attempt + 1} API attempts: {error_str}")
+                        return None
+
+            if response is None:
+                LOG.error(f"[{ticker}] Phase 1.5: No response from Gemini")
+                return None
+
+            # Extract text
+            response_text = response.text
+            if not response_text or len(response_text.strip()) < 10:
+                LOG.error(f"[{ticker}] Phase 1.5: Gemini returned empty response")
+                return None
+
+            # Parse JSON
+            json_output = extract_json_from_claude_response(response_text, ticker)
+
+            if json_output:
+                # Success! Get token counts and return
+                prompt_tokens = response.usage_metadata.prompt_token_count if hasattr(response, 'usage_metadata') else 0
+                completion_tokens = response.usage_metadata.candidates_token_count if hasattr(response, 'usage_metadata') else 0
+
+                LOG.info(f"[{ticker}] Phase 1.5 Gemini success: {prompt_tokens} prompt, {completion_tokens} completion, {generation_time_ms}ms")
+
+                return {
+                    "json_output": json_output,
+                    "model_used": "gemini-2.5-flash",
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "generation_time_ms": generation_time_ms
+                }
+
+            # JSON parsing failed - check if we should retry
+            if content_attempt < max_content_retries:
+                # Detect truncation: response ends mid-sentence (no closing brace, ends with comma, etc.)
+                response_ending = response_text.strip()[-50:] if len(response_text.strip()) > 50 else response_text.strip()
+                is_truncated = (
+                    not response_text.strip().endswith('}') or
+                    response_ending.endswith(',') or
+                    response_ending.endswith(':')
                 )
-                generation_time_ms = int((time.time() - start_time) * 1000)
-                break
 
-            except Exception as e:
-                error_str = str(e)
-                is_retryable = (
-                    'ResourceExhausted' in error_str or
-                    'quota' in error_str.lower() or
-                    '429' in error_str or
-                    'ServiceUnavailable' in error_str or
-                    '503' in error_str or
-                    'DeadlineExceeded' in error_str or
-                    'timeout' in error_str.lower()
-                )
-
-                if is_retryable and attempt < max_retries:
-                    wait_time = 2 ** attempt
-                    LOG.warning(f"[{ticker}] Phase 1.5 Gemini error (attempt {attempt + 1}): {error_str[:200]}")
-                    LOG.warning(f"[{ticker}] Retrying in {wait_time}s...")
-                    time.sleep(wait_time)
+                if is_truncated:
+                    LOG.warning(f"[{ticker}] Phase 1.5: Gemini response appears truncated (ends with: ...{response_ending[-30:]})")
+                    LOG.warning(f"[{ticker}] Phase 1.5: Retrying due to truncated response (content attempt {content_attempt + 1}/{max_content_retries + 1})")
+                    time.sleep(2)  # Brief pause before retry
                     continue
                 else:
-                    LOG.error(f"[{ticker}] Phase 1.5 Gemini failed after {attempt + 1} attempts: {error_str}")
-                    return None
+                    LOG.warning(f"[{ticker}] Phase 1.5: JSON parsing failed but response not truncated - retrying anyway")
+                    time.sleep(2)
+                    continue
+            else:
+                LOG.error(f"[{ticker}] Phase 1.5: Failed to parse Gemini JSON after {content_attempt + 1} content attempts")
+                return None
 
-        if response is None:
-            LOG.error(f"[{ticker}] Phase 1.5: No response from Gemini")
-            return None
-
-        # Extract text
-        response_text = response.text
-        if not response_text or len(response_text.strip()) < 10:
-            LOG.error(f"[{ticker}] Phase 1.5: Gemini returned empty response")
-            return None
-
-        # Parse JSON
-        from modules.json_utils import extract_json_from_claude_response
-        json_output = extract_json_from_claude_response(response_text, ticker)
-
-        if not json_output:
-            LOG.error(f"[{ticker}] Phase 1.5: Failed to parse Gemini JSON response")
-            return None
-
-        # Get token counts
-        prompt_tokens = response.usage_metadata.prompt_token_count if hasattr(response, 'usage_metadata') else 0
-        completion_tokens = response.usage_metadata.candidates_token_count if hasattr(response, 'usage_metadata') else 0
-
-        LOG.info(f"[{ticker}] Phase 1.5 Gemini success: {prompt_tokens} prompt, {completion_tokens} completion, {generation_time_ms}ms")
-
-        return {
-            "json_output": json_output,
-            "model_used": "gemini-2.5-flash",
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "generation_time_ms": generation_time_ms
-        }
+        # Should not reach here, but safety return
+        LOG.error(f"[{ticker}] Phase 1.5: Unexpected exit from retry loop")
+        return None
 
     except Exception as e:
         LOG.error(f"[{ticker}] Phase 1.5 Gemini exception: {e}", exc_info=True)

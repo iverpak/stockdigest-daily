@@ -220,6 +220,8 @@ IMPORTANT:
 - For REWRITE: rewritten_content = new coherent text with only NEW claims
 - For EXEMPT sections (wall_street_sentiment, upcoming_catalysts):
   Always set action="KEEP", claims=[], rewritten_content=original_content
+- List ALL claims individually - NEVER truncate with "and X more claims" or similar
+- NEVER summarize or abbreviate the claims array
 
 Return ONLY the JSON object, no other text.
 """

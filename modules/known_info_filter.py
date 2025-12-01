@@ -1240,7 +1240,12 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
 
                     # For KNOWN claims, show evidence with source
                     if status == 'KNOWN' and evidence:
-                        html += f'<br><span style="margin-left: 20px; color: #666; font-size: 12px;">→ "{_escape_html(evidence)}" ({source_type}, {source_section})</span>'
+                        if source_type:
+                            # Filing-based KNOWN - show quote with source
+                            html += f'<br><span style="margin-left: 20px; color: #666; font-size: 12px;">→ "{_escape_html(evidence)}" ({source_type}, {source_section})</span>'
+                        else:
+                            # Staleness-based KNOWN - show reason without quotes
+                            html += f'<br><span style="margin-left: 20px; color: #856404; font-size: 12px;">→ ⏰ {_escape_html(evidence)}</span>'
                     elif status == 'KNOWN' and source_section:
                         html += f'<br><span style="margin-left: 20px; color: #666; font-size: 12px;">→ {source_type}, {source_section}</span>'
 
@@ -1287,7 +1292,12 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
 
                     # For KNOWN claims, show evidence with source
                     if status == 'KNOWN' and evidence:
-                        html += f'<br><span style="margin-left: 20px; color: #666; font-size: 12px;">→ "{_escape_html(evidence)}" ({source_type}, {source_section})</span>'
+                        if source_type:
+                            # Filing-based KNOWN - show quote with source
+                            html += f'<br><span style="margin-left: 20px; color: #666; font-size: 12px;">→ "{_escape_html(evidence)}" ({source_type}, {source_section})</span>'
+                        else:
+                            # Staleness-based KNOWN - show reason without quotes
+                            html += f'<br><span style="margin-left: 20px; color: #856404; font-size: 12px;">→ ⏰ {_escape_html(evidence)}</span>'
                     elif status == 'KNOWN' and source_section:
                         html += f'<br><span style="margin-left: 20px; color: #666; font-size: 12px;">→ {source_type}, {source_section}</span>'
 

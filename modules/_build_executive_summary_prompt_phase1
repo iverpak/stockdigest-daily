@@ -795,6 +795,13 @@ EXCLUDE ENTIRELY from all sections (do not include even as low impact):
    - Zacks ranks, Motley Fool ratings
    - Proprietary model scores, screener results
    - Aggregated retail sentiment
+   - Financial metrics compilations without news catalyst
+     → PE ratios, margin snapshots, market cap summaries, valuation multiples
+     → These are derived stats available on any finance site, not developments
+
+   ✗ "PE ratio stood at 265 with market cap of $1.3T" [snapshot, no catalyst]
+   ✗ "FCF margin of 7.15% and operating margin of 5.09% per Trefis" [metrics compilation]
+   ✓ "Q3 earnings beat: EPS $1.25 vs $1.10 expected, margin expanded to 12%" [catalyst + metrics]
 
 3. Generic macro news
    - Fed decisions affecting all stocks equally

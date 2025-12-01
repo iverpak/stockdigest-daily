@@ -15425,7 +15425,7 @@ def generate_email_html_core(
     except json.JSONDecodeError as e:
         LOG.error(f"[{ticker}] Failed to parse Phase 3 JSON in Email #3: {e}")
         sections = {}  # Empty sections
-        used_article_indices = set()  # No filtering
+        used_article_indices = None  # No filtering (backward compat - show all)
 
     # NEW (Nov 2025): Filter sections based on report_type
     if report_type == 'daily':
@@ -15487,9 +15487,10 @@ def generate_email_html_core(
         # IMPORTANT: Filter BEFORE adding company releases, as releases are not in Phase 1 timeline
         # The articles list is ordered by published_at DESC, matching Phase 1 timeline ordering
         # Index 0 = first article, index 1 = second article, etc.
-        if used_article_indices and articles:
+        if used_article_indices is not None and articles:
             total_real_articles = len(articles)
             # Keep only articles whose timeline index is in the used set
+            # Note: empty set is valid - means no articles were used (e.g., "no material developments")
             articles = [
                 article for idx, article in enumerate(articles)
                 if idx in used_article_indices
@@ -15497,6 +15498,8 @@ def generate_email_html_core(
             filtered_count = total_real_articles - len(articles)
             if filtered_count > 0:
                 LOG.info(f"[{ticker}] Email #3: Filtered {filtered_count} unused articles (showing {len(articles)} of {total_real_articles})")
+            elif total_real_articles > 0 and len(articles) == 0:
+                LOG.info(f"[{ticker}] Email #3: No articles used in final report (filtered all {total_real_articles})")
         elif articles:
             # No source_articles tracking (backward compatibility) - show all articles
             LOG.info(f"[{ticker}] Email #3: No source_articles tracking, showing all {len(articles)} articles")

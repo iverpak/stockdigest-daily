@@ -151,7 +151,7 @@ WHERE rn <= 3
 
 ### KNOWN (filter out)
 
-Information already in the filings:
+Information already in the filings OR stale information:
 - Specific numbers (revenue, margins, EPS, guidance, capex)
 - Events explicitly stated in filings
 - Management quotes from transcripts
@@ -160,10 +160,11 @@ Information already in the filings:
 - Business model descriptions
 - Historical comparisons already discussed
 - Material events disclosed in 8-K filings (mergers, acquisitions, executive changes)
+- **Prior quarter data:** Financial metrics from quarters before the current filing period (e.g., Q2 data when current filings are Q3)
 
 ### NEW (keep)
 
-Information NOT in the filings:
+Information NOT in the filings AND temporally fresh:
 - Market reaction (stock price movement, trading volume)
 - Analyst actions (upgrades, downgrades, price targets)
 - Third-party commentary (analyst quotes, expert opinions)
@@ -171,6 +172,33 @@ Information NOT in the filings:
 - Rumors, speculation, breaking news
 - Competitive developments not in company filings
 - External market data
+- **Specific competitor metrics** (growth rates, market share) NOT in company filings
+
+### Paired Claims Rule
+
+Comparisons must be treated as a unit:
+- "AWS at 20% vs Azure at 30%" → if one side is NEW, keep BOTH
+- Removing one side of a comparison makes it meaningless
+- Either keep the full comparison or remove it entirely
+
+### Materiality Test
+
+Before marking as REWRITE (instead of REMOVE), apply this test:
+
+> "Would a reader gain ACTIONABLE INSIGHT from ONLY the NEW claims?"
+
+Mark as REMOVE if NEW claims are merely:
+- Dates or timing details on otherwise KNOWN events
+- Minor wording variations of KNOWN information
+- Context that only supports KNOWN claims
+- Less than 20% of the original content's substance
+
+### What Counts as KNOWN
+
+The **specific fact** must be in filings, not just the general topic:
+- ❌ "Competition exists" does NOT make "Temu has 57% market share" KNOWN
+- ❌ "We face regulatory risk" does NOT make "EU investigation in November 2025" KNOWN
+- ✅ Only mark KNOWN if the specific data point, number, or fact appears in filings
 
 ## AI Implementation
 
@@ -184,7 +212,7 @@ Information NOT in the filings:
 
 ### Fallback: Claude Sonnet 4.5
 
-Currently commented out for testing (Gemini-only mode).
+Re-enabled as fallback when Gemini fails. Uses same prompt with 8-K filings included.
 
 ## Output Format
 
@@ -210,13 +238,15 @@ Currently commented out for testing (Gemini-only mode).
           "claim": "Q3 revenue $51.2B",
           "status": "KNOWN",
           "source": "10-Q Financial Highlights section",
-          "source_type": "10-Q"
+          "source_type": "10-Q",
+          "evidence": "Total net sales increased 11% to $158.9 billion in Q3 2024"
         },
         {
           "claim": "stock pulled back 25%",
           "status": "NEW",
           "source": null,
-          "source_type": null
+          "source_type": null,
+          "evidence": null
         }
       ],
       "action": "REWRITE",
@@ -225,6 +255,19 @@ Currently commented out for testing (Gemini-only mode).
   ],
   "paragraphs": [...]
 }
+```
+
+### Evidence Field
+
+For KNOWN claims, the `evidence` field contains the actual quote or paraphrase from the filing that proves the claim is known. This enables:
+- **Verification:** Confirm the AI correctly matched the claim to the filing
+- **QA:** Catch over-aggressive KNOWN marking (e.g., vague match shouldn't make specific claim KNOWN)
+- **Transparency:** See exactly what text in the filing supports the classification
+
+**Email Display:**
+```
+❌ KNOWN: AWS growth at ~20%
+   → "AWS segment revenue grew 19% year-over-year" (Transcript, FINANCIAL RESULTS)
 ```
 
 ## Integration Points

@@ -27,13 +27,13 @@ LOG = logging.getLogger(__name__)
 
 KNOWN_INFO_FILTER_PROMPT = """You are a research analyst filtering a news summary against the company's official SEC filings.
 
-Your task: For each bullet/paragraph, decompose into atomic claims and check each against the filings provided. Output filtered content containing ONLY NEW information.
+Your task: For each bullet/paragraph, decompose into atomic claims and check each against the filings provided. Output filtered content containing ONLY genuinely NEW and material information.
 
 ═══════════════════════════════════════════════════════════════════════════════
 WHAT IS "KNOWN" vs "NEW"?
 ═══════════════════════════════════════════════════════════════════════════════
 
-KNOWN (filter out) - Information already in the filings:
+KNOWN (filter out) - Information already in the filings OR stale information:
 - Specific numbers that appear in filings (revenue, margins, EPS, guidance, capex)
 - Events explicitly stated in filings (announced X, reported Y, launched Z)
 - Management quotes from transcripts
@@ -42,8 +42,10 @@ KNOWN (filter out) - Information already in the filings:
 - Business model descriptions from filings
 - Historical comparisons already discussed (YoY, QoQ changes mentioned in filings)
 - Material events disclosed in 8-K filings (mergers, acquisitions, executive changes, restructuring)
+- PRIOR QUARTER DATA: Financial metrics from quarters before the current filing period
+  (e.g., if current filings are Q3, then Q2 data is KNOWN even if not in Q3 filings)
 
-NEW (keep) - Information NOT in the filings:
+NEW (keep) - Information NOT in the filings AND temporally fresh:
 - Market reaction (stock price movement, trading volume changes)
 - Analyst actions (upgrades, downgrades, price target changes, ratings)
 - Third-party commentary (analyst quotes, industry expert opinions)
@@ -51,6 +53,30 @@ NEW (keep) - Information NOT in the filings:
 - Rumors, speculation, breaking news not yet in filings
 - Competitive developments not discussed in company filings
 - External market data not from the company
+- Specific competitor metrics (growth rates, market share) NOT in company filings
+
+═══════════════════════════════════════════════════════════════════════════════
+CRITICAL: PAIRED CLAIMS RULE
+═══════════════════════════════════════════════════════════════════════════════
+
+Some claims only make sense as pairs - particularly COMPARISONS. When a bullet
+compares the company to competitors (e.g., "AWS at 20% vs Azure at 30%"), you
+MUST treat the comparison as a unit:
+
+- If the company's metric is KNOWN but competitor's metric is NEW, keep BOTH
+- If removing one side would make the comparison meaningless, keep BOTH
+- The comparison itself may be newsworthy even if individual numbers are known
+
+Example:
+"AWS growth of 20% lags Azure and Google Cloud at 30%"
+- "AWS at 20%" = KNOWN (in transcript)
+- "Azure/Google at 30%" = NEW (not in Amazon's filings)
+- CORRECT: Keep BOTH because the comparison is the insight
+- WRONG: Remove 20%, keep 30% (leaves reader without context)
+
+When rewriting comparisons, either:
+1. Keep the full comparison (if competitor data is NEW and valuable)
+2. Remove the entire comparison (if it's just restating known competitive position)
 
 ═══════════════════════════════════════════════════════════════════════════════
 CLAIM EXTRACTION
@@ -62,6 +88,9 @@ Decompose each bullet/paragraph into ATOMIC claims:
 - Each specific event is ONE claim (e.g., "announced partnership with X")
 - Each directional statement is ONE claim (e.g., "beat guidance")
 - Each attributed quote is ONE claim (e.g., "CEO said X")
+
+IMPORTANT: Mark claims as PAIRED when they form a comparison:
+- "Company X at 20% vs Competitor Y at 30%" → mark both as paired_with each other
 
 Example decomposition:
 "Revenue grew 26% to $51.2B, beating guidance of $47.5-50.5B, while stock fell 25%"
@@ -88,6 +117,12 @@ Matching rules:
 - Events: Same event, even if worded differently = KNOWN
 - Quotes: Same substance, even if not verbatim = KNOWN
 
+IMPORTANT - What counts as KNOWN:
+- The SPECIFIC fact must be in filings, not just the general topic
+- "Competition exists" in filing does NOT make "Temu has 57% market share" KNOWN
+- "We face regulatory risk" does NOT make "EU investigation in November 2025" KNOWN
+- Only mark KNOWN if the specific data point, number, or fact appears in filings
+
 ═══════════════════════════════════════════════════════════════════════════════
 ACTION LOGIC
 ═══════════════════════════════════════════════════════════════════════════════
@@ -108,7 +143,34 @@ REMOVE - All claims are KNOWN
 → Nothing new to report
 → rewritten_content = "" (empty string)
 
-Special case: If rewrite would be <15 words, mark as REMOVE instead.
+═══════════════════════════════════════════════════════════════════════════════
+MATERIALITY TEST FOR REWRITE vs REMOVE
+═══════════════════════════════════════════════════════════════════════════════
+
+Before marking as REWRITE, apply this test:
+
+"Would a reader gain ACTIONABLE INSIGHT from ONLY the NEW claims?"
+
+Mark as REMOVE (not REWRITE) if the NEW claims are merely:
+- Dates or timing details on otherwise KNOWN events
+- Minor wording variations of KNOWN information
+- Context that only supports KNOWN claims
+- Less than 20% of the original content's substance
+
+Example - should be REMOVE, not REWRITE:
+Original: "Amazon faces regulatory risks including potential EU investigations in November 2025
+that could classify AWS as a gatekeeper under the DMA, leading to fines."
+KNOWN: regulatory risks, EU investigations, gatekeeper classification, DMA, fines (all in 10-K)
+NEW: "November 2025" (just a date)
+→ Action: REMOVE (the date alone provides no actionable insight)
+
+Example - should be REWRITE:
+Original: "AWS growth of 20% lags Azure at 33% and Google Cloud at 35%, per analyst reports."
+KNOWN: AWS at 20% (in transcript)
+NEW: Azure at 33%, Google Cloud at 35%, analyst commentary
+→ Action: REWRITE (competitor metrics ARE actionable insight)
+→ Rewritten: "AWS growth lags Azure at 33% and Google Cloud at 35%, per analyst reports."
+   (Keep AWS context for comparison to make sense, but note the competitor data is the news)
 
 ═══════════════════════════════════════════════════════════════════════════════
 REWRITE GUIDELINES
@@ -117,17 +179,27 @@ REWRITE GUIDELINES
 When action is REWRITE:
 
 1. REMOVE all KNOWN claims completely - do not include any information from filings
-2. PRESERVE all NEW claims with their full context
+2. PRESERVE all NEW claims with their full context and specific details
 3. MAINTAIN narrative coherence - write flowing prose, not a choppy list
 4. ADD minimal bridging context if needed for the NEW claim to make sense
 5. PRESERVE attribution for NEW claims ("per analyst", "according to Reuters")
+6. For PAIRED CLAIMS (comparisons): Keep both sides if removing one makes it meaningless
+7. Do NOT preserve CONCLUSIONS derived from KNOWN data
+   - WRONG: "AWS growth lags competitors" (if "lags" conclusion is from known data)
+   - RIGHT: Remove the lagging narrative entirely, or keep with NEW competitor numbers
+
+CRITICAL - Verify your rewrite:
+- Does the rewritten text contain ANY information from the filings? If yes, remove it.
+- Does the rewritten text preserve conclusions/framing from KNOWN claims? If yes, rewrite.
+- Would the rewritten text make sense to someone who hasn't read the filings? If no, add context.
 
 Example:
 Original: "Meta reported Q3 revenue of $51.2B (+26% YoY), beating guidance, while stock pulled back 25% on AI spending concerns."
 KNOWN: Q3 revenue $51.2B, +26% YoY, beat guidance (all in transcript/10-Q)
 NEW: stock pulled back 25%, AI spending concerns
 
-Rewritten: "META shares pulled back 25% in the past month amid investor concerns over AI spending levels."
+Rewritten: "META shares pulled back 25% amid investor concerns over AI spending levels."
+(Note: removed "in the past month" if that's not in the article, kept only verifiable NEW claims)
 
 ═══════════════════════════════════════════════════════════════════════════════
 INPUT FORMAT
@@ -183,13 +255,15 @@ Return valid JSON with this exact structure:
           "claim": "Q3 revenue $51.2B",
           "status": "KNOWN",
           "source": "10-Q Financial Highlights section",
-          "source_type": "10-Q"
+          "source_type": "10-Q",
+          "evidence": "Total net sales increased 11% to $158.9 billion in Q3 2024"
         },
         {
           "claim": "stock pulled back 25%",
           "status": "NEW",
           "source": null,
-          "source_type": null
+          "source_type": null,
+          "evidence": null
         }
       ],
       "action": "REWRITE",
@@ -205,7 +279,8 @@ Return valid JSON with this exact structure:
           "claim": "...",
           "status": "KNOWN" or "NEW",
           "source": "filing section" or null,
-          "source_type": "Transcript" or "10-Q" or "10-K" or "8-K" or null
+          "source_type": "Transcript" or "10-Q" or "10-K" or "8-K" or null,
+          "evidence": "exact quote or paraphrase from filing" or null
         }
       ],
       "action": "KEEP" or "REWRITE" or "REMOVE",
@@ -225,6 +300,13 @@ IMPORTANT:
   Always set action="KEEP", claims=[], rewritten_content=original_content
 - List ALL claims individually - NEVER truncate with "and X more claims" or similar
 - NEVER summarize or abbreviate the claims array
+
+EVIDENCE FIELD (required for KNOWN claims):
+- For KNOWN claims: Include the actual quote or close paraphrase from the filing that proves
+  this claim is known. This should be the specific text that matches the claim.
+- For NEW claims: Set evidence to null
+- Keep evidence concise (1-2 sentences max) but specific enough to verify the match
+- Example: claim="AWS growth ~20%" → evidence="AWS segment revenue grew 19% year-over-year"
 
 Return ONLY the JSON object, no other text.
 """
@@ -630,7 +712,8 @@ def _filter_known_info_claude(
     ticker: str,
     phase1_json: Dict,
     filings: Dict,
-    anthropic_api_key: str
+    anthropic_api_key: str,
+    eight_k_filings: List[Dict] = None
 ) -> Optional[Dict]:
     """
     Filter known information using Claude Sonnet 4.5 (fallback).
@@ -640,13 +723,14 @@ def _filter_known_info_claude(
         phase1_json: Phase 1 JSON output
         filings: Dict with filing data
         anthropic_api_key: Anthropic API key
+        eight_k_filings: List of filtered 8-K filings (optional)
 
     Returns:
         Filter result dict or None if failed
     """
     try:
-        # Build user content
-        user_content = _build_filter_user_content(ticker, phase1_json, filings)
+        # Build user content (now includes 8-K filings)
+        user_content = _build_filter_user_content(ticker, phase1_json, filings, eight_k_filings)
 
         # Log sizes
         system_tokens_est = len(KNOWN_INFO_FILTER_PROMPT) // 4
@@ -848,19 +932,19 @@ def filter_known_information(
             LOG.warning(f"[{ticker}] Phase 1.5: Gemini failed, falling back to Claude")
             result = None
 
-    # Claude fallback commented out for testing (Gemini-only mode)
-    # if result is None and anthropic_api_key:
-    #     LOG.info(f"[{ticker}] Phase 1.5: Using Claude Sonnet 4.5 (fallback)")
-    #     result = _filter_known_info_claude(ticker, phase1_json, filings, anthropic_api_key)
-    #
-    #     if result and result.get("json_output"):
-    #         LOG.info(f"[{ticker}] Phase 1.5: Claude succeeded (fallback)")
-    #     else:
-    #         LOG.error(f"[{ticker}] Phase 1.5: Claude also failed")
-    #         result = None
+    # Claude fallback
+    if result is None and anthropic_api_key:
+        LOG.info(f"[{ticker}] Phase 1.5: Using Claude Sonnet 4.5 (fallback)")
+        result = _filter_known_info_claude(ticker, phase1_json, filings, anthropic_api_key, eight_k_filings)
+
+        if result and result.get("json_output"):
+            LOG.info(f"[{ticker}] Phase 1.5: Claude succeeded (fallback)")
+        else:
+            LOG.error(f"[{ticker}] Phase 1.5: Claude also failed")
+            result = None
 
     if result is None:
-        LOG.error(f"[{ticker}] Phase 1.5: Gemini failed (Claude fallback disabled)")
+        LOG.error(f"[{ticker}] Phase 1.5: Both Gemini and Claude failed")
         return None
 
     # Build final output
@@ -1016,8 +1100,20 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
                     status = c.get('status', 'NEW')
                     claim_class = 'claim-known' if status == 'KNOWN' else 'claim-new'
                     icon = '❌' if status == 'KNOWN' else '✅'
-                    source = f" → {c.get('source', '')}" if c.get('source') else ""
-                    html += f'<div class="claim {claim_class}">{icon} {status}: {_escape_html(c.get("claim", ""))}{source}</div>\n'
+                    source_type = c.get('source_type', '')
+                    source_section = c.get('source', '')
+                    evidence = c.get('evidence', '')
+
+                    # Build the claim line
+                    html += f'<div class="claim {claim_class}">{icon} {status}: {_escape_html(c.get("claim", ""))}'
+
+                    # For KNOWN claims, show evidence with source
+                    if status == 'KNOWN' and evidence:
+                        html += f'<br><span style="margin-left: 20px; color: #666; font-size: 12px;">→ "{_escape_html(evidence)}" ({source_type}, {source_section})</span>'
+                    elif status == 'KNOWN' and source_section:
+                        html += f'<br><span style="margin-left: 20px; color: #666; font-size: 12px;">→ {source_type}, {source_section}</span>'
+
+                    html += '</div>\n'
                 html += '</div>\n'
 
             # Rewritten content (no truncation)
@@ -1051,8 +1147,20 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
                     status = c.get('status', 'NEW')
                     claim_class = 'claim-known' if status == 'KNOWN' else 'claim-new'
                     icon = '❌' if status == 'KNOWN' else '✅'
-                    source = f" → {c.get('source', '')}" if c.get('source') else ""
-                    html += f'<div class="claim {claim_class}">{icon} {status}: {_escape_html(c.get("claim", ""))}{source}</div>\n'
+                    source_type = c.get('source_type', '')
+                    source_section = c.get('source', '')
+                    evidence = c.get('evidence', '')
+
+                    # Build the claim line
+                    html += f'<div class="claim {claim_class}">{icon} {status}: {_escape_html(c.get("claim", ""))}'
+
+                    # For KNOWN claims, show evidence with source
+                    if status == 'KNOWN' and evidence:
+                        html += f'<br><span style="margin-left: 20px; color: #666; font-size: 12px;">→ "{_escape_html(evidence)}" ({source_type}, {source_section})</span>'
+                    elif status == 'KNOWN' and source_section:
+                        html += f'<br><span style="margin-left: 20px; color: #666; font-size: 12px;">→ {source_type}, {source_section}</span>'
+
+                    html += '</div>\n'
                 html += '</div>\n'
 
             # Rewritten content (no truncation)

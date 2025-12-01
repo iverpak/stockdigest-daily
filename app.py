@@ -12710,6 +12710,48 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
                 # Update stored JSON string with cleaned version
                 ai_analysis_summary = json.dumps(json_output, indent=2)
 
+                # ========================================================================
+                # PHASE 1.5: Known Information Filter (TEST MODE - non-blocking)
+                # ========================================================================
+                # Runs in parallel conceptually - emails findings but does NOT modify pipeline
+                # This is for testing/validation only. Once validated, Phase 2 will receive
+                # filtered output instead of original Phase 1 JSON.
+                # ========================================================================
+                try:
+                    from modules.known_info_filter import filter_known_information, generate_known_info_filter_email
+
+                    LOG.info(f"[{ticker}] Phase 1.5: Running known info filter (TEST MODE - non-blocking)")
+
+                    filter_result = filter_known_information(
+                        ticker=ticker,
+                        phase1_json=json_output,  # Original Phase 1 JSON (not modified)
+                        db_func=db,
+                        gemini_api_key=GEMINI_API_KEY,
+                        anthropic_api_key=ANTHROPIC_API_KEY
+                    )
+
+                    if filter_result:
+                        # Generate and send email to admin
+                        filter_email_html = generate_known_info_filter_email(ticker, filter_result)
+                        email_subject = f"[TEST] Phase 1.5 Known Info Filter: {ticker}"
+
+                        send_email(
+                            subject=email_subject,
+                            html_body=filter_email_html,
+                            to=ADMIN_EMAIL
+                        )
+                        LOG.info(f"[{ticker}] Phase 1.5: Email sent to admin (TEST MODE)")
+
+                        # Log summary stats
+                        summary = filter_result.get("summary", {})
+                        LOG.info(f"[{ticker}] Phase 1.5 Summary: {summary.get('kept', 0)} kept, {summary.get('rewritten', 0)} rewritten, {summary.get('removed', 0)} removed")
+                    else:
+                        LOG.warning(f"[{ticker}] Phase 1.5: Filter returned no results (non-blocking)")
+
+                except Exception as e:
+                    # Phase 1.5 failure should NEVER block the main pipeline
+                    LOG.warning(f"[{ticker}] Phase 1.5: Test failed (non-blocking): {e}")
+
         # PHASE 2: Enrich Phase 1 with filing context (10-K, 10-Q, Transcript)
         final_json = json_output  # Default to Phase 1 JSON
         generation_phase = 'phase1'  # Track which phase completed
@@ -29343,6 +29385,41 @@ async def regenerate_email_api(request: Request):
         else:
             # Unknown or missing model (shouldn't happen, but log warning)
             LOG.warning(f"[{ticker}] Phase 1 cost tracking: Unknown model '{model_used}', skipping cost tracking")
+
+        # ========================================================================
+        # PHASE 1.5: Known Information Filter (TEST MODE - non-blocking)
+        # ========================================================================
+        try:
+            from modules.known_info_filter import filter_known_information, generate_known_info_filter_email
+
+            LOG.info(f"[{ticker}] Phase 1.5: Running known info filter (TEST MODE - regenerate)")
+
+            filter_result = filter_known_information(
+                ticker=ticker,
+                phase1_json=json_output,
+                db_func=db,
+                gemini_api_key=GEMINI_API_KEY,
+                anthropic_api_key=ANTHROPIC_API_KEY
+            )
+
+            if filter_result:
+                filter_email_html = generate_known_info_filter_email(ticker, filter_result)
+                email_subject = f"[TEST] Phase 1.5 Known Info Filter (Regen): {ticker}"
+
+                send_email(
+                    subject=email_subject,
+                    html_body=filter_email_html,
+                    to=ADMIN_EMAIL
+                )
+                LOG.info(f"[{ticker}] Phase 1.5: Email sent to admin (TEST MODE - regenerate)")
+
+                summary = filter_result.get("summary", {})
+                LOG.info(f"[{ticker}] Phase 1.5 Summary: {summary.get('kept', 0)} kept, {summary.get('rewritten', 0)} rewritten, {summary.get('removed', 0)} removed")
+            else:
+                LOG.warning(f"[{ticker}] Phase 1.5: Filter returned no results (non-blocking)")
+
+        except Exception as e:
+            LOG.warning(f"[{ticker}] Phase 1.5: Test failed (non-blocking): {e}")
 
         # PHASE 2: Enrich Phase 1 with filing context (10-K, 10-Q, Transcript)
         final_json = json_output  # Default to Phase 1 only

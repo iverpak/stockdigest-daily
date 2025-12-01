@@ -140,11 +140,11 @@ BULLET SECTIONS TO FILTER (apply claim analysis):
 - financial_performance
 - risk_factors
 - competitive_industry_dynamics
+- key_variables
 
 BULLET SECTIONS TO EXEMPT (pass through unchanged, action=KEEP, no claim analysis):
 - wall_street_sentiment (analyst opinions ARE the news, even when citing known data)
 - upcoming_catalysts (forward-looking editorial value)
-- key_variables (forward-looking monitoring guidance)
 
 For EXEMPT sections: Do NOT analyze claims. Set action="KEEP", claims=[], rewritten_content=original_content.
 
@@ -218,7 +218,7 @@ IMPORTANT:
 - For KEEP: rewritten_content = original_content (copy exactly)
 - For REMOVE: rewritten_content = "" (empty string)
 - For REWRITE: rewritten_content = new coherent text with only NEW claims
-- For EXEMPT sections (wall_street_sentiment, upcoming_catalysts, key_variables):
+- For EXEMPT sections (wall_street_sentiment, upcoming_catalysts):
   Always set action="KEEP", claims=[], rewritten_content=original_content
 
 Return ONLY the JSON object, no other text.

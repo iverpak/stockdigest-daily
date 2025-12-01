@@ -79,6 +79,137 @@ When rewriting comparisons, either:
 2. Remove the entire comparison (if it's just restating known competitive position)
 
 ═══════════════════════════════════════════════════════════════════════════════
+STALENESS CHECK (Independent of Filings)
+═══════════════════════════════════════════════════════════════════════════════
+
+Even if a claim is NOT in our filings, it may still be STALE - information that
+has been publicly available long enough that any attentive investor already knows it.
+
+The key question: "When was this information RELEASED to the public?"
+
+STEP 1: IS THIS CONTINUOUSLY AVAILABLE MARKET DATA?
+
+These are stale when referencing historical values (>2 weeks old) because
+they're observable at any time - there's no "release" moment:
+
+A. Derived Financial Metrics (from data providers like Yahoo Finance, Morningstar)
+   - TTM (trailing twelve month) calculations
+   - Multi-year growth rates (5-year, 3-year, 10-year)
+   - Industry averages and benchmarks
+   - Valuation ratios (P/E, P/B, EV/EBITDA)
+   - Historical return comparisons (YTD, 1-year, 5-year returns)
+
+B. Commodity Prices
+   - Oil (WTI, Brent), natural gas, coal
+   - Metals (gold, silver, copper, aluminum)
+   - Agricultural (corn, wheat, soybeans)
+   - Spreads (crack spreads, refining margins, frac spreads)
+
+C. Interest Rates & Fixed Income
+   - Fed funds rate, SOFR, LIBOR
+   - Treasury yields (2Y, 10Y, 30Y)
+   - Credit spreads, corporate bond yields
+   - Mortgage rates
+
+D. Currency/FX Rates
+   - Any historical exchange rate (USD/EUR, USD/JPY, etc.)
+
+E. Market Indices & Levels
+   - Historical index values (S&P 500, NASDAQ, Dow, sector ETFs)
+   - VIX levels, market breadth metrics
+
+F. Economic Data (when recapping old releases)
+   - GDP, unemployment, CPI from prior periods being summarized
+   - PMI, housing data, consumer confidence from months ago
+
+→ If historical (>2 weeks old) → Mark as KNOWN
+→ Evidence: "[Type] from [period] - continuously available market data"
+
+EXCEPTION - When market data IS new:
+- Current/real-time values tied to today's analysis → NEW
+- Significant moves (>5%) tied to a catalyst within 2 weeks → NEW
+- Forward-looking forecasts/futures → NEW
+
+STEP 2: FOR DISCRETE RELEASES, WHEN WAS IT RELEASED?
+
+For company-specific information that WAS released at a specific time:
+- Quarterly earnings → Earnings announcement date
+- Annual metrics (from 10-K) → 10-K filing date
+- Guidance → Announcement date
+- M&A, partnerships, contracts → Press release date
+- Analyst ratings → Publication date of the rating
+
+Compare release date to CURRENT DATE:
+- Released ≤4 weeks ago → NEW (recent, investors may not have digested)
+- Released >4 weeks ago → KNOWN (stale - investors have had time to see this)
+
+→ Evidence for stale discrete releases: "Released [date], [X] weeks stale"
+
+═══════════════════════════════════════════════════════════════════════════════
+STALENESS EXAMPLES
+═══════════════════════════════════════════════════════════════════════════════
+
+DERIVED METRICS (always stale):
+
+✗ "ROE of 26% for TTM to August 2025" (article from Dec 2025)
+  → KNOWN | Evidence: "Derived TTM metric - continuously available"
+
+✗ "Net income growth of 22% over five years"
+  → KNOWN | Evidence: "5-year derived metric - continuously available"
+
+✗ "10% industry average ROE"
+  → KNOWN | Evidence: "Industry benchmark - static reference data"
+
+✗ "P/E ratio of 34.5x per Yahoo Finance"
+  → KNOWN | Evidence: "Valuation ratio - continuously available"
+
+MARKET DATA (stale when old):
+
+✗ "Crack spreads averaged $15/bbl in Q2"
+  → KNOWN | Evidence: "Q2 commodity spread - 6 months stale"
+
+✗ "10Y Treasury was 4.5% in September"
+  → KNOWN | Evidence: "September interest rate - 3 months stale"
+
+✗ "Oil averaged $78 last quarter"
+  → KNOWN | Evidence: "Prior quarter oil price - continuously available"
+
+✗ "USD/EUR was 1.08 in August"
+  → KNOWN | Evidence: "August FX rate - 4 months stale"
+
+✓ "Crack spreads collapsed to $8/bbl this week, pressuring margins"
+  → NEW (current market data tied to analysis)
+
+✓ "10Y Treasury surged 30bps today on inflation data"
+  → NEW (significant recent move with catalyst)
+
+✓ "Oil futures suggest $90 by Q1 2026"
+  → NEW (forward-looking)
+
+DISCRETE RELEASES (stale after 4 weeks):
+
+✗ "Q3 EBITDA of $10.7B" (Q3 earnings released Sep 4, now Dec 1)
+  → KNOWN | Evidence: "Released Sep 4, 2025 - 12 weeks stale"
+
+✗ "Company announced $2B buyback" (announced 2 months ago)
+  → KNOWN | Evidence: "Released Oct 1, 2025 - 8 weeks stale"
+
+✓ "Q4 revenue of $15.2B" (Q4 earnings released yesterday)
+  → NEW (discrete release <4 weeks old)
+
+✓ "Analyst upgraded to Buy with $200 target" (issued 2 weeks ago)
+  → NEW (discrete release <4 weeks old)
+
+✓ "Stock fell 8% following guidance cut" (guidance cut last week)
+  → NEW (market reaction to recent event)
+
+IMPORTANT: A claim can be KNOWN because:
+1. It appears in our filings (evidence = quote from filing), OR
+2. It's stale (evidence = staleness reason)
+
+Both result in status: "KNOWN" - the evidence field explains why.
+
+═══════════════════════════════════════════════════════════════════════════════
 CLAIM EXTRACTION
 ═══════════════════════════════════════════════════════════════════════════════
 

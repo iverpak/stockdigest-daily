@@ -200,6 +200,51 @@ The **specific fact** must be in filings, not just the general topic:
 - ❌ "We face regulatory risk" does NOT make "EU investigation in November 2025" KNOWN
 - ✅ Only mark KNOWN if the specific data point, number, or fact appears in filings
 
+### Staleness Check (Independent of Filings)
+
+A claim can be KNOWN for two reasons:
+1. **In filings** - Evidence shows the quote from the filing
+2. **Stale** - Information released long ago that investors already know
+
+**Key question:** "When was this information RELEASED to the public?"
+
+#### Continuously Available Market Data (always stale when historical)
+
+These have no "release" moment - they're observable anytime:
+
+| Category | Examples |
+|----------|----------|
+| **Derived Metrics** | TTM calculations, multi-year growth rates, P/E ratios, industry averages |
+| **Commodities** | Oil, natural gas, metals, crack spreads, refining margins |
+| **Interest Rates** | Fed funds, Treasury yields, SOFR, credit spreads, mortgage rates |
+| **FX Rates** | Any historical exchange rate |
+| **Market Indices** | S&P 500, NASDAQ, VIX levels (historical) |
+| **Economic Data** | Old GDP, CPI, unemployment being recapped |
+
+→ Historical values (>2 weeks old) = KNOWN (stale)
+→ Current values tied to today's analysis = NEW
+→ Forward-looking forecasts = NEW
+
+#### Discrete Releases (stale after 4 weeks)
+
+Company-specific releases that occurred at a specific time:
+- Quarterly earnings, guidance, M&A announcements, analyst ratings
+
+→ Released ≤4 weeks ago = NEW
+→ Released >4 weeks ago = KNOWN (stale)
+
+#### Staleness Examples
+
+| Claim | Status | Evidence |
+|-------|--------|----------|
+| "ROE of 26% TTM to August 2025" | KNOWN | Derived TTM metric - continuously available |
+| "Crack spreads averaged $15/bbl in Q2" | KNOWN | Q2 commodity spread - 6 months stale |
+| "10Y Treasury was 4.5% in September" | KNOWN | September interest rate - 3 months stale |
+| "Q3 EBITDA $10.7B" (released Sep 4, now Dec 1) | KNOWN | Released Sep 4 - 12 weeks stale |
+| "Crack spreads collapsed to $8 this week" | NEW | Current market data |
+| "Oil futures suggest $90 by Q1 2026" | NEW | Forward-looking |
+| "Analyst upgraded yesterday" | NEW | Released <4 weeks ago |
+
 ## AI Implementation
 
 ### Primary: Gemini 2.5 Flash

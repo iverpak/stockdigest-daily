@@ -359,16 +359,18 @@ def _filter_known_info_gemini(
         # Build user content
         user_content = _build_filter_user_content(ticker, phase1_json, filings)
 
+        # Concatenate system prompt + user content (matches working pattern in article_summaries.py, triage.py)
+        # NOTE: Using system_instruction parameter caused empty responses with finish_reason=1
+        full_prompt = KNOWN_INFO_FILTER_PROMPT + "\n\n" + user_content
+
         # Log sizes
         system_tokens_est = len(KNOWN_INFO_FILTER_PROMPT) // 4
         user_tokens_est = len(user_content) // 4
-        LOG.info(f"[{ticker}] Phase 1.5 Gemini prompt: system=~{system_tokens_est} tokens, user=~{user_tokens_est} tokens")
+        total_tokens_est = len(full_prompt) // 4
+        LOG.info(f"[{ticker}] Phase 1.5 Gemini prompt: system=~{system_tokens_est} tokens, user=~{user_tokens_est} tokens, total=~{total_tokens_est} tokens")
 
-        # Create model
-        model = genai.GenerativeModel(
-            'gemini-2.5-flash',
-            system_instruction=KNOWN_INFO_FILTER_PROMPT
-        )
+        # Create model WITHOUT system_instruction (use concatenated prompt instead)
+        model = genai.GenerativeModel('gemini-2.5-flash')
 
         LOG.info(f"[{ticker}] Phase 1.5: Calling Gemini 2.5 Flash for known info filter")
 
@@ -381,7 +383,7 @@ def _filter_known_info_gemini(
             try:
                 start_time = time.time()
                 response = model.generate_content(
-                    user_content,
+                    full_prompt,
                     generation_config={
                         'temperature': 0.0,
                         'max_output_tokens': 40000
@@ -666,19 +668,19 @@ def filter_known_information(
             LOG.warning(f"[{ticker}] Phase 1.5: Gemini failed, falling back to Claude")
             result = None
 
-    # Fall back to Claude
-    if result is None and anthropic_api_key:
-        LOG.info(f"[{ticker}] Phase 1.5: Using Claude Sonnet 4.5 (fallback)")
-        result = _filter_known_info_claude(ticker, phase1_json, filings, anthropic_api_key)
-
-        if result and result.get("json_output"):
-            LOG.info(f"[{ticker}] Phase 1.5: Claude succeeded (fallback)")
-        else:
-            LOG.error(f"[{ticker}] Phase 1.5: Claude also failed")
-            result = None
+    # Claude fallback commented out for testing (Gemini-only mode)
+    # if result is None and anthropic_api_key:
+    #     LOG.info(f"[{ticker}] Phase 1.5: Using Claude Sonnet 4.5 (fallback)")
+    #     result = _filter_known_info_claude(ticker, phase1_json, filings, anthropic_api_key)
+    #
+    #     if result and result.get("json_output"):
+    #         LOG.info(f"[{ticker}] Phase 1.5: Claude succeeded (fallback)")
+    #     else:
+    #         LOG.error(f"[{ticker}] Phase 1.5: Claude also failed")
+    #         result = None
 
     if result is None:
-        LOG.error(f"[{ticker}] Phase 1.5: Both Gemini and Claude failed")
+        LOG.error(f"[{ticker}] Phase 1.5: Gemini failed (Claude fallback disabled)")
         return None
 
     # Build final output

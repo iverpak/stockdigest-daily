@@ -1951,68 +1951,6 @@ KNOWN SENTENCES (to remove/minimize):
     return results
 
 
-def _apply_rewrite_results(
-    items: List[Dict],
-    rewrite_results: Dict[int, Dict],
-    item_classifications: Dict[int, str]
-) -> List[Dict]:
-    """
-    Apply rewrite results to items, updating action and content fields.
-
-    Args:
-        items: List of bullet or paragraph dicts
-        rewrite_results: Dict from _rewrite_mixed_content_sonnet
-        item_classifications: Dict mapping index -> classification
-
-    Returns:
-        Updated items list
-    """
-    for idx, item in enumerate(items):
-        classification = item_classifications.get(idx, 'all_new')
-
-        if classification == 'exempt':
-            # Exempt items keep original action (KEEP)
-            item['action'] = 'KEEP'
-            item['exempt'] = True
-            # Don't show filtered/rewritten content for exempt
-
-        elif classification == 'all_known':
-            # 100% known → REMOVE, no rewrite needed
-            item['action'] = 'REMOVE'
-            item['filtered_content'] = ''
-
-        elif classification == 'all_new':
-            # 100% new → KEEP original, no rewrite needed
-            item['action'] = 'KEEP'
-            # Don't set filtered_content - use original
-
-        elif classification == 'mixed':
-            # Mixed content - check rewrite results
-            if idx in rewrite_results:
-                result = rewrite_results[idx]
-                if result.get('rewrite_failed'):
-                    # Fallback to mechanical filter
-                    item['action'] = 'KEEP'
-                    # Keep existing filtered_content
-                elif result['action'] == 'REWRITE':
-                    item['action'] = 'REWRITE'
-                    item['rewritten_content'] = result['content']
-                    # Clear filtered_content to avoid confusion
-                    item['filtered_content'] = ''
-                elif result['action'] == 'REMOVE':
-                    item['action'] = 'REMOVE'
-                    item['filtered_content'] = ''
-                    item['rewritten_content'] = ''
-                else:
-                    # Unexpected action, keep original
-                    item['action'] = 'KEEP'
-            else:
-                # No rewrite result, keep original filtered content
-                item['action'] = 'KEEP'
-
-    return items
-
-
 # =============================================================================
 # MAIN ENTRY POINT
 # =============================================================================
@@ -2119,38 +2057,29 @@ def filter_known_information(
     # Step 2: Classify each item
     bullet_classifications = {}
     paragraph_classifications = {}
-    items_to_rewrite = []  # List of (index, item, type) for mixed items
 
     for idx, bullet in enumerate(bullets):
-        classification = _classify_bullet_for_rewrite(bullet)
-        bullet_classifications[idx] = classification
-        if classification == 'mixed':
-            items_to_rewrite.append((f"b{idx}", bullet, 'bullet'))
+        bullet_classifications[idx] = _classify_bullet_for_rewrite(bullet)
 
     for idx, para in enumerate(paragraphs):
-        classification = _classify_bullet_for_rewrite(para)
-        paragraph_classifications[idx] = classification
-        if classification == 'mixed':
-            items_to_rewrite.append((f"p{idx}", para, 'paragraph'))
+        paragraph_classifications[idx] = _classify_bullet_for_rewrite(para)
 
-    # Log classification summary
-    bullet_counts = {'all_known': 0, 'all_new': 0, 'mixed': 0, 'exempt': 0}
-    for c in bullet_classifications.values():
-        bullet_counts[c] = bullet_counts.get(c, 0) + 1
+    # Count classifications for logging
+    mixed_bullet_count = sum(1 for c in bullet_classifications.values() if c == 'mixed')
+    mixed_para_count = sum(1 for c in paragraph_classifications.values() if c == 'mixed')
+    total_mixed = mixed_bullet_count + mixed_para_count
 
-    para_counts = {'all_known': 0, 'all_new': 0, 'mixed': 0, 'exempt': 0}
-    for c in paragraph_classifications.values():
-        para_counts[c] = para_counts.get(c, 0) + 1
-
-    LOG.info(f"[{ticker}] Phase 1.5 Step 2 Triage - Bullets: {bullet_counts} | Paragraphs: {para_counts}")
+    LOG.info(f"[{ticker}] Phase 1.5 Step 2 Triage - "
+             f"Bullets: {dict((k, sum(1 for v in bullet_classifications.values() if v == k)) for k in ['all_known', 'all_new', 'mixed', 'exempt'])} | "
+             f"Paragraphs: {dict((k, sum(1 for v in paragraph_classifications.values() if v == k)) for k in ['all_known', 'all_new', 'mixed', 'exempt'])}")
 
     # Step 3: Rewrite mixed items with Sonnet (if any and if API key available)
     rewrite_time_ms = 0
 
-    if items_to_rewrite and anthropic_api_key:
-        LOG.info(f"[{ticker}] Phase 1.5 Step 3: {len(items_to_rewrite)} items need Sonnet rewrite")
+    if total_mixed > 0 and anthropic_api_key:
+        LOG.info(f"[{ticker}] Phase 1.5 Step 3: {total_mixed} items need Sonnet rewrite")
 
-        # Build list with proper indices
+        # Build lists of mixed items with their indices
         bullet_items = [(idx, bullets[idx], 'bullet') for idx in range(len(bullets))
                         if bullet_classifications.get(idx) == 'mixed']
         para_items = [(idx, paragraphs[idx], 'paragraph') for idx in range(len(paragraphs))
@@ -2166,8 +2095,6 @@ def filter_known_information(
 
             # Apply results to bullets
             for idx, result_data in bullet_rewrite_results.items():
-                bullet_classifications[idx] = 'mixed'  # Keep classification
-                # Update bullet with rewrite result
                 if result_data['action'] == 'REWRITE':
                     bullets[idx]['action'] = 'REWRITE'
                     bullets[idx]['rewritten_content'] = result_data['content']
@@ -2189,8 +2116,6 @@ def filter_known_information(
 
             # Apply results to paragraphs
             for idx, result_data in para_rewrite_results.items():
-                paragraph_classifications[idx] = 'mixed'  # Keep classification
-                # Update paragraph with rewrite result
                 if result_data['action'] == 'REWRITE':
                     paragraphs[idx]['action'] = 'REWRITE'
                     paragraphs[idx]['rewritten_content'] = result_data['content']
@@ -2204,8 +2129,8 @@ def filter_known_information(
 
         LOG.info(f"[{ticker}] Phase 1.5 Step 3: Sonnet rewrite completed in {rewrite_time_ms}ms")
 
-    elif items_to_rewrite and not anthropic_api_key:
-        LOG.warning(f"[{ticker}] Phase 1.5: {len(items_to_rewrite)} items need rewrite but no Anthropic API key")
+    elif total_mixed > 0 and not anthropic_api_key:
+        LOG.warning(f"[{ticker}] Phase 1.5: {total_mixed} items need rewrite but no Anthropic API key")
         # Fall back to mechanical filtering (keep filtered_content as-is)
 
     # Apply classifications for non-mixed items

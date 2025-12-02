@@ -337,7 +337,11 @@ def merge_filtered_bullets_back(phase3_json: Dict, marked_phase2_json: Dict) -> 
         "key_variables"
     ]
 
-    merged_sections = merged_json.get('sections', {})
+    # Ensure 'sections' key exists in merged_json
+    if 'sections' not in merged_json:
+        merged_json['sections'] = {}
+
+    merged_sections = merged_json['sections']
     marked_sections = marked_phase2_json.get('sections', {})
 
     for section_name in bullet_sections:

@@ -99,9 +99,19 @@ For EACH bullet/paragraph, follow these steps IN ORDER:
 │ STEP 3: CLASSIFY EACH CLAIM AS KNOWN OR NEW                                 │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ For each claim:                                                             │
-│ - Search filings for match → KNOWN (set source_type + evidence)             │
-│ - Check staleness rules → KNOWN (set evidence = staleness reason)           │
-│ - Not found and not stale → NEW (set source_type=null, evidence=null)       │
+│                                                                             │
+│ A. First, consider BULLET CONTEXT:                                          │
+│    - What event/period is this bullet about? (e.g., "Q3 2025 results")      │
+│    - When was that released? (check FILING TIMELINE at top of prompt)       │
+│    - If bullet topic is >7 days old → this claim is likely STALE            │
+│                                                                             │
+│ B. Then check specifics:                                                    │
+│    - Search filings for match → KNOWN (set source_type + evidence)          │
+│    - Check staleness rules → KNOWN (set evidence = staleness reason)        │
+│    - Not found and not stale → NEW (set source_type=null, evidence=null)    │
+│                                                                             │
+│ Key: A claim about Q3 results is STALE if Q3 was released >7 days ago,      │
+│ even if that specific number isn't verbatim in our transcript.              │
 └─────────────────────────────────────────────────────────────────────────────┘
                                     ↓
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -217,6 +227,35 @@ STALENESS CHECK (Independent of Filings)
 Even if a claim is NOT in our filings, it may still be STALE - information that
 has been publicly available long enough that any attentive investor already knows it.
 
+CRITICAL: EVALUATE SENTENCES IN BULLET CONTEXT
+
+Before checking if a sentence is stale, first determine what the ENTIRE BULLET is about:
+
+1. What event or period is this bullet discussing?
+   - "In its most recent quarter..." → Quarterly earnings results
+   - "Following the acquisition announcement..." → M&A news
+   - "Management noted on the call..." → Earnings call commentary
+
+2. When was that event/period released to the public?
+   - Check the FILING TIMELINE at the top of this prompt
+   - Q3 2025 earnings released Sep 4 (89 days ago) → STALE
+   - 8-K filed last week (5 days ago) → FRESH
+
+3. If the bullet's topic is a stale release (>7 days old), then ALL sentences
+   discussing that topic are STALE - even if specific numbers aren't verbatim
+   in our filings.
+
+Example:
+  Bullet: "In its most recent quarter, Broadcom reported record revenue of $15.95B...
+           The company achieved non-GAAP operating profit of $10.7B..."
+
+  Context: This bullet is about Q3 2025 results (released Sep 4, 89 days ago)
+  Result: ALL sentences are STALE - they're rehashing 3-month-old earnings
+
+  Even "$10.7B operating profit" - which may not be verbatim in our transcript -
+  is STALE because it's part of the Q3 2025 earnings that investors learned about
+  89 days ago.
+
 The key question: "When was this information RELEASED to the public?"
 
 STEP 1: IS THIS CONTINUOUSLY AVAILABLE MARKET DATA?
@@ -331,6 +370,25 @@ FORWARD-LOOKING (NEVER stale, regardless of announcement date):
 ✓ "Company expects 15% revenue growth in FY2026" (guidance 8 weeks ago) → NEW (forward guidance)
 ✓ "FDA approval expected by Q2 2026" (announced 3 months ago) → NEW (regulatory timeline)
 ✓ "Macro environment is pressuring deposit yields" → NEW (present-tense analysis)
+
+BULLET CONTEXT STALENESS (evaluate sentence in context of entire bullet):
+
+Example bullet: "In its most recent quarter, Broadcom reported record revenue of
+$15.95B, a 22% YoY increase. The company achieved non-GAAP operating profit of
+$10.7B and maintained a gross margin of 78.4%."
+
+Step 1: What is this bullet about? → Q3 2025 quarterly results
+Step 2: When was Q3 2025 released? → Sep 4, 2025 (89 days ago per FILING TIMELINE)
+Step 3: Is 89 days > 7 days? → YES → Bullet topic is STALE
+
+Result - ALL claims are STALE (even if not verbatim in transcript):
+✗ "revenue of $15.95B" → KNOWN | "Q3 2025 results - released 89 days ago"
+✗ "22% YoY increase" → KNOWN | "Q3 2025 results - released 89 days ago"
+✗ "operating profit of $10.7B" → KNOWN | "Q3 2025 results - released 89 days ago"
+✗ "gross margin of 78.4%" → KNOWN | "Q3 2025 results - released 89 days ago"
+
+The specific number "$10.7B" may not be verbatim in our transcript, but it's part
+of the Q3 2025 earnings release. Investors learned this information 89 days ago.
 
 ═══════════════════════════════════════════════════════════════════════════════
 CLAIM EXTRACTION

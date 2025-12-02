@@ -1833,68 +1833,74 @@ def _build_rewrite_input(item: Dict, section_type: str) -> Dict:
     }
 
 
-def _rewrite_mixed_content_sonnet(
+def _rewrite_single_item_sonnet(
     ticker: str,
-    items_to_rewrite: List[Tuple[int, Dict, str]],
+    idx: int,
+    item: Dict,
+    section_type: str,
     anthropic_api_key: str
-) -> Dict[int, Dict]:
+) -> Optional[Dict]:
     """
-    Rewrite mixed-content bullets/paragraphs using Claude Sonnet 4.5.
+    Rewrite a single mixed-content item using Claude Sonnet 4.5.
+
+    Includes internal HTTP retry logic for transient errors (429, 500, 503, 529).
 
     Args:
         ticker: Stock ticker
-        items_to_rewrite: List of (index, item_dict, section_type) tuples
+        idx: Item index
+        item: Bullet or paragraph dict
+        section_type: 'bullet' or 'paragraph'
         anthropic_api_key: Anthropic API key
 
     Returns:
-        Dict mapping index -> {'action': 'REWRITE'/'REMOVE', 'content': str}
+        Dict with {'action': 'REWRITE'/'REMOVE', 'content': str, 'model': str}
+        or None if failed (caller should try fallback)
     """
-    if not items_to_rewrite:
-        return {}
+    from modules.json_utils import extract_json_from_claude_response
 
-    results = {}
+    rewrite_input = _build_rewrite_input(item, section_type)
 
-    LOG.info(f"[{ticker}] Phase 1.5: Rewriting {len(items_to_rewrite)} mixed-content items with Sonnet")
-
-    for idx, item, section_type in items_to_rewrite:
-        try:
-            rewrite_input = _build_rewrite_input(item, section_type)
-
-            # Build user message
-            user_content = f"""Section: {rewrite_input['context']['section']}
+    # Build user message
+    user_content = f"""Section: {rewrite_input['context']['section']}
 Type: {rewrite_input['context']['type']}
 Known sentences: {rewrite_input['context']['known_count']} | New sentences: {rewrite_input['context']['new_count']}
 
 KNOWN SENTENCES (to remove/minimize):
 """
-            for ks in rewrite_input['known_sentences']:
-                user_content += f"- \"{ks['text']}\"\n  Reason: {ks['reason']}\n"
+    for ks in rewrite_input['known_sentences']:
+        user_content += f"- \"{ks['text']}\"\n  Reason: {ks['reason']}\n"
 
-            user_content += "\nNEW SENTENCES (to preserve):\n"
-            for ns in rewrite_input['new_sentences']:
-                user_content += f"- \"{ns['text']}\"\n"
+    user_content += "\nNEW SENTENCES (to preserve):\n"
+    for ns in rewrite_input['new_sentences']:
+        user_content += f"- \"{ns['text']}\"\n"
 
-            user_content += f"\nORIGINAL CONTENT:\n{rewrite_input['original_content']}\n"
+    user_content += f"\nORIGINAL CONTENT:\n{rewrite_input['original_content']}\n"
 
-            headers = {
-                "x-api-key": anthropic_api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json"
+    headers = {
+        "x-api-key": anthropic_api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json"
+    }
+
+    data = {
+        "model": "claude-sonnet-4-5-20250929",
+        "max_tokens": 2000,
+        "temperature": 0.0,
+        "system": SONNET_REWRITE_PROMPT,
+        "messages": [
+            {
+                "role": "user",
+                "content": user_content
             }
+        ]
+    }
 
-            data = {
-                "model": "claude-sonnet-4-5-20250929",
-                "max_tokens": 2000,
-                "temperature": 0.0,
-                "system": SONNET_REWRITE_PROMPT,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": user_content
-                    }
-                ]
-            }
+    # Internal HTTP retry logic for transient errors
+    max_retries = 2
+    response = None
 
+    for attempt in range(max_retries + 1):
+        try:
             start_time = time.time()
             response = requests.post(
                 "https://api.anthropic.com/v1/messages",
@@ -1904,49 +1910,259 @@ KNOWN SENTENCES (to remove/minimize):
             )
             elapsed_ms = int((time.time() - start_time) * 1000)
 
-            if response.status_code != 200:
-                LOG.warning(f"[{ticker}] Phase 1.5 Sonnet rewrite failed for item {idx}: {response.status_code}")
-                # Fallback: keep original filtered content
-                results[idx] = {
-                    'action': 'KEEP',
-                    'content': item.get('filtered_content', ''),
-                    'rewrite_failed': True
-                }
+            # Success - break retry loop
+            if response.status_code == 200:
+                break
+
+            # Transient errors - retry with exponential backoff
+            if response.status_code in [429, 500, 503, 529] and attempt < max_retries:
+                wait_time = 2 ** attempt  # 1s, 2s
+                LOG.warning(f"[{ticker}] ⚠️ Sonnet rewrite [{idx}] HTTP {response.status_code} "
+                           f"(attempt {attempt + 1}/{max_retries + 1}), retrying in {wait_time}s...")
+                time.sleep(wait_time)
                 continue
 
-            response_json = response.json()
-            response_text = response_json.get('content', [{}])[0].get('text', '')
+            # Non-retryable error or max retries reached
+            break
 
-            # Parse JSON response
-            from modules.json_utils import extract_json_from_claude_response
-            parsed = extract_json_from_claude_response(response_text, ticker)
-
-            if parsed and 'action' in parsed:
-                action = parsed.get('action', 'KEEP').upper()
-                content = parsed.get('content', '')
-
-                LOG.info(f"[{ticker}] Phase 1.5 Sonnet rewrite [{idx}]: {action} ({elapsed_ms}ms)")
-
-                results[idx] = {
-                    'action': action,
-                    'content': content if action == 'REWRITE' else '',
-                    'rewrite_time_ms': elapsed_ms
-                }
+        except requests.exceptions.Timeout:
+            if attempt < max_retries:
+                wait_time = 2 ** attempt
+                LOG.warning(f"[{ticker}] ⏱️ Sonnet rewrite [{idx}] timeout "
+                           f"(attempt {attempt + 1}/{max_retries + 1}), retrying in {wait_time}s...")
+                time.sleep(wait_time)
+                continue
             else:
-                LOG.warning(f"[{ticker}] Phase 1.5 Sonnet rewrite failed to parse for item {idx}")
-                results[idx] = {
-                    'action': 'KEEP',
-                    'content': item.get('filtered_content', ''),
-                    'rewrite_failed': True
-                }
+                LOG.error(f"[{ticker}] ❌ Sonnet rewrite [{idx}] timeout after {max_retries + 1} attempts")
+                return None
 
-        except Exception as e:
-            LOG.error(f"[{ticker}] Phase 1.5 Sonnet rewrite exception for item {idx}: {e}")
+        except requests.exceptions.RequestException as e:
+            if attempt < max_retries:
+                wait_time = 2 ** attempt
+                LOG.warning(f"[{ticker}] 🔌 Sonnet rewrite [{idx}] network error "
+                           f"(attempt {attempt + 1}/{max_retries + 1}): {e}, retrying in {wait_time}s...")
+                time.sleep(wait_time)
+                continue
+            else:
+                LOG.error(f"[{ticker}] ❌ Sonnet rewrite [{idx}] network error after {max_retries + 1} attempts: {e}")
+                return None
+
+    # Check response
+    if response is None:
+        LOG.error(f"[{ticker}] ❌ Sonnet rewrite [{idx}] no response after {max_retries + 1} attempts")
+        return None
+
+    if response.status_code != 200:
+        LOG.warning(f"[{ticker}] ❌ Sonnet rewrite [{idx}] failed with HTTP {response.status_code}")
+        return None
+
+    # Parse response
+    response_json = response.json()
+    response_text = response_json.get('content', [{}])[0].get('text', '')
+
+    parsed = extract_json_from_claude_response(response_text, ticker)
+
+    if parsed and 'action' in parsed:
+        action = parsed.get('action', 'KEEP').upper()
+        content = parsed.get('content', '')
+
+        LOG.info(f"[{ticker}] ✅ Sonnet rewrite [{idx}]: {action} ({elapsed_ms}ms)")
+
+        return {
+            'action': action,
+            'content': content if action == 'REWRITE' else '',
+            'rewrite_time_ms': elapsed_ms,
+            'model': 'claude-sonnet-4-5'
+        }
+    else:
+        LOG.warning(f"[{ticker}] ❌ Sonnet rewrite [{idx}] failed to parse JSON response")
+        return None
+
+
+def _rewrite_single_item_gemini(
+    ticker: str,
+    idx: int,
+    item: Dict,
+    section_type: str,
+    gemini_api_key: str
+) -> Optional[Dict]:
+    """
+    Rewrite a single mixed-content item using Gemini 2.5 Pro (fallback).
+
+    Includes internal retry logic for transient errors.
+
+    Args:
+        ticker: Stock ticker
+        idx: Item index
+        item: Bullet or paragraph dict
+        section_type: 'bullet' or 'paragraph'
+        gemini_api_key: Google Gemini API key
+
+    Returns:
+        Dict with {'action': 'REWRITE'/'REMOVE', 'content': str, 'model': str}
+        or None if failed
+    """
+    import google.generativeai as genai
+    from modules.json_utils import extract_json_from_claude_response
+
+    try:
+        genai.configure(api_key=gemini_api_key)
+
+        rewrite_input = _build_rewrite_input(item, section_type)
+
+        # Build user message (same format as Sonnet)
+        user_content = f"""Section: {rewrite_input['context']['section']}
+Type: {rewrite_input['context']['type']}
+Known sentences: {rewrite_input['context']['known_count']} | New sentences: {rewrite_input['context']['new_count']}
+
+KNOWN SENTENCES (to remove/minimize):
+"""
+        for ks in rewrite_input['known_sentences']:
+            user_content += f"- \"{ks['text']}\"\n  Reason: {ks['reason']}\n"
+
+        user_content += "\nNEW SENTENCES (to preserve):\n"
+        for ns in rewrite_input['new_sentences']:
+            user_content += f"- \"{ns['text']}\"\n"
+
+        user_content += f"\nORIGINAL CONTENT:\n{rewrite_input['original_content']}\n"
+
+        # Create Gemini model with system instruction
+        model = genai.GenerativeModel(
+            'gemini-2.5-pro',
+            system_instruction=SONNET_REWRITE_PROMPT  # Reuse same prompt
+        )
+
+        # Internal retry logic
+        max_retries = 2
+        response = None
+
+        for attempt in range(max_retries + 1):
+            try:
+                start_time = time.time()
+                response = model.generate_content(
+                    user_content,
+                    generation_config={
+                        'temperature': 0.0,
+                        'max_output_tokens': 2000
+                    }
+                )
+                elapsed_ms = int((time.time() - start_time) * 1000)
+                break  # Success
+
+            except Exception as e:
+                error_str = str(e)
+                is_retryable = (
+                    'ResourceExhausted' in error_str or
+                    'quota' in error_str.lower() or
+                    '429' in error_str or
+                    'ServiceUnavailable' in error_str or
+                    '503' in error_str or
+                    'DeadlineExceeded' in error_str or
+                    'timeout' in error_str.lower()
+                )
+
+                if is_retryable and attempt < max_retries:
+                    wait_time = 2 ** attempt
+                    LOG.warning(f"[{ticker}] ⚠️ Gemini rewrite [{idx}] error "
+                               f"(attempt {attempt + 1}/{max_retries + 1}): {error_str[:100]}, retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    LOG.error(f"[{ticker}] ❌ Gemini rewrite [{idx}] failed after {attempt + 1} attempts: {error_str[:200]}")
+                    return None
+
+        if response is None:
+            LOG.error(f"[{ticker}] ❌ Gemini rewrite [{idx}] no response after {max_retries + 1} attempts")
+            return None
+
+        response_text = response.text
+
+        if not response_text or len(response_text.strip()) < 5:
+            LOG.warning(f"[{ticker}] ❌ Gemini rewrite [{idx}] empty response")
+            return None
+
+        # Parse JSON response (reuse same parser)
+        parsed = extract_json_from_claude_response(response_text, ticker)
+
+        if parsed and 'action' in parsed:
+            action = parsed.get('action', 'KEEP').upper()
+            content = parsed.get('content', '')
+
+            LOG.info(f"[{ticker}] ✅ Gemini rewrite [{idx}]: {action} ({elapsed_ms}ms)")
+
+            return {
+                'action': action,
+                'content': content if action == 'REWRITE' else '',
+                'rewrite_time_ms': elapsed_ms,
+                'model': 'gemini-2.5-pro'
+            }
+        else:
+            LOG.warning(f"[{ticker}] ❌ Gemini rewrite [{idx}] failed to parse JSON response")
+            return None
+
+    except Exception as e:
+        LOG.error(f"[{ticker}] ❌ Gemini rewrite [{idx}] exception: {e}")
+        return None
+
+
+def _rewrite_mixed_content(
+    ticker: str,
+    items_to_rewrite: List[Tuple[int, Dict, str]],
+    anthropic_api_key: str,
+    gemini_api_key: str = None
+) -> Dict[int, Dict]:
+    """
+    Rewrite mixed-content bullets/paragraphs with retry and fallback.
+
+    Flow per item:
+    1. Sonnet attempt 1 → success → done
+    2. Sonnet attempt 2 (orchestrator retry) → success → done
+    3. Gemini 2.5 Pro fallback → success → done
+    4. All failed → mark as rewrite_failed
+
+    Args:
+        ticker: Stock ticker
+        items_to_rewrite: List of (index, item_dict, section_type) tuples
+        anthropic_api_key: Anthropic API key
+        gemini_api_key: Google Gemini API key (optional, for fallback)
+
+    Returns:
+        Dict mapping index -> {'action': 'REWRITE'/'REMOVE'/'KEEP', 'content': str, ...}
+    """
+    if not items_to_rewrite:
+        return {}
+
+    results = {}
+
+    LOG.info(f"[{ticker}] Phase 1.5: Rewriting {len(items_to_rewrite)} mixed-content items")
+
+    for idx, item, section_type in items_to_rewrite:
+        result = None
+
+        # Attempt 1: Sonnet
+        if anthropic_api_key:
+            result = _rewrite_single_item_sonnet(ticker, idx, item, section_type, anthropic_api_key)
+
+        # Attempt 2: Sonnet retry (orchestrator level)
+        if result is None and anthropic_api_key:
+            LOG.info(f"[{ticker}] 🔄 Retrying Sonnet for item [{idx}]...")
+            result = _rewrite_single_item_sonnet(ticker, idx, item, section_type, anthropic_api_key)
+
+        # Attempt 3: Gemini fallback
+        if result is None and gemini_api_key:
+            LOG.info(f"[{ticker}] 🔄 Falling back to Gemini 2.5 Pro for item [{idx}]...")
+            result = _rewrite_single_item_gemini(ticker, idx, item, section_type, gemini_api_key)
+
+        # All failed - keep original
+        if result is None:
+            LOG.warning(f"[{ticker}] ❌ All rewrite attempts failed for item [{idx}], keeping original")
             results[idx] = {
                 'action': 'KEEP',
                 'content': item.get('filtered_content', ''),
                 'rewrite_failed': True
             }
+        else:
+            results[idx] = result
 
     return results
 
@@ -2073,11 +2289,11 @@ def filter_known_information(
              f"Bullets: {dict((k, sum(1 for v in bullet_classifications.values() if v == k)) for k in ['all_known', 'all_new', 'mixed', 'exempt'])} | "
              f"Paragraphs: {dict((k, sum(1 for v in paragraph_classifications.values() if v == k)) for k in ['all_known', 'all_new', 'mixed', 'exempt'])}")
 
-    # Step 3: Rewrite mixed items with Sonnet (if any and if API key available)
+    # Step 3: Rewrite mixed items (Sonnet primary with 1 retry, Gemini Pro fallback)
     rewrite_time_ms = 0
 
-    if total_mixed > 0 and anthropic_api_key:
-        LOG.info(f"[{ticker}] Phase 1.5 Step 3: {total_mixed} items need Sonnet rewrite")
+    if total_mixed > 0 and (anthropic_api_key or gemini_api_key):
+        LOG.info(f"[{ticker}] Phase 1.5 Step 3: {total_mixed} items need rewrite")
 
         # Build lists of mixed items with their indices
         bullet_items = [(idx, bullets[idx], 'bullet') for idx in range(len(bullets))
@@ -2085,11 +2301,11 @@ def filter_known_information(
         para_items = [(idx, paragraphs[idx], 'paragraph') for idx in range(len(paragraphs))
                       if paragraph_classifications.get(idx) == 'mixed']
 
-        # Rewrite bullets
+        # Rewrite bullets (with retry + fallback)
         if bullet_items:
             start_time = time.time()
-            bullet_rewrite_results = _rewrite_mixed_content_sonnet(
-                ticker, bullet_items, anthropic_api_key
+            bullet_rewrite_results = _rewrite_mixed_content(
+                ticker, bullet_items, anthropic_api_key, gemini_api_key
             )
             rewrite_time_ms += int((time.time() - start_time) * 1000)
 
@@ -2106,11 +2322,11 @@ def filter_known_information(
                     bullets[idx]['action'] = 'KEEP'
                     # Keep existing filtered_content
 
-        # Rewrite paragraphs
+        # Rewrite paragraphs (with retry + fallback)
         if para_items:
             start_time = time.time()
-            para_rewrite_results = _rewrite_mixed_content_sonnet(
-                ticker, para_items, anthropic_api_key
+            para_rewrite_results = _rewrite_mixed_content(
+                ticker, para_items, anthropic_api_key, gemini_api_key
             )
             rewrite_time_ms += int((time.time() - start_time) * 1000)
 
@@ -2127,10 +2343,10 @@ def filter_known_information(
                     paragraphs[idx]['action'] = 'KEEP'
                     # Keep existing filtered_content
 
-        LOG.info(f"[{ticker}] Phase 1.5 Step 3: Sonnet rewrite completed in {rewrite_time_ms}ms")
+        LOG.info(f"[{ticker}] Phase 1.5 Step 3: Rewrite completed in {rewrite_time_ms}ms")
 
-    elif total_mixed > 0 and not anthropic_api_key:
-        LOG.warning(f"[{ticker}] Phase 1.5: {total_mixed} items need rewrite but no Anthropic API key")
+    elif total_mixed > 0:
+        LOG.warning(f"[{ticker}] Phase 1.5: {total_mixed} items need rewrite but no API keys available")
         # Fall back to mechanical filtering (keep filtered_content as-is)
 
     # Apply classifications for non-mixed items

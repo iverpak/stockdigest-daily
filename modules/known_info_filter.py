@@ -1147,13 +1147,12 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
 
     This modifies the Phase 1 JSON to remove KNOWN information before Phase 2 enrichment.
 
-    Sentence-level filtering actions:
-    - REMOVE: Delete bullet entirely OR clear paragraph content
-    - KEEP: Leave unchanged (includes exempt sections where we always use original)
+    Three-step filtering actions:
+    - REMOVE: Delete bullet entirely OR clear paragraph content (100% KNOWN)
+    - KEEP: Use filtered_content if available, otherwise original (100% NEW or exempt)
+    - REWRITE: Use rewritten_content from LLM (mixed NEW+KNOWN, surgically edited)
 
-    Note: There is no REWRITE action in sentence-level filtering.
-    KEEP with filtered_content means we use filtered_content (concatenated KEEP sentences).
-    Exempt sections (action=KEEP, exempt=true) use original content unchanged.
+    Exempt sections (action=KEEP, exempt=true) always use original content unchanged.
 
     Args:
         phase1_json: Original Phase 1 JSON with structure:
@@ -1164,10 +1163,12 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
                     ...
                 }
             }
-        filter_result: Output from filter_known_information() with sentence-level structure:
+        filter_result: Output from filter_known_information() with structure:
             {
-                "bullets": [{"bullet_id": "...", "action": "KEEP|REMOVE", "filtered_content": "...", "exempt": true/false}],
-                "paragraphs": [{"section": "...", "action": "KEEP|REMOVE", "filtered_content": "...", "exempt": true/false}]
+                "bullets": [{"bullet_id": "...", "action": "KEEP|REMOVE|REWRITE",
+                            "filtered_content": "...", "rewritten_content": "...", "exempt": true/false}],
+                "paragraphs": [{"section": "...", "action": "KEEP|REMOVE|REWRITE",
+                               "filtered_content": "...", "rewritten_content": "...", "exempt": true/false}]
             }
 
     Returns:
@@ -1187,6 +1188,7 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
             bullet_actions[bullet_id] = {
                 'action': bullet.get('action', 'KEEP').upper(),
                 'filtered_content': bullet.get('filtered_content', ''),
+                'rewritten_content': bullet.get('rewritten_content', ''),  # For REWRITE action
                 'exempt': bullet.get('exempt', False)
             }
 
@@ -1198,6 +1200,7 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
             paragraph_actions[section] = {
                 'action': para.get('action', 'KEEP').upper(),
                 'filtered_content': para.get('filtered_content', ''),
+                'rewritten_content': para.get('rewritten_content', ''),  # For REWRITE action
                 'exempt': para.get('exempt', False)
             }
 
@@ -1210,6 +1213,7 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
 
     removed_count = 0
     filtered_count = 0
+    rewrite_count = 0
 
     for section_name in bullet_section_names:
         section_data = sections.get(section_name, [])
@@ -1237,6 +1241,17 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
                 # Skip this bullet entirely
                 removed_count += 1
                 continue
+            elif action == 'REWRITE':
+                # Use LLM-rewritten content (from mixed classification)
+                rewritten_content = action_info['rewritten_content']
+                if rewritten_content:
+                    # Update the content field with rewritten content
+                    if 'content_integrated' in bullet:
+                        bullet['content_integrated'] = rewritten_content
+                    else:
+                        bullet['content'] = rewritten_content
+                    rewrite_count += 1
+                new_bullets.append(bullet)
             elif action == 'KEEP':
                 if exempt:
                     # Exempt section - use original unchanged
@@ -1282,6 +1297,15 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
             else:
                 section_data['content'] = ''
             removed_count += 1
+        elif action == 'REWRITE':
+            # Use LLM-rewritten content (from mixed classification)
+            rewritten_content = action_info['rewritten_content']
+            if rewritten_content:
+                if 'content_integrated' in section_data:
+                    section_data['content_integrated'] = rewritten_content
+                else:
+                    section_data['content'] = rewritten_content
+                rewrite_count += 1
         elif action == 'KEEP':
             if not exempt:
                 # Non-exempt KEEP - use filtered_content if available
@@ -1295,7 +1319,7 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
             # Exempt section - leave unchanged
         # Unknown action - leave unchanged
 
-    LOG.info(f"Phase 1.5 apply_filter: {removed_count} removed, {filtered_count} filtered")
+    LOG.info(f"Phase 1.5 apply_filter: {removed_count} removed, {rewrite_count} rewritten, {filtered_count} filtered")
 
     return result
 

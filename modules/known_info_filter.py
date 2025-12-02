@@ -788,9 +788,13 @@ IMPORTANT - DO NOT SKIP ANY OF THESE:
 
 4. There is NO "REWRITE" action - only KEEP or REMOVE
 
-5. Include ALL bullets from ALL 7 bullet sections
+5. Only include bullets that exist in Phase 1 JSON
+   - If a section (e.g., major_developments) has no bullets in Phase 1, do NOT create placeholder entries
+   - Do NOT report on empty sections - simply skip them
+   - The summary counts should only reflect bullets/paragraphs that actually had content
 
-6. Include ALL 3 paragraph sections
+6. Only include paragraph sections that have content in Phase 1 JSON
+   - If bottom_line, upside_scenario, or downside_scenario has no content, skip it
 
 7. For EXEMPT sections (wall_street_sentiment, upcoming_catalysts, key_variables):
    - DO perform sentence/claim analysis (for QA visibility)
@@ -1018,15 +1022,11 @@ def _get_filings_info(filings: Dict, eight_k_filings: List[Dict] = None) -> Dict
             'date': t.get('date').strftime('%b %d, %Y') if t.get('date') else 'Unknown'
         }
 
-    if '10q' in filings:
-        q = filings['10q']
-        info['10q'] = {
-            'quarter': q.get('fiscal_quarter', 'Q?'),
-            'year': q.get('fiscal_year', '????'),
-            'date': q.get('filing_date').strftime('%b %d, %Y') if q.get('filing_date') else 'Unknown'
-        }
+    # NOTE: 10-Q intentionally excluded from knowledge base (Dec 2025)
+    # 10-Q causes false positive matches (Item 1A risk factors = boilerplate matching specific news)
+    # Knowledge base: Transcript + 8-Ks only
 
-    # NOTE: 10-K intentionally excluded from knowledge base (causes false matches)
+    # NOTE: 10-K also intentionally excluded from knowledge base (causes false matches)
 
     # Add 8-K summary
     if eight_k_filings:
@@ -2315,6 +2315,7 @@ def filter_known_information(
 
     # Step 3: Rewrite mixed items (Sonnet primary with 1 retry, Gemini Pro fallback)
     rewrite_time_ms = 0
+    rewrite_models_used = set()  # Track which models were used (initialized here for all paths)
 
     if total_mixed > 0 and (anthropic_api_key or gemini_api_key):
         LOG.info(f"[{ticker}] Phase 1.5 Step 3: {total_mixed} items need rewrite")
@@ -2335,6 +2336,8 @@ def filter_known_information(
 
             # Apply results to bullets
             for idx, result_data in bullet_rewrite_results.items():
+                if result_data.get('model'):
+                    rewrite_models_used.add(result_data['model'])
                 if result_data['action'] == 'REWRITE':
                     bullets[idx]['action'] = 'REWRITE'
                     bullets[idx]['rewritten_content'] = result_data['content']
@@ -2356,6 +2359,8 @@ def filter_known_information(
 
             # Apply results to paragraphs
             for idx, result_data in para_rewrite_results.items():
+                if result_data.get('model'):
+                    rewrite_models_used.add(result_data['model'])
                 if result_data['action'] == 'REWRITE':
                     paragraphs[idx]['action'] = 'REWRITE'
                     paragraphs[idx]['rewritten_content'] = result_data['content']
@@ -2367,7 +2372,7 @@ def filter_known_information(
                     paragraphs[idx]['action'] = 'KEEP'
                     # Keep existing filtered_content
 
-        LOG.info(f"[{ticker}] Phase 1.5 Step 3: Rewrite completed in {rewrite_time_ms}ms")
+        LOG.info(f"[{ticker}] Phase 1.5 Step 3: Rewrite completed in {rewrite_time_ms}ms (models: {', '.join(rewrite_models_used) or 'none'})")
 
     elif total_mixed > 0:
         LOG.warning(f"[{ticker}] Phase 1.5: {total_mixed} items need rewrite but no API keys available")
@@ -2420,7 +2425,8 @@ def filter_known_information(
         "prompt_tokens": result.get("prompt_tokens", 0),
         "completion_tokens": result.get("completion_tokens", 0),
         "generation_time_ms": result.get("generation_time_ms", 0),
-        "rewrite_time_ms": rewrite_time_ms
+        "rewrite_time_ms": rewrite_time_ms,
+        "rewrite_models": list(rewrite_models_used)
     }
 
 
@@ -2486,16 +2492,16 @@ def generate_known_info_filter_email(ticker: str, filter_result: Dict) -> str:
     filing_lookup = filter_result.get("filing_lookup", {})  # For resolving identifiers
     model = filter_result.get("model_used", "unknown")
     gen_time = filter_result.get("generation_time_ms", 0)
+    rewrite_time = filter_result.get("rewrite_time_ms", 0)
+    rewrite_models = filter_result.get("rewrite_models", [])
 
-    # Build filing list string (10-K intentionally excluded)
+    # Build filing list string (10-K and 10-Q intentionally excluded)
     filing_parts = []
     if 'transcript' in filings:
         t = filings['transcript']
         filing_parts.append(f"Transcript ({t['quarter']} {t['year']})")
-    if '10q' in filings:
-        q = filings['10q']
-        filing_parts.append(f"10-Q ({q['quarter']} {q['year']})")
-    # NOTE: 10-K intentionally excluded from knowledge base
+    # NOTE: 10-Q intentionally excluded from knowledge base (Dec 2025)
+    # NOTE: 10-K also intentionally excluded from knowledge base
     if '8k' in filings:
         eight_k = filings['8k']
         filing_parts.append(f"8-K ({eight_k['count']} filing{'s' if eight_k['count'] != 1 else ''})")
@@ -2512,10 +2518,6 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
 .header h2 {{ margin: 0 0 10px 0; }}
 .header p {{ margin: 0; opacity: 0.8; font-size: 14px; }}
 .summary {{ background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
-.summary-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 15px; margin-top: 15px; }}
-.stat {{ text-align: center; padding: 10px; background: #f5f5f5; border-radius: 6px; }}
-.stat-value {{ font-size: 24px; font-weight: bold; color: #1a1a2e; }}
-.stat-label {{ font-size: 11px; color: #666; margin-top: 5px; }}
 .bullet {{ background: white; padding: 15px; margin: 10px 0; border-radius: 8px; border-left: 4px solid #ddd; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
 .bullet-keep {{ border-left-color: #28a745; }}
 .bullet-remove {{ border-left-color: #dc3545; }}
@@ -2545,46 +2547,49 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
 
 <div class="header">
 <h2>Phase 1.5: Staleness Filter - {ticker}</h2>
-<p>{filter_result.get('timestamp', '')[:19]} | Model: {model} | {gen_time}ms</p>
-<p>Knowledge Base: {filing_str}</p>
+<p><strong>Tagging:</strong> {model} ({gen_time}ms){f' | <strong>Rewrite:</strong> {", ".join(rewrite_models)} ({rewrite_time}ms)' if rewrite_models else ''}</p>
+<p><strong>Knowledge Base:</strong> {filing_str}</p>
+<p style="font-size: 12px; opacity: 0.7;">{filter_result.get('timestamp', '')[:19]}</p>
 </div>
 
 <div class="summary">
 <strong>Sentence-Level Filter Summary</strong>
-<div class="summary-grid">
-<div class="stat">
-<div class="stat-value">{summary.get('total_bullets', 0) + summary.get('total_paragraphs', 0)}</div>
-<div class="stat-label">Bullets/Paras</div>
-</div>
-<div class="stat">
-<div class="stat-value" style="color: #28a745;">{summary.get('kept', 0)}</div>
-<div class="stat-label">Kept</div>
-</div>
-<div class="stat">
-<div class="stat-value" style="color: #dc3545;">{summary.get('removed', 0)}</div>
-<div class="stat-label">Removed</div>
-</div>
-<div class="stat">
-<div class="stat-value">{summary.get('total_sentences', 0)}</div>
-<div class="stat-label">Sentences</div>
-</div>
-<div class="stat">
-<div class="stat-value" style="color: #28a745;">{summary.get('kept_sentences', 0)}</div>
-<div class="stat-label">Kept Sent.</div>
-</div>
-<div class="stat">
-<div class="stat-value" style="color: #dc3545;">{summary.get('removed_sentences', 0)}</div>
-<div class="stat-label">Removed Sent.</div>
-</div>
-<div class="stat">
-<div class="stat-value">{summary.get('known_claims', 0)}</div>
-<div class="stat-label">Known Claims</div>
-</div>
-<div class="stat">
-<div class="stat-value">{summary.get('new_claims', 0)}</div>
-<div class="stat-label">New Claims</div>
-</div>
-</div>
+<table style="width: 100%; margin-top: 15px; border-collapse: collapse;">
+<tr>
+<td style="text-align: center; padding: 12px; background: #f5f5f5; border-radius: 6px; width: 12.5%;">
+<div style="font-size: 24px; font-weight: bold; color: #1a1a2e;">{summary.get('total_bullets', 0) + summary.get('total_paragraphs', 0)}</div>
+<div style="font-size: 11px; color: #666; margin-top: 5px;">Bullets/Paras</div>
+</td>
+<td style="text-align: center; padding: 12px; background: #f5f5f5; border-radius: 6px; width: 12.5%;">
+<div style="font-size: 24px; font-weight: bold; color: #28a745;">{summary.get('kept', 0)}</div>
+<div style="font-size: 11px; color: #666; margin-top: 5px;">Kept</div>
+</td>
+<td style="text-align: center; padding: 12px; background: #f5f5f5; border-radius: 6px; width: 12.5%;">
+<div style="font-size: 24px; font-weight: bold; color: #007bff;">{summary.get('rewritten', 0)}</div>
+<div style="font-size: 11px; color: #666; margin-top: 5px;">Rewritten</div>
+</td>
+<td style="text-align: center; padding: 12px; background: #f5f5f5; border-radius: 6px; width: 12.5%;">
+<div style="font-size: 24px; font-weight: bold; color: #dc3545;">{summary.get('removed', 0)}</div>
+<div style="font-size: 11px; color: #666; margin-top: 5px;">Removed</div>
+</td>
+<td style="text-align: center; padding: 12px; background: #f5f5f5; border-radius: 6px; width: 12.5%;">
+<div style="font-size: 24px; font-weight: bold; color: #1a1a2e;">{summary.get('total_sentences', 0)}</div>
+<div style="font-size: 11px; color: #666; margin-top: 5px;">Sentences</div>
+</td>
+<td style="text-align: center; padding: 12px; background: #f5f5f5; border-radius: 6px; width: 12.5%;">
+<div style="font-size: 24px; font-weight: bold; color: #dc3545;">{summary.get('removed_sentences', 0)}</div>
+<div style="font-size: 11px; color: #666; margin-top: 5px;">Removed Sent.</div>
+</td>
+<td style="text-align: center; padding: 12px; background: #f5f5f5; border-radius: 6px; width: 12.5%;">
+<div style="font-size: 24px; font-weight: bold; color: #dc3545;">{summary.get('known_claims', 0)}</div>
+<div style="font-size: 11px; color: #666; margin-top: 5px;">Known Claims</div>
+</td>
+<td style="text-align: center; padding: 12px; background: #f5f5f5; border-radius: 6px; width: 12.5%;">
+<div style="font-size: 24px; font-weight: bold; color: #28a745;">{summary.get('new_claims', 0)}</div>
+<div style="font-size: 11px; color: #666; margin-top: 5px;">New Claims</div>
+</td>
+</tr>
+</table>
 </div>
 """
 

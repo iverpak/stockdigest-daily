@@ -1,14 +1,26 @@
 """
 Known Information Filter (Phase 1.5)
 
-Filters Phase 1 bullets by checking claims against filing knowledge base (Transcript, 10-Q, 8-K).
+Filters Phase 1 bullets by checking claims against filing knowledge base (Transcript, 8-K).
 Identifies which claims are KNOWN (already in filings or stale) vs NEW (fresh information).
 
 This is a STALENESS FILTER - removes content that provides zero incremental value over
 what an investor learned from recent filings. NOT a comprehensive fact-checker.
 
-Knowledge Base: Transcript + 10-Q + 8-Ks (10-K intentionally excluded - causes false matches)
-Filtering: Sentence-level (keep/remove whole sentences, no surgical word-level editing)
+Knowledge Base: Transcript + 8-Ks only
+- 10-K excluded (causes false matches with generic risk categories)
+- 10-Q excluded (Dec 2025) - same issue, Item 1A boilerplate matches specific news
+
+3-Step Flow:
+1. Sentence-level tagging (Gemini Flash) - Tag each sentence KNOWN or NEW
+2. Mechanical triage:
+   - 100% KNOWN → REMOVE (skip LLM)
+   - 100% NEW → KEEP as-is (skip LLM)
+   - Mixed → proceed to step 3
+3. LLM Rewrite (Sonnet 4.5, only for mixed bullets)
+   - Surgically remove KNOWN content, preserve NEW
+   - Restructure for coherence
+   - Return REWRITE or REMOVE
 
 STATUS: TEST MODE - Runs in parallel with Phase 2, emails findings only.
         Does NOT modify the production pipeline.
@@ -31,14 +43,14 @@ LOG = logging.getLogger(__name__)
 # PROMPT
 # =============================================================================
 
-KNOWN_INFO_FILTER_PROMPT = """You are a research analyst filtering a news summary for an institutional investor who has ALREADY read the latest earnings call, 10-Q, and recent 8-K filings.
+KNOWN_INFO_FILTER_PROMPT = """You are a research analyst filtering a news summary for an institutional investor who has ALREADY read the latest earnings call and recent 8-K filings.
 
 ═══════════════════════════════════════════════════════════════════════════════
 GUIDING PRINCIPLE
 ═══════════════════════════════════════════════════════════════════════════════
 
 Your goal is NOT "remove anything that appears in filings."
-Your goal IS "remove content that provides zero incremental value over what the investor learned from recent filings (earnings call, 10-Q, and any 8-Ks since then)."
+Your goal IS "remove content that provides zero incremental value over what the investor learned from recent filings (earnings call and any 8-Ks since then)."
 
 This is a STALENESS FILTER, not a comprehensive fact-checker.
 
@@ -347,12 +359,11 @@ VERIFICATION PROCESS
 
 For each claim:
 1. Search Transcript for exact or paraphrased match
-2. Search 10-Q for exact or paraphrased match
-3. Search 8-K filings for exact or paraphrased match (material events since last earnings)
-4. If found in ANY filing → status: "KNOWN"
-5. If NOT found in any filing → check STALENESS rules
-6. If stale → status: "KNOWN" (with staleness evidence)
-7. If fresh and not in filings → status: "NEW"
+2. Search 8-K filings for exact or paraphrased match (material events since last earnings)
+3. If found in ANY filing → status: "KNOWN"
+4. If NOT found in any filing → check STALENESS rules
+5. If stale → status: "KNOWN" (with staleness evidence)
+6. If fresh and not in filings → status: "NEW"
 
 Matching rules:
 - Numbers: Exact match required (allow rounding: $51.2B = $51,200M = $51.2 billion)
@@ -371,14 +382,14 @@ FILING IDENTIFIERS (CRITICAL)
 ═══════════════════════════════════════════════════════════════════════════════
 
 Each filing in the input is labeled with a unique identifier:
-- TRANSCRIPT_1, 10Q_1 (for standard filings)
+- TRANSCRIPT_1 (for transcript)
 - 8K_1, 8K_2, 8K_3 (for multiple 8-K filings)
 
 When a claim is KNOWN (from filings), you MUST use the EXACT filing identifier in source_type.
 
 Examples:
 - Claim found in transcript → source_type: "TRANSCRIPT_1"
-- Claim found in 10-Q → source_type: "10Q_1"
+- Claim found in 8-K #1 → source_type: "8K_1"
 - Claim found in first 8-K → source_type: "8K_1"
 - Claim found in second 8-K → source_type: "8K_2"
 - Claim is stale (not in filings) → source_type: null, evidence: "[staleness reason]"
@@ -450,7 +461,7 @@ INPUT FORMAT
 
 You will receive:
 1. Phase 1 JSON with bullets and paragraphs
-2. Filing sources (Transcript, 10-Q, 8-K) - check claims against these
+2. Filing sources (Transcript, 8-K) - check claims against these
    - 8-K filings are material events filed since the last earnings call
 
 BULLET SECTIONS TO FILTER (apply full sentence-level filtering):
@@ -500,7 +511,7 @@ You MUST follow these requirements - no shortcuts allowed:
    - Even sentences with just one claim need the array
 
 4. ALWAYS PROVIDE EVIDENCE FOR KNOWN CLAIMS
-   - source_type: The filing identifier (TRANSCRIPT_1, 10Q_1, 8K_1, etc.)
+   - source_type: The filing identifier (TRANSCRIPT_1, 8K_1, 8K_2, etc.)
    - evidence: The quote or paraphrase from the filing
    - For staleness: source_type=null, evidence="[staleness reason]"
 
@@ -799,6 +810,53 @@ Return ONLY the JSON object, no other text.
 
 
 # =============================================================================
+# SONNET REWRITE PROMPT (Step 3 - Mixed content only)
+# =============================================================================
+
+SONNET_REWRITE_PROMPT = """You are editing a financial news summary for institutional investors. Some sentences contain information already known from company filings (KNOWN), while others contain fresh information (NEW).
+
+Your task: Rewrite to preserve NEW information while removing KNOWN content.
+
+Rules:
+1. Keep all NEW sentences - this is the valuable content
+2. Remove KNOWN sentences unless minimal context is needed for coherence
+3. You may combine sentences or add brief transitions for flow
+4. Maintain professional financial writing style
+5. If the remaining NEW content is not substantive (just dates, attributions, or trivial details), return REMOVE
+
+CRITICAL CONSTRAINTS:
+- Do NOT introduce any new information, facts, or claims
+- Do NOT infer or extrapolate beyond what is explicitly stated
+- Your role is strictly to surgically remove, restructure, and connect
+- Every fact in your output must come directly from the NEW sentences
+- Minimal bridging words (e.g., "The", "Additionally", "Meanwhile") are allowed, but no new substantive content
+
+Bias: Err on the side of REMOVE, especially when multiple sentences were already flagged as KNOWN. One surviving sentence must carry genuine analytical value to justify keeping the bullet.
+
+NOT SUBSTANTIVE (return REMOVE if these are the only NEW content):
+- Attributions alone ("per Reuters", "according to Bloomberg")
+- Dates/times without material context ("on Tuesday", "in November")
+- Entity names without new facts about them
+- Generic descriptors ("the regional bank", "the tech giant")
+
+SUBSTANTIVE (worth keeping):
+- Specific numbers, metrics, or data points
+- Named analyst actions (upgrades, downgrades, price targets)
+- New events or developments not in filings
+- Third-party commentary with specific claims
+
+Output format (JSON only):
+{
+  "action": "REWRITE" or "REMOVE",
+  "content": "rewritten text here"
+}
+
+If action is REMOVE, content should be empty string.
+Return ONLY the JSON object, no other text.
+"""
+
+
+# =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
 
@@ -872,37 +930,40 @@ def _build_filter_user_content(ticker: str, phase1_json: Dict, filings: Dict, ei
             content += f"Use source_type=\"{filing_id}\" when citing this filing.\n\n"
             content += f"{t.get('text', '')}\n\n\n"
 
-    # Add 10-Q if available AND older than T-7
-    if '10q' in filings:
-        q = filings['10q']
-        quarter = q.get('fiscal_quarter', 'Q?')
-        year = q.get('fiscal_year', '????')
-        company = q.get('company_name') or ticker
-        filing_date = q.get('filing_date')
-        date_str = filing_date.strftime('%b %d, %Y') if filing_date else 'Unknown Date'
+    # NOTE: 10-Q intentionally excluded from knowledge base (Dec 2025)
+    # 10-Q causes false positive matches (Item 1A risk factors = boilerplate matching specific news)
+    # Same issue as 10-K - SEC risk disclosures are comprehensive but generic
+    # Knowledge base: Transcript + 8-Ks only
+    #
+    # if '10q' in filings:
+    #     q = filings['10q']
+    #     quarter = q.get('fiscal_quarter', 'Q?')
+    #     year = q.get('fiscal_year', '????')
+    #     company = q.get('company_name') or ticker
+    #     filing_date = q.get('filing_date')
+    #     date_str = filing_date.strftime('%b %d, %Y') if filing_date else 'Unknown Date'
+    #
+    #     # Check T-7 buffer
+    #     filing_date_only = filing_date.date() if hasattr(filing_date, 'date') else filing_date
+    #     if filing_date_only and filing_date_only > t7_cutoff:
+    #         LOG.info(f"[{ticker}] Phase 1.5: 10-Q excluded (T-7 buffer - filed {date_str})")
+    #     else:
+    #         filing_id = "10Q_1"
+    #         filing_lookup[filing_id] = {
+    #             'type': '10-Q',
+    #             'date': date_str,
+    #             'quarter': quarter,
+    #             'year': year,
+    #             'display': f"{quarter} {year} 10-Q (filed {date_str})"
+    #         }
+    #
+    #         content += f"=== {filing_id}: LATEST QUARTERLY REPORT (10-Q) ===\n"
+    #         content += f"[{ticker} ({company}) {quarter} {year} 10-Q Filing, Filed: {date_str}]\n"
+    #         content += f"Use source_type=\"{filing_id}\" when citing this filing.\n\n"
+    #         content += f"{q.get('text', '')}\n\n\n"
 
-        # Check T-7 buffer
-        filing_date_only = filing_date.date() if hasattr(filing_date, 'date') else filing_date
-        if filing_date_only and filing_date_only > t7_cutoff:
-            LOG.info(f"[{ticker}] Phase 1.5: 10-Q excluded (T-7 buffer - filed {date_str})")
-        else:
-            filing_id = "10Q_1"
-            filing_lookup[filing_id] = {
-                'type': '10-Q',
-                'date': date_str,
-                'quarter': quarter,
-                'year': year,
-                'display': f"{quarter} {year} 10-Q (filed {date_str})"
-            }
-
-            content += f"=== {filing_id}: LATEST QUARTERLY REPORT (10-Q) ===\n"
-            content += f"[{ticker} ({company}) {quarter} {year} 10-Q Filing, Filed: {date_str}]\n"
-            content += f"Use source_type=\"{filing_id}\" when citing this filing.\n\n"
-            content += f"{q.get('text', '')}\n\n\n"
-
-    # NOTE: 10-K intentionally excluded from knowledge base
+    # NOTE: 10-K also intentionally excluded from knowledge base
     # 10-K causes false positive matches (generic risk categories matching specific news events)
-    # Knowledge base: Transcript + 10-Q + 8-Ks only
 
     # Add 8-K filings if available (filtered material events since last earnings)
     if eight_k_filings:
@@ -1674,6 +1735,285 @@ def _filter_known_info_claude(
 
 
 # =============================================================================
+# STEP 2 & 3: TRIAGE AND SONNET REWRITE
+# =============================================================================
+
+def _classify_bullet_for_rewrite(item: Dict) -> str:
+    """
+    Classify a bullet/paragraph for rewrite step.
+
+    Returns:
+        'all_known' - 100% KNOWN sentences → REMOVE (skip LLM)
+        'all_new' - 100% NEW sentences → KEEP as-is (skip LLM)
+        'mixed' - Mixed KNOWN/NEW → needs Sonnet rewrite
+        'exempt' - Exempt section → skip entirely
+    """
+    if item.get('exempt', False):
+        return 'exempt'
+
+    sentences = item.get('sentences', [])
+    if not sentences:
+        # No sentence analysis available, treat as all_new (keep original)
+        return 'all_new'
+
+    known_count = 0
+    new_count = 0
+
+    for s in sentences:
+        action = s.get('sentence_action', 'KEEP').upper()
+        if action == 'REMOVE':
+            known_count += 1
+        else:
+            new_count += 1
+
+    if known_count == 0:
+        return 'all_new'
+    elif new_count == 0:
+        return 'all_known'
+    else:
+        return 'mixed'
+
+
+def _build_rewrite_input(item: Dict, section_type: str) -> Dict:
+    """
+    Build JSON input for Sonnet rewrite.
+
+    Args:
+        item: Bullet or paragraph dict with sentences
+        section_type: 'bullet' or 'paragraph'
+
+    Returns:
+        Dict formatted for Sonnet rewrite prompt
+    """
+    original_content = item.get('original_content', '') or item.get('content', '')
+    sentences = item.get('sentences', [])
+
+    known_sentences = []
+    new_sentences = []
+
+    for s in sentences:
+        action = s.get('sentence_action', 'KEEP').upper()
+        text = s.get('text', '')
+
+        if action == 'REMOVE':
+            # Collect evidence for known sentence
+            claims = s.get('claims', [])
+            evidence_parts = []
+            for c in claims:
+                if c.get('status') == 'KNOWN':
+                    source = c.get('source_type', '')
+                    ev = c.get('evidence', '')
+                    if source:
+                        evidence_parts.append(f"{source}")
+                    elif ev:
+                        evidence_parts.append(ev[:50])
+
+            reason = ', '.join(evidence_parts[:2]) if evidence_parts else 'Found in filings'
+            known_sentences.append({
+                'text': text,
+                'reason': reason
+            })
+        else:
+            new_sentences.append({
+                'text': text
+            })
+
+    return {
+        'original_content': original_content,
+        'known_sentences': known_sentences,
+        'new_sentences': new_sentences,
+        'context': {
+            'section': item.get('section', ''),
+            'bullet_id': item.get('bullet_id', ''),
+            'type': section_type,
+            'total_sentences': len(sentences),
+            'known_count': len(known_sentences),
+            'new_count': len(new_sentences)
+        }
+    }
+
+
+def _rewrite_mixed_content_sonnet(
+    ticker: str,
+    items_to_rewrite: List[Tuple[int, Dict, str]],
+    anthropic_api_key: str
+) -> Dict[int, Dict]:
+    """
+    Rewrite mixed-content bullets/paragraphs using Claude Sonnet 4.5.
+
+    Args:
+        ticker: Stock ticker
+        items_to_rewrite: List of (index, item_dict, section_type) tuples
+        anthropic_api_key: Anthropic API key
+
+    Returns:
+        Dict mapping index -> {'action': 'REWRITE'/'REMOVE', 'content': str}
+    """
+    if not items_to_rewrite:
+        return {}
+
+    results = {}
+
+    LOG.info(f"[{ticker}] Phase 1.5: Rewriting {len(items_to_rewrite)} mixed-content items with Sonnet")
+
+    for idx, item, section_type in items_to_rewrite:
+        try:
+            rewrite_input = _build_rewrite_input(item, section_type)
+
+            # Build user message
+            user_content = f"""Section: {rewrite_input['context']['section']}
+Type: {rewrite_input['context']['type']}
+Known sentences: {rewrite_input['context']['known_count']} | New sentences: {rewrite_input['context']['new_count']}
+
+KNOWN SENTENCES (to remove/minimize):
+"""
+            for ks in rewrite_input['known_sentences']:
+                user_content += f"- \"{ks['text']}\"\n  Reason: {ks['reason']}\n"
+
+            user_content += "\nNEW SENTENCES (to preserve):\n"
+            for ns in rewrite_input['new_sentences']:
+                user_content += f"- \"{ns['text']}\"\n"
+
+            user_content += f"\nORIGINAL CONTENT:\n{rewrite_input['original_content']}\n"
+
+            headers = {
+                "x-api-key": anthropic_api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json"
+            }
+
+            data = {
+                "model": "claude-sonnet-4-5-20250929",
+                "max_tokens": 2000,
+                "temperature": 0.0,
+                "system": SONNET_REWRITE_PROMPT,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": user_content
+                    }
+                ]
+            }
+
+            start_time = time.time()
+            response = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers=headers,
+                json=data,
+                timeout=60
+            )
+            elapsed_ms = int((time.time() - start_time) * 1000)
+
+            if response.status_code != 200:
+                LOG.warning(f"[{ticker}] Phase 1.5 Sonnet rewrite failed for item {idx}: {response.status_code}")
+                # Fallback: keep original filtered content
+                results[idx] = {
+                    'action': 'KEEP',
+                    'content': item.get('filtered_content', ''),
+                    'rewrite_failed': True
+                }
+                continue
+
+            response_json = response.json()
+            response_text = response_json.get('content', [{}])[0].get('text', '')
+
+            # Parse JSON response
+            from modules.json_utils import extract_json_from_claude_response
+            parsed = extract_json_from_claude_response(response_text, ticker)
+
+            if parsed and 'action' in parsed:
+                action = parsed.get('action', 'KEEP').upper()
+                content = parsed.get('content', '')
+
+                LOG.info(f"[{ticker}] Phase 1.5 Sonnet rewrite [{idx}]: {action} ({elapsed_ms}ms)")
+
+                results[idx] = {
+                    'action': action,
+                    'content': content if action == 'REWRITE' else '',
+                    'rewrite_time_ms': elapsed_ms
+                }
+            else:
+                LOG.warning(f"[{ticker}] Phase 1.5 Sonnet rewrite failed to parse for item {idx}")
+                results[idx] = {
+                    'action': 'KEEP',
+                    'content': item.get('filtered_content', ''),
+                    'rewrite_failed': True
+                }
+
+        except Exception as e:
+            LOG.error(f"[{ticker}] Phase 1.5 Sonnet rewrite exception for item {idx}: {e}")
+            results[idx] = {
+                'action': 'KEEP',
+                'content': item.get('filtered_content', ''),
+                'rewrite_failed': True
+            }
+
+    return results
+
+
+def _apply_rewrite_results(
+    items: List[Dict],
+    rewrite_results: Dict[int, Dict],
+    item_classifications: Dict[int, str]
+) -> List[Dict]:
+    """
+    Apply rewrite results to items, updating action and content fields.
+
+    Args:
+        items: List of bullet or paragraph dicts
+        rewrite_results: Dict from _rewrite_mixed_content_sonnet
+        item_classifications: Dict mapping index -> classification
+
+    Returns:
+        Updated items list
+    """
+    for idx, item in enumerate(items):
+        classification = item_classifications.get(idx, 'all_new')
+
+        if classification == 'exempt':
+            # Exempt items keep original action (KEEP)
+            item['action'] = 'KEEP'
+            item['exempt'] = True
+            # Don't show filtered/rewritten content for exempt
+
+        elif classification == 'all_known':
+            # 100% known → REMOVE, no rewrite needed
+            item['action'] = 'REMOVE'
+            item['filtered_content'] = ''
+
+        elif classification == 'all_new':
+            # 100% new → KEEP original, no rewrite needed
+            item['action'] = 'KEEP'
+            # Don't set filtered_content - use original
+
+        elif classification == 'mixed':
+            # Mixed content - check rewrite results
+            if idx in rewrite_results:
+                result = rewrite_results[idx]
+                if result.get('rewrite_failed'):
+                    # Fallback to mechanical filter
+                    item['action'] = 'KEEP'
+                    # Keep existing filtered_content
+                elif result['action'] == 'REWRITE':
+                    item['action'] = 'REWRITE'
+                    item['rewritten_content'] = result['content']
+                    # Clear filtered_content to avoid confusion
+                    item['filtered_content'] = ''
+                elif result['action'] == 'REMOVE':
+                    item['action'] = 'REMOVE'
+                    item['filtered_content'] = ''
+                    item['rewritten_content'] = ''
+                else:
+                    # Unexpected action, keep original
+                    item['action'] = 'KEEP'
+            else:
+                # No rewrite result, keep original filtered content
+                item['action'] = 'KEEP'
+
+    return items
+
+
+# =============================================================================
 # MAIN ENTRY POINT
 # =============================================================================
 
@@ -1770,18 +2110,152 @@ def filter_known_information(
     # Merge original_content from Phase 1 JSON (AI doesn't need to echo it back)
     json_output = _merge_original_content(json_output, phase1_json)
 
+    # =========================================================================
+    # STEP 2 & 3: TRIAGE AND SONNET REWRITE (for mixed content)
+    # =========================================================================
+    bullets = json_output.get("bullets", [])
+    paragraphs = json_output.get("paragraphs", [])
+
+    # Step 2: Classify each item
+    bullet_classifications = {}
+    paragraph_classifications = {}
+    items_to_rewrite = []  # List of (index, item, type) for mixed items
+
+    for idx, bullet in enumerate(bullets):
+        classification = _classify_bullet_for_rewrite(bullet)
+        bullet_classifications[idx] = classification
+        if classification == 'mixed':
+            items_to_rewrite.append((f"b{idx}", bullet, 'bullet'))
+
+    for idx, para in enumerate(paragraphs):
+        classification = _classify_bullet_for_rewrite(para)
+        paragraph_classifications[idx] = classification
+        if classification == 'mixed':
+            items_to_rewrite.append((f"p{idx}", para, 'paragraph'))
+
+    # Log classification summary
+    bullet_counts = {'all_known': 0, 'all_new': 0, 'mixed': 0, 'exempt': 0}
+    for c in bullet_classifications.values():
+        bullet_counts[c] = bullet_counts.get(c, 0) + 1
+
+    para_counts = {'all_known': 0, 'all_new': 0, 'mixed': 0, 'exempt': 0}
+    for c in paragraph_classifications.values():
+        para_counts[c] = para_counts.get(c, 0) + 1
+
+    LOG.info(f"[{ticker}] Phase 1.5 Step 2 Triage - Bullets: {bullet_counts} | Paragraphs: {para_counts}")
+
+    # Step 3: Rewrite mixed items with Sonnet (if any and if API key available)
+    rewrite_time_ms = 0
+
+    if items_to_rewrite and anthropic_api_key:
+        LOG.info(f"[{ticker}] Phase 1.5 Step 3: {len(items_to_rewrite)} items need Sonnet rewrite")
+
+        # Build list with proper indices
+        bullet_items = [(idx, bullets[idx], 'bullet') for idx in range(len(bullets))
+                        if bullet_classifications.get(idx) == 'mixed']
+        para_items = [(idx, paragraphs[idx], 'paragraph') for idx in range(len(paragraphs))
+                      if paragraph_classifications.get(idx) == 'mixed']
+
+        # Rewrite bullets
+        if bullet_items:
+            start_time = time.time()
+            bullet_rewrite_results = _rewrite_mixed_content_sonnet(
+                ticker, bullet_items, anthropic_api_key
+            )
+            rewrite_time_ms += int((time.time() - start_time) * 1000)
+
+            # Apply results to bullets
+            for idx, result_data in bullet_rewrite_results.items():
+                bullet_classifications[idx] = 'mixed'  # Keep classification
+                # Update bullet with rewrite result
+                if result_data['action'] == 'REWRITE':
+                    bullets[idx]['action'] = 'REWRITE'
+                    bullets[idx]['rewritten_content'] = result_data['content']
+                    bullets[idx]['filtered_content'] = ''
+                elif result_data['action'] == 'REMOVE':
+                    bullets[idx]['action'] = 'REMOVE'
+                    bullets[idx]['filtered_content'] = ''
+                elif result_data.get('rewrite_failed'):
+                    bullets[idx]['action'] = 'KEEP'
+                    # Keep existing filtered_content
+
+        # Rewrite paragraphs
+        if para_items:
+            start_time = time.time()
+            para_rewrite_results = _rewrite_mixed_content_sonnet(
+                ticker, para_items, anthropic_api_key
+            )
+            rewrite_time_ms += int((time.time() - start_time) * 1000)
+
+            # Apply results to paragraphs
+            for idx, result_data in para_rewrite_results.items():
+                paragraph_classifications[idx] = 'mixed'  # Keep classification
+                # Update paragraph with rewrite result
+                if result_data['action'] == 'REWRITE':
+                    paragraphs[idx]['action'] = 'REWRITE'
+                    paragraphs[idx]['rewritten_content'] = result_data['content']
+                    paragraphs[idx]['filtered_content'] = ''
+                elif result_data['action'] == 'REMOVE':
+                    paragraphs[idx]['action'] = 'REMOVE'
+                    paragraphs[idx]['filtered_content'] = ''
+                elif result_data.get('rewrite_failed'):
+                    paragraphs[idx]['action'] = 'KEEP'
+                    # Keep existing filtered_content
+
+        LOG.info(f"[{ticker}] Phase 1.5 Step 3: Sonnet rewrite completed in {rewrite_time_ms}ms")
+
+    elif items_to_rewrite and not anthropic_api_key:
+        LOG.warning(f"[{ticker}] Phase 1.5: {len(items_to_rewrite)} items need rewrite but no Anthropic API key")
+        # Fall back to mechanical filtering (keep filtered_content as-is)
+
+    # Apply classifications for non-mixed items
+    for idx, bullet in enumerate(bullets):
+        classification = bullet_classifications.get(idx)
+        if classification == 'all_known':
+            bullet['action'] = 'REMOVE'
+            bullet['filtered_content'] = ''
+        elif classification == 'all_new':
+            bullet['action'] = 'KEEP'
+            # Clear filtered_content since original is unchanged
+            if 'filtered_content' in bullet:
+                del bullet['filtered_content']
+        elif classification == 'exempt':
+            bullet['action'] = 'KEEP'
+            bullet['exempt'] = True
+
+    for idx, para in enumerate(paragraphs):
+        classification = paragraph_classifications.get(idx)
+        if classification == 'all_known':
+            para['action'] = 'REMOVE'
+            para['filtered_content'] = ''
+        elif classification == 'all_new':
+            para['action'] = 'KEEP'
+            # Clear filtered_content since original is unchanged
+            if 'filtered_content' in para:
+                del para['filtered_content']
+        elif classification == 'exempt':
+            para['action'] = 'KEEP'
+            para['exempt'] = True
+
+    # Update summary counts
+    summary = json_output.get("summary", {})
+    rewrite_count = sum(1 for b in bullets if b.get('action') == 'REWRITE')
+    rewrite_count += sum(1 for p in paragraphs if p.get('action') == 'REWRITE')
+    summary['rewritten'] = rewrite_count
+
     return {
         "ticker": ticker,
         "timestamp": datetime.now().isoformat(),
         "filings_used": filings_info,
         "filing_lookup": result.get("filing_lookup", {}),  # Maps identifiers to metadata
-        "summary": json_output.get("summary", {}),
-        "bullets": json_output.get("bullets", []),
-        "paragraphs": json_output.get("paragraphs", []),
+        "summary": summary,
+        "bullets": bullets,
+        "paragraphs": paragraphs,
         "model_used": result.get("model_used", "unknown"),
         "prompt_tokens": result.get("prompt_tokens", 0),
         "completion_tokens": result.get("completion_tokens", 0),
-        "generation_time_ms": result.get("generation_time_ms", 0)
+        "generation_time_ms": result.get("generation_time_ms", 0),
+        "rewrite_time_ms": rewrite_time_ms
     }
 
 
@@ -1881,11 +2355,13 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
 .bullet-keep {{ border-left-color: #28a745; }}
 .bullet-remove {{ border-left-color: #dc3545; }}
 .bullet-exempt {{ border-left-color: #6c757d; }}
+.bullet-rewrite {{ border-left-color: #007bff; }}
 .bullet-header {{ font-weight: bold; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }}
 .action-badge {{ padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }}
 .badge-keep {{ background: #d4edda; color: #155724; }}
 .badge-remove {{ background: #f8d7da; color: #721c24; }}
 .badge-exempt {{ background: #e9ecef; color: #495057; }}
+.badge-rewrite {{ background: #cce5ff; color: #004085; }}
 .content-box {{ background: #f8f9fa; padding: 10px; border-radius: 4px; margin: 10px 0; font-size: 14px; }}
 .sentence {{ padding: 8px; margin: 5px 0; border-radius: 4px; font-size: 13px; }}
 .sentence-keep {{ background: #d4edda; border-left: 3px solid #28a745; }}
@@ -1896,6 +2372,7 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
 .claim-known {{ color: #dc3545; }}
 .claim-new {{ color: #28a745; }}
 .filtered {{ background: #e8f5e9; padding: 10px; border-radius: 4px; margin-top: 10px; }}
+.rewritten {{ background: #e3f2fd; padding: 10px; border-radius: 4px; margin-top: 10px; border-left: 3px solid #007bff; }}
 .section-header {{ background: #e9ecef; padding: 10px 15px; margin: 20px 0 10px 0; border-radius: 6px; font-weight: bold; }}
 </style>
 </head>
@@ -2004,8 +2481,17 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
                         html += '</div>\n'
                     html += '</div>\n'
 
-            # Filtered content (for non-exempt sections with KEEP action)
-            if action == 'KEEP' and not exempt:
+            # Rewritten/Filtered content display logic:
+            # - EXEMPT: No output shown (use original)
+            # - KEEP (all_new): No output shown (use original unchanged)
+            # - KEEP (mixed, fallback): Show filtered_content if present
+            # - REWRITE: Show rewritten_content
+            # - REMOVE: No output shown
+            if not exempt and action == 'REWRITE':
+                rewritten = p.get('rewritten_content', '')
+                if rewritten:
+                    html += f'<div class="rewritten"><strong>Rewritten Content:</strong><br>{_escape_html(rewritten)}</div>\n'
+            elif not exempt and action == 'KEEP':
                 filtered = p.get('filtered_content', '')
                 if filtered:
                     html += f'<div class="filtered"><strong>Filtered Content:</strong><br>{_escape_html(filtered)}</div>\n'
@@ -2070,8 +2556,17 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
                         html += '</div>\n'
                     html += '</div>\n'
 
-            # Filtered content (for non-exempt sections with KEEP action)
-            if action == 'KEEP' and not exempt:
+            # Rewritten/Filtered content display logic:
+            # - EXEMPT: No output shown (use original)
+            # - KEEP (all_new): No output shown (use original unchanged)
+            # - KEEP (mixed, fallback): Show filtered_content if present
+            # - REWRITE: Show rewritten_content
+            # - REMOVE: No output shown
+            if not exempt and action == 'REWRITE':
+                rewritten = b.get('rewritten_content', '')
+                if rewritten:
+                    html += f'<div class="rewritten"><strong>Rewritten Content:</strong><br>{_escape_html(rewritten)}</div>\n'
+            elif not exempt and action == 'KEEP':
                 filtered = b.get('filtered_content', '')
                 if filtered:
                     html += f'<div class="filtered"><strong>Filtered Content:</strong><br>{_escape_html(filtered)}</div>\n'

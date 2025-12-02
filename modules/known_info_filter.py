@@ -60,22 +60,64 @@ If YES → KEEP (even if some context overlaps with filings)
 If NO → REMOVE (pure rehash, no incremental value)
 
 ═══════════════════════════════════════════════════════════════════════════════
-SENTENCE-LEVEL FILTERING
+ANALYSIS FLOW (Follow This Exactly)
 ═══════════════════════════════════════════════════════════════════════════════
 
-Filtering operates at the SENTENCE level, not the word level:
+For EACH bullet/paragraph, follow these steps IN ORDER:
 
-1. Parse each bullet/paragraph into individual sentences
-2. For each sentence, extract and classify claims (KNOWN vs NEW)
-3. SENTENCE VERDICT:
-   - If sentence contains ANY material NEW claim → KEEP entire sentence
-   - If sentence contains ONLY KNOWN/stale claims → REMOVE sentence
-4. BULLET/PARAGRAPH VERDICT:
-   - Concatenate all KEEP sentences to form filtered_content
-   - If zero sentences remain → action = REMOVE
-   - If any sentences remain → action = KEEP
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 1: PARSE INTO SENTENCES                                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Split the text into individual sentences.                                   │
+│ Each sentence becomes an entry in the "sentences" array.                    │
+│ Even single-sentence bullets get a "sentences" array with one entry.        │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 2: EXTRACT CLAIMS FROM EACH SENTENCE                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ For each sentence, decompose into atomic claims:                            │
+│ - Numbers: "revenue $15.9B", "up 22%", "$150 price target"                  │
+│ - Events: "announced partnership", "upgraded to Buy"                        │
+│ - Quotes: "CEO said X", "per analyst reports"                               │
+│ Each claim becomes an entry in that sentence's "claims" array.              │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 3: CLASSIFY EACH CLAIM AS KNOWN OR NEW                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ For each claim:                                                             │
+│ - Search filings for match → KNOWN (set source_type + evidence)             │
+│ - Check staleness rules → KNOWN (set evidence = staleness reason)           │
+│ - Not found and not stale → NEW (set source_type=null, evidence=null)       │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 4: SENTENCE VERDICT                                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Look at all claims in the sentence:                                         │
+│ - ANY claim is NEW and MATERIAL? → has_material_new=true, sentence_action=KEEP│
+│ - ALL claims are KNOWN/stale?    → has_material_new=false, sentence_action=REMOVE│
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 5: BULLET/PARAGRAPH VERDICT                                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Look at all sentence verdicts:                                              │
+│ - ANY sentence is KEEP? → action=KEEP                                       │
+│ - ALL sentences are REMOVE? → action=REMOVE                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 6: BUILD filtered_content                                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Concatenate all KEEP sentences (space-separated, preserve punctuation):     │
+│ - If 2 KEEP sentences: "Sentence one. Sentence two."                        │
+│ - If 0 KEEP sentences: "" (empty string)                                    │
+│ This is mechanical - no rewriting, no editing, just concatenation.          │
+└─────────────────────────────────────────────────────────────────────────────┘
 
-This approach:
+WHY SENTENCE-LEVEL? This approach:
 - Preserves context (known facts sharing a sentence with new facts stay together)
 - Avoids surgical editing failures (no word-level rewriting)
 - Maintains coherence (sentences are complete grammatical units)
@@ -650,6 +692,84 @@ Analysis:
 │
 ├─ Paragraph verdict: 2 KEEP sentences → action = KEEP
 └─ filtered_content: "However, stock fell 12% on weak guidance. Analysts are mixed on the outlook."
+
+JSON output for this paragraph:
+{
+  "section": "bottom_line",
+  "sentences": [
+    {
+      "text": "Company reported strong Q3 with revenue up 20%.",
+      "claims": [
+        {"claim": "revenue up 20%", "status": "KNOWN", "source_type": "TRANSCRIPT_1", "evidence": "revenue grew 20%"}
+      ],
+      "has_material_new": false,
+      "sentence_action": "REMOVE"
+    },
+    {
+      "text": "However, stock fell 12% on weak guidance.",
+      "claims": [
+        {"claim": "stock fell 12%", "status": "NEW", "source_type": null, "evidence": null},
+        {"claim": "weak guidance", "status": "KNOWN", "source_type": "TRANSCRIPT_1", "evidence": "guidance discussed in call"}
+      ],
+      "has_material_new": true,
+      "sentence_action": "KEEP"
+    },
+    {
+      "text": "Analysts are mixed on the outlook.",
+      "claims": [
+        {"claim": "analysts are mixed", "status": "NEW", "source_type": null, "evidence": null}
+      ],
+      "has_material_new": true,
+      "sentence_action": "KEEP"
+    }
+  ],
+  "action": "KEEP",
+  "filtered_content": "However, stock fell 12% on weak guidance. Analysts are mixed on the outlook."
+}
+
+═══════════════════════════════════════════════════════════════════════════════
+WHY FULL ANALYSIS IS ALWAYS REQUIRED
+═══════════════════════════════════════════════════════════════════════════════
+
+Even when a bullet will be REMOVED, we need the full analysis because:
+
+1. QA VISIBILITY: Humans review these results. We need to see WHY something was removed.
+   - Which claims were in the filings?
+   - What evidence matched?
+   - Was it staleness or filing match?
+
+2. DEBUGGING: If the filter makes a mistake, we need the chain of logic to find it.
+
+3. AUDIT TRAIL: The analysis proves the decision was made systematically, not arbitrarily.
+
+4. NO SHORTCUTS: If you skip analysis for REMOVE bullets, you might be wrong about the
+   verdict. The analysis IS the verification.
+
+WRONG (never do this):
+{
+  "bullet_id": "FIN_002",
+  "sentences": [],           ← EMPTY! NO ANALYSIS!
+  "action": "REMOVE",
+  "filtered_content": ""
+}
+
+RIGHT (always do this):
+{
+  "bullet_id": "FIN_002",
+  "sentences": [
+    {
+      "text": "Q3 EBITDA reached $10.7B...",
+      "claims": [
+        {"claim": "EBITDA $10.7B", "status": "KNOWN", "source_type": "TRANSCRIPT_1", "evidence": "..."},
+        ...
+      ],
+      "has_material_new": false,
+      "sentence_action": "REMOVE"
+    }
+  ],
+  "action": "REMOVE",
+  "filtered_content": ""
+}
 
 ═══════════════════════════════════════════════════════════════════════════════
 OUTPUT FORMAT

@@ -1065,7 +1065,7 @@ def _filter_known_info_gemini(
     eight_k_filings: List[Dict] = None
 ) -> Optional[Dict]:
     """
-    Filter known information using Gemini 2.5 Flash.
+    Filter known information using Gemini 2.5 Pro.
 
     Args:
         ticker: Stock ticker
@@ -1096,9 +1096,9 @@ def _filter_known_info_gemini(
         LOG.info(f"[{ticker}] Phase 1.5 Gemini prompt: system=~{system_tokens_est} tokens, user=~{user_tokens_est} tokens, total=~{total_tokens_est} tokens")
 
         # Create model WITHOUT system_instruction (use concatenated prompt instead)
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-2.5-pro')
 
-        LOG.info(f"[{ticker}] Phase 1.5: Calling Gemini 2.5 Flash for known info filter")
+        LOG.info(f"[{ticker}] Phase 1.5: Calling Gemini 2.5 Pro for known info filter")
 
         # Import JSON parser
         from modules.json_utils import extract_json_from_claude_response
@@ -1169,7 +1169,7 @@ def _filter_known_info_gemini(
 
                 return {
                     "json_output": json_output,
-                    "model_used": "gemini-2.5-flash",
+                    "model_used": "gemini-2.5-pro",
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,
                     "generation_time_ms": generation_time_ms,
@@ -1427,7 +1427,7 @@ def filter_known_information(
     # Try Gemini first
     result = None
     if gemini_api_key:
-        LOG.info(f"[{ticker}] Phase 1.5: Attempting Gemini 2.5 Flash (primary)")
+        LOG.info(f"[{ticker}] Phase 1.5: Attempting Gemini 2.5 Pro (primary)")
         result = _filter_known_info_gemini(ticker, phase1_json, filings, gemini_api_key, eight_k_filings)
 
         if result and result.get("json_output"):

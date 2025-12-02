@@ -12758,7 +12758,7 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
                             }
 
                             if "gemini" in phase1_5_model_used.lower():
-                                calculate_gemini_api_cost(phase1_5_usage, "executive_summary_phase1_5", model="flash", model_name=phase1_5_model_used)
+                                calculate_gemini_api_cost(phase1_5_usage, "executive_summary_phase1_5", model="pro", model_name=phase1_5_model_used)
                             elif "claude" in phase1_5_model_used.lower():
                                 calculate_claude_api_cost(phase1_5_usage, "executive_summary_phase1_5", model_name=phase1_5_model_used)
 
@@ -29486,7 +29486,7 @@ async def regenerate_email_api(request: Request):
                     }
 
                     if "gemini" in phase1_5_model_used.lower():
-                        calculate_gemini_api_cost(phase1_5_usage, "executive_summary_phase1_5", model="flash", model_name=phase1_5_model_used)
+                        calculate_gemini_api_cost(phase1_5_usage, "executive_summary_phase1_5", model="pro", model_name=phase1_5_model_used)
                     elif "claude" in phase1_5_model_used.lower():
                         calculate_claude_api_cost(phase1_5_usage, "executive_summary_phase1_5", model_name=phase1_5_model_used)
 

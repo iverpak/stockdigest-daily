@@ -709,6 +709,7 @@ def _should_include_bullet_in_email3(bullet: Dict, section_name: str) -> bool:
     Determine if a bullet should be included in Email #3 (user-facing).
 
     Filtering rules:
+    - Remove bullets with filter_status = "filtered_out" (NEW - Dec 2025)
     - Remove bullets with relevance = "none"
     - Remove bullets with relevance = "indirect" AND impact = "low impact"
     - Don't filter if fields are missing (safety)
@@ -727,6 +728,12 @@ def _should_include_bullet_in_email3(bullet: Dict, section_name: str) -> bool:
     # Don't filter paragraphs (they're not enriched with relevance/impact)
     if section_name in ["bottom_line", "upside_scenario", "downside_scenario"]:
         return True
+
+    # NEW (Dec 2025): Check filter_status field first (most reliable)
+    # This is set by mark_filtered_bullets() and merged back after Phase 3
+    filter_status = bullet.get('filter_status', '').lower()
+    if filter_status == 'filtered_out':
+        return False
 
     # Get enrichment fields
     relevance = bullet.get('relevance', '').lower()
@@ -1014,6 +1021,7 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
         import json as json_module
 
         bullet_id = bullet.get('bullet_id', 'N/A')
+        is_filtered = bullet.get('filter_status') == 'filtered_out'
 
         # Header line with [bullet_id] prefix (includes topic_label, sentiment, reason)
         header = format_bullet_header(bullet)
@@ -1022,6 +1030,11 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
             header = f"**[{bullet_id}] {header[2:]}"
         else:
             header = f"[{bullet_id}] {header}"
+
+        # For filtered bullets, add strikethrough and grey styling to header
+        if is_filtered:
+            # Wrap header in strikethrough span
+            header = f"<span style='text-decoration: line-through; color: #888;'>{header}</span>"
 
         # Start with header
         result = f"{header}\n"
@@ -1039,6 +1052,9 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
         content_p3 = bullet.get('content_integrated', '')
         if content_p3:
             result += f"<br><br><strong>Phase 3 (Integrated):</strong><br>{content_p3}"
+        elif is_filtered:
+            # Filtered bullets don't have Phase 3 content - show placeholder
+            result += f"<br><br><strong>Phase 3 (Integrated):</strong><br><em style='color: #888;'>[Not processed - bullet was filtered]</em>"
 
         # Metadata line - order: Impact | Sentiment | Relevance | Reason
         metadata_parts = []
@@ -1105,6 +1121,15 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
             result += f"<br>  Absorbed by: {absorbed_by}"
             if shared_theme:
                 result += f"<br>  Theme: {shared_theme}"
+
+        # Filter status - shows if bullet was filtered for Email #3
+        filter_status = bullet.get('filter_status', 'included')
+        filter_reason = bullet.get('filter_reason')
+
+        if filter_status == 'filtered_out':
+            result += f"<br><br>Filter Status: <span style='color: #dc3545; font-weight: bold;'>❌ FILTERED OUT ({filter_reason})</span>"
+        else:
+            result += f"<br><br>Filter Status: <span style='color: #28a745;'>✅ INCLUDED</span>"
 
         # Bullet ID at the very end
         result += f"<br><br>ID: {bullet_id}"

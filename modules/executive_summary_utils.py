@@ -166,6 +166,88 @@ def add_dates_to_email_sections(
     return sections
 
 
+def _get_filter_status(bullet: Dict) -> tuple:
+    """
+    Determine filter status for a bullet.
+
+    Returns:
+        Tuple of (should_include: bool, filter_reason: str or None)
+        - (True, None) = bullet should be included
+        - (False, "relevance=none") = filtered due to no relevance
+        - (False, "indirect + low impact") = filtered due to indirect relevance with low impact
+    """
+    # Get enrichment fields
+    relevance = bullet.get('relevance', '').lower()
+    impact = bullet.get('impact', '').lower()
+
+    # Safety: Don't filter if fields are missing
+    if not relevance or not impact:
+        return (True, None)
+
+    # Filter rule 1: relevance is "none"
+    if relevance == 'none':
+        return (False, "relevance=none")
+
+    # Filter rule 2: relevance is "indirect" AND impact is "low impact"
+    if relevance == 'indirect' and impact == 'low impact':
+        return (False, "indirect + low impact")
+
+    # Keep bullet
+    return (True, None)
+
+
+def mark_filtered_bullets(phase2_json: Dict) -> Dict:
+    """
+    Mark bullets with filter_status without removing them.
+
+    Adds to each bullet:
+    - filter_status: 'included' or 'filtered_out'
+    - filter_reason: None or reason string (only if filtered_out)
+
+    Args:
+        phase2_json: Phase 1+2 merged JSON with enrichment metadata
+
+    Returns:
+        New JSON dict with all bullets marked (deep copy, original unchanged)
+
+    Used by:
+    - Email #2 display (shows all bullets with filter status indicator)
+    """
+    import copy
+
+    # Deep copy to avoid mutating original
+    marked_json = copy.deepcopy(phase2_json)
+
+    # All bullet sections
+    bullet_sections = [
+        "major_developments",
+        "financial_performance",
+        "risk_factors",
+        "wall_street_sentiment",
+        "competitive_industry_dynamics",
+        "upcoming_catalysts",
+        "key_variables"
+    ]
+
+    sections = marked_json.get('sections', {})
+
+    for section_name in bullet_sections:
+        if section_name in sections:
+            for bullet in sections[section_name]:
+                should_include, filter_reason = _get_filter_status(bullet)
+                if should_include:
+                    bullet['filter_status'] = 'included'
+                    bullet['filter_reason'] = None
+                else:
+                    bullet['filter_status'] = 'filtered_out'
+                    bullet['filter_reason'] = filter_reason
+
+    # Scenarios pass through unchanged (no filtering applied to paragraphs)
+    # bottom_line, upside_scenario, downside_scenario are dicts, not arrays
+
+    return marked_json
+
+
 def filter_bullets_for_email3(phase2_json: Dict) -> Dict:
     """
     Apply Email #3 filter to Phase 2 JSON: Remove low-quality bullets.
@@ -182,42 +264,16 @@ def filter_bullets_for_email3(phase2_json: Dict) -> Dict:
         phase2_json: Phase 1+2 merged JSON with enrichment metadata
 
     Returns:
-        New JSON dict with filtered bullets (deep copy, original unchanged)
+        New JSON dict with filtered bullets REMOVED (deep copy, original unchanged)
 
     Used by:
     - Phase 3 generation (filter before context integration)
     - Email #3 display (filter before showing to users)
-    - Email #4 display (filter before showing to users)
     """
     import copy
 
     # Deep copy to avoid mutating original
     filtered_json = copy.deepcopy(phase2_json)
-
-    def should_include_bullet(bullet: Dict) -> bool:
-        """
-        Returns True if bullet should be included in Email #3.
-
-        Same logic as executive_summary_phase1.py:should_include_in_email3()
-        """
-        # Get enrichment fields
-        relevance = bullet.get('relevance', '').lower()
-        impact = bullet.get('impact', '').lower()
-
-        # Safety: Don't filter if fields are missing
-        if not relevance or not impact:
-            return True
-
-        # Filter rule 1: relevance is "none"
-        if relevance == 'none':
-            return False
-
-        # Filter rule 2: relevance is "indirect" AND impact is "low impact"
-        if relevance == 'indirect' and impact == 'low impact':
-            return False
-
-        # Keep bullet
-        return True
 
     # Filter all bullet sections
     bullet_sections = [
@@ -234,13 +290,87 @@ def filter_bullets_for_email3(phase2_json: Dict) -> Dict:
 
     for section_name in bullet_sections:
         if section_name in sections:
-            # Filter bullets in place
+            # Filter bullets - keep only those that pass filter
             sections[section_name] = [
                 b for b in sections[section_name]
-                if should_include_bullet(b)
+                if _get_filter_status(b)[0]  # [0] is should_include
             ]
 
     # Scenarios pass through unchanged (no filtering)
     # bottom_line, upside_scenario, downside_scenario are dicts, not arrays
 
     return filtered_json
+
+
+def merge_filtered_bullets_back(phase3_json: Dict, marked_phase2_json: Dict) -> Dict:
+    """
+    Merge filtered-out bullets back into Phase 3 JSON for Email #2 display.
+
+    Phase 3 only processes included bullets, so filtered bullets are missing.
+    This function adds them back with their filter_status preserved.
+
+    Args:
+        phase3_json: Phase 3 merged JSON (only has included bullets with content_integrated)
+        marked_phase2_json: Phase 2 JSON with all bullets marked via mark_filtered_bullets()
+
+    Returns:
+        New JSON with all bullets - included ones have content_integrated,
+        filtered ones have filter_status='filtered_out' and no content_integrated
+
+    Used by:
+    - generate_executive_summary_all_phases() after Phase 3 completes
+    - Regenerate endpoint after Phase 3 completes
+    """
+    import copy
+
+    # Deep copy Phase 3 to avoid mutating
+    merged_json = copy.deepcopy(phase3_json)
+
+    # All bullet sections
+    bullet_sections = [
+        "major_developments",
+        "financial_performance",
+        "risk_factors",
+        "wall_street_sentiment",
+        "competitive_industry_dynamics",
+        "upcoming_catalysts",
+        "key_variables"
+    ]
+
+    merged_sections = merged_json.get('sections', {})
+    marked_sections = marked_phase2_json.get('sections', {})
+
+    for section_name in bullet_sections:
+        if section_name not in marked_sections:
+            continue
+
+        # Build lookup of Phase 3 bullets by bullet_id
+        phase3_bullets_by_id = {}
+        if section_name in merged_sections:
+            for b in merged_sections[section_name]:
+                bullet_id = b.get('bullet_id')
+                if bullet_id:
+                    phase3_bullets_by_id[bullet_id] = b
+
+        # Rebuild section with ALL bullets from marked_phase2_json
+        # Use Phase 3 version if available (has content_integrated)
+        # Otherwise use marked Phase 2 version (filtered_out, no content_integrated)
+        new_bullets = []
+        for marked_bullet in marked_sections[section_name]:
+            bullet_id = marked_bullet.get('bullet_id')
+
+            if bullet_id and bullet_id in phase3_bullets_by_id:
+                # Use Phase 3 version (has content_integrated)
+                phase3_bullet = phase3_bullets_by_id[bullet_id]
+                # Preserve filter_status from marked version
+                phase3_bullet['filter_status'] = marked_bullet.get('filter_status', 'included')
+                phase3_bullet['filter_reason'] = marked_bullet.get('filter_reason')
+                new_bullets.append(phase3_bullet)
+            else:
+                # Filtered bullet - use marked Phase 2 version
+                # It already has filter_status='filtered_out' and filter_reason
+                new_bullets.append(copy.deepcopy(marked_bullet))
+
+        merged_sections[section_name] = new_bullets
+
+    return merged_json

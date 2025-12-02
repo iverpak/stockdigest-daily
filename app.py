@@ -13018,7 +13018,7 @@ async def generate_executive_summary_all_phases(
         LOG.info(f"[{ticker}] 🎨 Running Phase 3 (context integration)...")
 
         from modules.executive_summary_phase3 import generate_executive_summary_phase3
-        from modules.executive_summary_utils import filter_bullets_for_email3
+        from modules.executive_summary_utils import filter_bullets_for_email3, mark_filtered_bullets, merge_filtered_bullets_back
 
         # Load Phase 2 merged JSON from database (just saved by Phase 1+2)
         with db() as conn, conn.cursor() as cur:
@@ -13041,8 +13041,11 @@ async def generate_executive_summary_all_phases(
         # Parse Phase 2 merged JSON
         phase2_merged_json = json.loads(result['summary_text'])
 
+        # MARK bullets with filter_status (for Email #2 display)
+        LOG.info(f"[{ticker}] 🔍 Marking bullets with filter status...")
+        marked_phase2_json = mark_filtered_bullets(phase2_merged_json)
+
         # FILTER bullets before Phase 3 (remove relevance='none' or low impact + indirect)
-        LOG.info(f"[{ticker}] 🔍 Filtering bullets before Phase 3...")
         filtered_json_for_phase3 = filter_bullets_for_email3(phase2_merged_json)
 
         # Count removed bullets for logging
@@ -13096,7 +13099,12 @@ async def generate_executive_summary_all_phases(
                 "articles_by_ticker": articles_by_ticker
             }
 
-        # Update database with Phase 3 content
+        # MERGE filtered bullets back into Phase 3 JSON (for Email #2 display)
+        # This adds filtered_out bullets with their filter_status preserved
+        LOG.info(f"[{ticker}] 🔗 Merging filtered bullets back for Email #2 display...")
+        phase3_merged_json = merge_filtered_bullets_back(phase3_merged_json, marked_phase2_json)
+
+        # Update database with Phase 3 content (includes all bullets with filter_status)
         phase3_model = phase3_usage.get("model", "") if phase3_usage else None
         success = update_executive_summary_with_phase3(
             ticker=ticker,
@@ -29656,7 +29664,7 @@ async def regenerate_email_api(request: Request):
         LOG.info(f"[{ticker}] 🎨 Generating Phase 3 context-integrated JSON...")
         try:
             from modules.executive_summary_phase3 import generate_executive_summary_phase3
-            from modules.executive_summary_utils import filter_bullets_for_email3
+            from modules.executive_summary_utils import filter_bullets_for_email3, mark_filtered_bullets, merge_filtered_bullets_back
 
             # Fetch Phase 2 merged JSON from database (just saved above)
             with db() as conn, conn.cursor() as cur:
@@ -29671,8 +29679,11 @@ async def regenerate_email_api(request: Request):
                 # Parse Phase 2 merged JSON
                 phase2_merged_json = json.loads(result['summary_text'])
 
+                # MARK bullets with filter_status (for Email #2 display)
+                LOG.info(f"[{ticker}] 🔍 Marking bullets with filter status...")
+                marked_phase2_json = mark_filtered_bullets(phase2_merged_json)
+
                 # FILTER bullets before Phase 3 (remove relevance='none' or low impact + indirect)
-                LOG.info(f"[{ticker}] 🔍 Filtering bullets before Phase 3...")
                 filtered_json_for_phase3 = filter_bullets_for_email3(phase2_merged_json)
 
                 # Get Phase 3 primary model from system config
@@ -29702,7 +29713,11 @@ async def regenerate_email_api(request: Request):
                         LOG.warning(f"[{ticker}] Phase 3 cost tracking: Unknown model '{phase3_model}', skipping cost tracking")
 
                 if phase3_merged_json:
-                    # Update database with Phase 3 content
+                    # MERGE filtered bullets back into Phase 3 JSON (for Email #2 display)
+                    LOG.info(f"[{ticker}] 🔗 Merging filtered bullets back for Email #2 display...")
+                    phase3_merged_json = merge_filtered_bullets_back(phase3_merged_json, marked_phase2_json)
+
+                    # Update database with Phase 3 content (includes all bullets with filter_status)
                     phase3_model = phase3_usage.get("model", "") if phase3_usage else None
                     success = update_executive_summary_with_phase3(
                         ticker=ticker,

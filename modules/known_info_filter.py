@@ -302,6 +302,26 @@ IMPORTANT - What counts as KNOWN:
 - Only mark KNOWN if the specific data point, number, or fact appears in filings
 
 ═══════════════════════════════════════════════════════════════════════════════
+FILING IDENTIFIERS (CRITICAL)
+═══════════════════════════════════════════════════════════════════════════════
+
+Each filing in the input is labeled with a unique identifier like:
+- TRANSCRIPT_1, 10Q_1, 10K_1 (for standard filings)
+- 8K_1, 8K_2, 8K_3 (for multiple 8-K filings)
+
+When a claim is KNOWN, you MUST use the EXACT filing identifier in source_type.
+
+Examples:
+- Claim found in transcript → source_type: "TRANSCRIPT_1"
+- Claim found in 10-Q → source_type: "10Q_1"
+- Claim found in 10-K → source_type: "10K_1"
+- Claim found in first 8-K → source_type: "8K_1"
+- Claim found in second 8-K → source_type: "8K_2"
+
+DO NOT use generic labels like "8-K" or "Transcript" - use the specific identifier.
+This allows us to display exactly which filing (with date and title) contained the claim.
+
+═══════════════════════════════════════════════════════════════════════════════
 ACTION LOGIC
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -431,8 +451,8 @@ Return valid JSON with this exact structure:
         {
           "claim": "Q3 revenue $51.2B",
           "status": "KNOWN",
-          "source": "10-Q Financial Highlights section",
-          "source_type": "10-Q",
+          "source": "Financial Highlights section",
+          "source_type": "10Q_1",
           "evidence": "Total net sales increased 11% to $158.9 billion in Q3 2024"
         },
         {
@@ -455,7 +475,7 @@ Return valid JSON with this exact structure:
           "claim": "...",
           "status": "KNOWN" or "NEW",
           "source": "filing section" or null,
-          "source_type": "Transcript" or "10-Q" or "10-K" or "8-K" or null,
+          "source_type": "TRANSCRIPT_1" or "10Q_1" or "10K_1" or "8K_1" or null,
           "evidence": "exact quote or paraphrase from filing" or null
         }
       ],
@@ -494,9 +514,13 @@ Return ONLY the JSON object, no other text.
 # HELPER FUNCTIONS
 # =============================================================================
 
-def _build_filter_user_content(ticker: str, phase1_json: Dict, filings: Dict, eight_k_filings: List[Dict] = None) -> str:
+def _build_filter_user_content(ticker: str, phase1_json: Dict, filings: Dict, eight_k_filings: List[Dict] = None) -> Tuple[str, Dict]:
     """
     Build user content combining Phase 1 JSON and filing sources.
+
+    Each filing is labeled with a unique identifier (e.g., TRANSCRIPT_1, 8K_1, 8K_2)
+    that the AI should use in source_type. This allows us to map back to specific
+    filing metadata (date, title) in post-processing.
 
     Args:
         ticker: Stock ticker symbol
@@ -505,8 +529,11 @@ def _build_filter_user_content(ticker: str, phase1_json: Dict, filings: Dict, ei
         eight_k_filings: List of filtered 8-K filings (optional)
 
     Returns:
-        Formatted user content string
+        Tuple of (formatted user content string, filing_lookup dict)
+        filing_lookup maps identifier -> {date, title, quarter, year, etc.}
     """
+    filing_lookup = {}  # Maps identifier -> metadata for post-processing
+
     content = f"TICKER: {ticker}\n"
     content += f"CURRENT DATE: {datetime.now().strftime('%B %d, %Y')}\n\n"
     content += "=" * 80 + "\n"
@@ -528,8 +555,18 @@ def _build_filter_user_content(ticker: str, phase1_json: Dict, filings: Dict, ei
         date = t.get('date')
         date_str = date.strftime('%b %d, %Y') if date else 'Unknown Date'
 
-        content += f"LATEST EARNINGS CALL (TRANSCRIPT):\n"
-        content += f"[{ticker} ({company}) {quarter} {year} Earnings Call ({date_str})]\n\n"
+        filing_id = "TRANSCRIPT_1"
+        filing_lookup[filing_id] = {
+            'type': 'Transcript',
+            'date': date_str,
+            'quarter': quarter,
+            'year': year,
+            'display': f"{quarter} {year} Earnings Call ({date_str})"
+        }
+
+        content += f"=== {filing_id}: LATEST EARNINGS CALL (TRANSCRIPT) ===\n"
+        content += f"[{ticker} ({company}) {quarter} {year} Earnings Call ({date_str})]\n"
+        content += f"Use source_type=\"{filing_id}\" when citing this filing.\n\n"
         content += f"{t.get('text', '')}\n\n\n"
 
     # Add 10-Q if available
@@ -541,8 +578,18 @@ def _build_filter_user_content(ticker: str, phase1_json: Dict, filings: Dict, ei
         date = q.get('filing_date')
         date_str = date.strftime('%b %d, %Y') if date else 'Unknown Date'
 
-        content += f"LATEST QUARTERLY REPORT (10-Q):\n"
-        content += f"[{ticker} ({company}) {quarter} {year} 10-Q Filing, Filed: {date_str}]\n\n"
+        filing_id = "10Q_1"
+        filing_lookup[filing_id] = {
+            'type': '10-Q',
+            'date': date_str,
+            'quarter': quarter,
+            'year': year,
+            'display': f"{quarter} {year} 10-Q (filed {date_str})"
+        }
+
+        content += f"=== {filing_id}: LATEST QUARTERLY REPORT (10-Q) ===\n"
+        content += f"[{ticker} ({company}) {quarter} {year} 10-Q Filing, Filed: {date_str}]\n"
+        content += f"Use source_type=\"{filing_id}\" when citing this filing.\n\n"
         content += f"{q.get('text', '')}\n\n\n"
 
     # Add 10-K if available
@@ -553,16 +600,25 @@ def _build_filter_user_content(ticker: str, phase1_json: Dict, filings: Dict, ei
         date = k.get('filing_date')
         date_str = date.strftime('%b %d, %Y') if date else 'Unknown Date'
 
-        content += f"COMPANY 10-K PROFILE:\n"
-        content += f"[{ticker} ({company}) 10-K FILING FOR FISCAL YEAR {year}, Filed: {date_str}]\n\n"
+        filing_id = "10K_1"
+        filing_lookup[filing_id] = {
+            'type': '10-K',
+            'date': date_str,
+            'year': year,
+            'display': f"FY{year} 10-K (filed {date_str})"
+        }
+
+        content += f"=== {filing_id}: COMPANY 10-K PROFILE ===\n"
+        content += f"[{ticker} ({company}) 10-K FILING FOR FISCAL YEAR {year}, Filed: {date_str}]\n"
+        content += f"Use source_type=\"{filing_id}\" when citing this filing.\n\n"
         content += f"{k.get('text', '')}\n\n\n"
 
     # Add 8-K filings if available (filtered material events since last earnings)
     if eight_k_filings:
-        content += f"RECENT 8-K FILINGS (since last earnings call):\n"
+        content += f"=== RECENT 8-K FILINGS (since last earnings call) ===\n"
         content += f"[{len(eight_k_filings)} material 8-K filing(s) found]\n\n"
 
-        for filing in eight_k_filings:
+        for i, filing in enumerate(eight_k_filings, start=1):
             filing_date = filing.get('filing_date')
             if hasattr(filing_date, 'strftime'):
                 date_str = filing_date.strftime('%b %d, %Y')
@@ -573,15 +629,29 @@ def _build_filter_user_content(ticker: str, phase1_json: Dict, filings: Dict, ei
             item_codes = filing.get('item_codes', 'Unknown')
             summary = filing.get('summary_markdown', '')
 
-            content += f"[{ticker} 8-K Filed: {date_str} | Items: {item_codes}]\n"
-            content += f"{report_title}\n\n"
+            # Truncate title for display (keep first 50 chars)
+            short_title = report_title[:50] + '...' if len(report_title) > 50 else report_title
+
+            filing_id = f"8K_{i}"
+            filing_lookup[filing_id] = {
+                'type': '8-K',
+                'date': date_str,
+                'title': report_title,
+                'short_title': short_title,
+                'item_codes': item_codes,
+                'display': f"8-K filed {date_str}: {short_title}"
+            }
+
+            content += f"--- {filing_id}: 8-K Filed {date_str} ---\n"
+            content += f"Title: {report_title}\n"
+            content += f"Items: {item_codes}\n"
+            content += f"Use source_type=\"{filing_id}\" when citing this filing.\n\n"
             content += f"{summary}\n\n"
-            content += "---\n\n"
 
     if not filings and not eight_k_filings:
         content += "NO FILINGS AVAILABLE - Mark all claims as NEW.\n"
 
-    return content
+    return content, filing_lookup
 
 
 def _get_filings_info(filings: Dict, eight_k_filings: List[Dict] = None) -> Dict:
@@ -867,8 +937,8 @@ def _filter_known_info_gemini(
     try:
         genai.configure(api_key=gemini_api_key)
 
-        # Build user content (now includes 8-K filings)
-        user_content = _build_filter_user_content(ticker, phase1_json, filings, eight_k_filings)
+        # Build user content (now includes 8-K filings and returns filing_lookup)
+        user_content, filing_lookup = _build_filter_user_content(ticker, phase1_json, filings, eight_k_filings)
 
         # Concatenate system prompt + user content (matches working pattern in article_summaries.py, triage.py)
         # NOTE: Using system_instruction parameter caused empty responses with finish_reason=1
@@ -957,7 +1027,8 @@ def _filter_known_info_gemini(
                     "model_used": "gemini-2.5-flash",
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,
-                    "generation_time_ms": generation_time_ms
+                    "generation_time_ms": generation_time_ms,
+                    "filing_lookup": filing_lookup
                 }
 
             # JSON parsing failed - check if we should retry
@@ -1016,8 +1087,8 @@ def _filter_known_info_claude(
         Filter result dict or None if failed
     """
     try:
-        # Build user content (now includes 8-K filings)
-        user_content = _build_filter_user_content(ticker, phase1_json, filings, eight_k_filings)
+        # Build user content (now includes 8-K filings and returns filing_lookup)
+        user_content, filing_lookup = _build_filter_user_content(ticker, phase1_json, filings, eight_k_filings)
 
         # Log sizes
         system_tokens_est = len(KNOWN_INFO_FILTER_PROMPT) // 4
@@ -1135,7 +1206,8 @@ def _filter_known_info_claude(
             "model_used": "claude-sonnet-4-5-20250929",
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
-            "generation_time_ms": generation_time_ms
+            "generation_time_ms": generation_time_ms,
+            "filing_lookup": filing_lookup
         }
 
     except Exception as e:
@@ -1244,6 +1316,7 @@ def filter_known_information(
         "ticker": ticker,
         "timestamp": datetime.now().isoformat(),
         "filings_used": filings_info,
+        "filing_lookup": result.get("filing_lookup", {}),  # Maps identifiers to metadata
         "summary": json_output.get("summary", {}),
         "bullets": json_output.get("bullets", []),
         "paragraphs": json_output.get("paragraphs", []),
@@ -1257,6 +1330,43 @@ def filter_known_information(
 # =============================================================================
 # EMAIL HTML GENERATOR
 # =============================================================================
+
+def _resolve_source_type(source_type: str, filing_lookup: Dict) -> str:
+    """
+    Resolve a filing identifier (e.g., '8K_1') to a display string.
+
+    Args:
+        source_type: Filing identifier from AI (e.g., 'TRANSCRIPT_1', '8K_2')
+        filing_lookup: Dict mapping identifiers to metadata
+
+    Returns:
+        Formatted display string (e.g., '8-K filed Nov 24, 2025: CDO Appointment')
+    """
+    if not source_type or not filing_lookup:
+        return source_type or ''
+
+    # Check if this identifier exists in the lookup
+    if source_type in filing_lookup:
+        metadata = filing_lookup[source_type]
+        return metadata.get('display', source_type)
+
+    # Handle legacy format (if AI returns old-style labels)
+    # Map old labels to new lookup keys
+    legacy_map = {
+        'Transcript': 'TRANSCRIPT_1',
+        '10-Q': '10Q_1',
+        '10-K': '10K_1',
+        '8-K': '8K_1',  # Ambiguous but better than nothing
+    }
+
+    if source_type in legacy_map:
+        mapped_id = legacy_map[source_type]
+        if mapped_id in filing_lookup:
+            return filing_lookup[mapped_id].get('display', source_type)
+
+    # Return original if no mapping found
+    return source_type
+
 
 def generate_known_info_filter_email(ticker: str, filter_result: Dict) -> str:
     """
@@ -1276,6 +1386,7 @@ def generate_known_info_filter_email(ticker: str, filter_result: Dict) -> str:
     bullets = filter_result.get("bullets", [])
     paragraphs = filter_result.get("paragraphs", [])
     filings = filter_result.get("filings_used", {})
+    filing_lookup = filter_result.get("filing_lookup", {})  # For resolving identifiers
     model = filter_result.get("model_used", "unknown")
     gen_time = filter_result.get("generation_time_ms", 0)
 
@@ -1393,7 +1504,8 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
                     status = c.get('status', 'NEW')
                     claim_class = 'claim-known' if status == 'KNOWN' else 'claim-new'
                     icon = '❌' if status == 'KNOWN' else '✅'
-                    source_type = c.get('source_type', '')
+                    source_type_raw = c.get('source_type', '')
+                    source_type_display = _resolve_source_type(source_type_raw, filing_lookup)
                     source_section = c.get('source', '')
                     evidence = c.get('evidence', '')
 
@@ -1402,14 +1514,14 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
 
                     # For KNOWN claims, show evidence with source
                     if status == 'KNOWN' and evidence:
-                        if source_type:
-                            # Filing-based KNOWN - show quote with source
-                            html += f'<br><span style="margin-left: 20px; color: #666; font-size: 12px;">→ "{_escape_html(evidence)}" ({source_type}, {source_section})</span>'
+                        if source_type_raw:
+                            # Filing-based KNOWN - show quote with resolved source
+                            html += f'<br><span style="margin-left: 20px; color: #666; font-size: 12px;">→ "{_escape_html(evidence)}" ({source_type_display})</span>'
                         else:
                             # Staleness-based KNOWN - show reason without quotes
                             html += f'<br><span style="margin-left: 20px; color: #856404; font-size: 12px;">→ ⏰ {_escape_html(evidence)}</span>'
                     elif status == 'KNOWN' and source_section:
-                        html += f'<br><span style="margin-left: 20px; color: #666; font-size: 12px;">→ {source_type}, {source_section}</span>'
+                        html += f'<br><span style="margin-left: 20px; color: #666; font-size: 12px;">→ {source_type_display}</span>'
 
                     html += '</div>\n'
                 html += '</div>\n'
@@ -1448,7 +1560,8 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
                     status = c.get('status', 'NEW')
                     claim_class = 'claim-known' if status == 'KNOWN' else 'claim-new'
                     icon = '❌' if status == 'KNOWN' else '✅'
-                    source_type = c.get('source_type', '')
+                    source_type_raw = c.get('source_type', '')
+                    source_type_display = _resolve_source_type(source_type_raw, filing_lookup)
                     source_section = c.get('source', '')
                     evidence = c.get('evidence', '')
 
@@ -1457,14 +1570,14 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
 
                     # For KNOWN claims, show evidence with source
                     if status == 'KNOWN' and evidence:
-                        if source_type:
-                            # Filing-based KNOWN - show quote with source
-                            html += f'<br><span style="margin-left: 20px; color: #666; font-size: 12px;">→ "{_escape_html(evidence)}" ({source_type}, {source_section})</span>'
+                        if source_type_raw:
+                            # Filing-based KNOWN - show quote with resolved source
+                            html += f'<br><span style="margin-left: 20px; color: #666; font-size: 12px;">→ "{_escape_html(evidence)}" ({source_type_display})</span>'
                         else:
                             # Staleness-based KNOWN - show reason without quotes
                             html += f'<br><span style="margin-left: 20px; color: #856404; font-size: 12px;">→ ⏰ {_escape_html(evidence)}</span>'
                     elif status == 'KNOWN' and source_section:
-                        html += f'<br><span style="margin-left: 20px; color: #666; font-size: 12px;">→ {source_type}, {source_section}</span>'
+                        html += f'<br><span style="margin-left: 20px; color: #666; font-size: 12px;">→ {source_type_display}</span>'
 
                     html += '</div>\n'
                 html += '</div>\n'

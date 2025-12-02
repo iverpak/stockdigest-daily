@@ -307,6 +307,12 @@ Re-enabled as fallback when Gemini fails. Uses same prompt with 8-K filings incl
     "known_claims": 28,
     "new_claims": 17
   },
+  "filing_lookup": {
+    "TRANSCRIPT_1": {"type": "Transcript", "date": "Oct 15, 2025", "quarter": "Q3", "year": 2025, "display": "Q3 2025 Earnings Call (Oct 15, 2025)"},
+    "10Q_1": {"type": "10-Q", "date": "Nov 01, 2025", "quarter": "Q3", "year": 2025, "display": "Q3 2025 10-Q (filed Nov 01, 2025)"},
+    "10K_1": {"type": "10-K", "date": "Feb 15, 2025", "year": 2024, "display": "FY2024 10-K (filed Feb 15, 2025)"},
+    "8K_1": {"type": "8-K", "date": "Nov 24, 2025", "title": "CDO Appointment", "display": "8-K filed Nov 24, 2025: CDO Appointment"}
+  },
   "bullets": [
     {
       "bullet_id": "FIN_001",
@@ -316,8 +322,8 @@ Re-enabled as fallback when Gemini fails. Uses same prompt with 8-K filings incl
         {
           "claim": "Q3 revenue $51.2B",
           "status": "KNOWN",
-          "source": "10-Q Financial Highlights section",
-          "source_type": "10-Q",
+          "source": "Financial Highlights section",
+          "source_type": "10Q_1",
           "evidence": "Total net sales increased 11% to $158.9 billion in Q3 2024"
         },
         {
@@ -336,6 +342,16 @@ Re-enabled as fallback when Gemini fails. Uses same prompt with 8-K filings incl
 }
 ```
 
+### Filing Identifiers
+
+Each filing in the prompt is labeled with a unique identifier:
+- `TRANSCRIPT_1` - Latest earnings call transcript
+- `10Q_1` - Latest 10-Q quarterly report
+- `10K_1` - Latest 10-K annual report
+- `8K_1`, `8K_2`, `8K_3` - Individual 8-K filings (numbered by order)
+
+The AI uses these identifiers in `source_type` when marking claims as KNOWN. The `filing_lookup` dictionary maps identifiers to metadata (date, title, etc.) for display in the email.
+
 ### Evidence Field
 
 For KNOWN claims, the `evidence` field contains the actual quote or paraphrase from the filing that proves the claim is known. This enables:
@@ -343,10 +359,13 @@ For KNOWN claims, the `evidence` field contains the actual quote or paraphrase f
 - **QA:** Catch over-aggressive KNOWN marking (e.g., vague match shouldn't make specific claim KNOWN)
 - **Transparency:** See exactly what text in the filing supports the classification
 
-**Email Display:**
+**Email Display (with filing identifiers resolved):**
 ```
+❌ KNOWN: CDO appointment announced
+   → "Prologis, Inc. announced the appointment of Damon Austin..." (8-K filed Nov 24, 2025: CDO Appointment)
+
 ❌ KNOWN: AWS growth at ~20%
-   → "AWS segment revenue grew 19% year-over-year" (Transcript, FINANCIAL RESULTS)
+   → "AWS segment revenue grew 19% year-over-year" (Q3 2025 Earnings Call (Oct 15, 2025))
 ```
 
 ## Integration Points

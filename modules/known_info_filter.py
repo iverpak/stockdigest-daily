@@ -138,7 +138,6 @@ KNOWN (filter out) - Information already in the filings OR stale information:
   (e.g., if current filings are Q3, then Q2 data is KNOWN even if not in Q3 filings)
 
 NEW (keep) - Information NOT in the filings AND temporally fresh:
-- Market reaction (stock price movement, trading volume changes)
 - Analyst actions (upgrades, downgrades, price target changes, ratings)
 - Third-party commentary (analyst quotes, industry expert opinions)
 - Events occurring AFTER the latest filing date
@@ -176,6 +175,30 @@ that validates or quantifies a known risk is STILL NEW. It carries different epi
 the company's own disclosure of the risk.
 
 ═══════════════════════════════════════════════════════════════════════════════
+RISK FACTOR CLAIMS - ALWAYS NEW
+═══════════════════════════════════════════════════════════════════════════════
+
+Claims describing risks, headwinds, or concerns should NOT be marked KNOWN just because
+the 10-Q or filings mention similar risk categories. SEC filings (especially Item 1A Risk
+Factors) contain comprehensive boilerplate that lists every conceivable risk. Matching
+article content against this boilerplate creates false positives.
+
+Risk-related claims are ALWAYS NEW unless:
+- The EXACT same risk EVENT is described (e.g., "lawsuit filed in Delaware" appears in both)
+- The specific QUANTIFICATION matches (e.g., "$500M exposure" in both)
+
+Generic risk CATEGORIES are NOT matches:
+❌ Filing says "competition risk" ≠ Article says "BofA warns about Marvell competition"
+❌ Filing says "integration risk" ≠ Article says "VMware integration challenges cited by analyst"
+❌ Filing says "customer concentration" ≠ Article says "Morgan Stanley notes Meta deferral risk"
+❌ Filing says "semiconductor cycle exposure" ≠ Article discusses "exposure to semiconductor cycles"
+❌ Filing says "significant debt" ≠ Article says "analysts cite net debt load as concern"
+
+WHY: The filing discloses that risks EXIST (legal requirement). Articles and analysts discuss
+which risks are SALIENT NOW and carry editorial weight. An analyst's risk assessment is news;
+a company's boilerplate disclosure is not.
+
+═══════════════════════════════════════════════════════════════════════════════
 PAIRED CLAIMS (Handled by Sentence-Level Filtering)
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -202,45 +225,60 @@ The key question: "When was this information RELEASED to the public?"
 
 STEP 1: IS THIS CONTINUOUSLY AVAILABLE MARKET DATA?
 
-These are stale when referencing historical values (>2 weeks old) because
-they're observable at any time - there's no "release" moment:
+These are ALWAYS stale because they're observable at any time from public data
+providers - there's no "release" moment. Investors can look them up themselves.
 
-A. Derived Financial Metrics (from data providers like Yahoo Finance, Morningstar)
+A. Stock Prices & Trading Data (ALWAYS stale)
+   - Current stock price, premarket/afterhours prices
+   - Daily/weekly price movements (up X%, down Y%)
+   - Trading volume
+   - 52-week highs/lows
+   - Intraday moves
+   → Evidence: "Stock price data - continuously observable"
+
+B. Valuation Ratios & Financial Multiples (ALWAYS stale)
+   - P/E ratio (current or forward)
+   - P/B, P/S, EV/EBITDA, EV/Revenue
+   - PEG ratio, dividend yield
+   - Enterprise value, market cap
+   → Evidence: "Valuation multiple - continuously observable"
+
+C. Derived Financial Metrics (ALWAYS stale)
    - TTM (trailing twelve month) calculations
    - Multi-year growth rates (5-year, 3-year, 10-year)
    - Industry averages and benchmarks
-   - Valuation ratios (P/E, P/B, EV/EBITDA)
    - Historical return comparisons (YTD, 1-year, 5-year returns)
+   - ROE, ROA, ROIC calculations
+   → Evidence: "Derived metric - continuously observable"
 
-B. Commodity Prices
+D. Commodity Prices (stale when >2 weeks old)
    - Oil (WTI, Brent), natural gas, coal
    - Metals (gold, silver, copper, aluminum)
    - Agricultural (corn, wheat, soybeans)
    - Spreads (crack spreads, refining margins, frac spreads)
 
-C. Interest Rates & Fixed Income
+E. Interest Rates & Fixed Income (stale when >2 weeks old)
    - Fed funds rate, SOFR, LIBOR
    - Treasury yields (2Y, 10Y, 30Y)
    - Credit spreads, corporate bond yields
    - Mortgage rates
 
-D. Currency/FX Rates
+F. Currency/FX Rates (stale when >2 weeks old)
    - Any historical exchange rate (USD/EUR, USD/JPY, etc.)
 
-E. Market Indices & Levels
+G. Market Indices & Levels (stale when >2 weeks old)
    - Historical index values (S&P 500, NASDAQ, Dow, sector ETFs)
    - VIX levels, market breadth metrics
 
-F. Economic Data (when recapping old releases)
+H. Economic Data (stale when recapping old releases)
    - GDP, unemployment, CPI from prior periods being summarized
    - PMI, housing data, consumer confidence from months ago
 
-→ If historical (>2 weeks old) → Mark as KNOWN
-→ Evidence: "[Type] from [period] - continuously available market data"
+→ Categories A, B, C: ALWAYS mark as KNOWN (no timing exception)
+→ Categories D-H: Mark as KNOWN if >2 weeks old
+→ Evidence: "[Type] - continuously available market data"
 
-EXCEPTION - When market data IS new:
-- Current/real-time values tied to today's analysis → NEW
-- Significant moves (>5%) tied to a catalyst within 2 weeks → NEW
+EXCEPTION - When market data IS new (applies to D-H only, NOT A-B-C):
 - Forward-looking forecasts/futures → NEW
 
 STEP 2: FOR DISCRETE RELEASES, WHEN WAS IT RELEASED?
@@ -257,14 +295,14 @@ NEVER mark as stale (regardless of when announced):
 
 These describe the present or future - they cannot be "stale" because they're still unfolding.
 
-CAN be stale (after 4 weeks):
+CAN be stale (after 1 week):
 - Historical results: Q3 revenue, past EPS, prior quarter margins
 - Past events: announcements, completed transactions, historical price moves
 - Backward-looking comparisons: beat/miss vs guidance (announced with results)
 
 For stale-eligible claims, compare release date to CURRENT DATE:
-- Released ≤4 weeks ago → NEW
-- Released >4 weeks ago → KNOWN (stale)
+- Released ≤1 week ago → NEW
+- Released >1 week ago → KNOWN (stale)
 
 IMPORTANT: The COMPLETE earnings announcement includes actual results AND the beat/miss
 comparison. "Beat guidance" is announced WITH the results, so it shares the same release date.
@@ -275,21 +313,46 @@ comparison. "Beat guidance" is announced WITH the results, so it shares the same
 STALENESS EXAMPLES
 ═══════════════════════════════════════════════════════════════════════════════
 
-DERIVED METRICS (always stale):
+STOCK PRICES & TRADING DATA (ALWAYS stale - Category A):
 
-✗ "ROE of 26% for TTM to August 2025" (article from Dec 2025)
-  → KNOWN | Evidence: "Derived TTM metric - continuously available"
+✗ "Shares were up 0.79% at $389.12 in premarket trading"
+  → KNOWN | Evidence: "Stock price data - continuously observable"
 
-✗ "Net income growth of 22% over five years"
-  → KNOWN | Evidence: "5-year derived metric - continuously available"
+✗ "Stock closed down 3.17% at $390.18 on Monday"
+  → KNOWN | Evidence: "Stock price data - continuously observable"
 
-✗ "10% industry average ROE"
-  → KNOWN | Evidence: "Industry benchmark - static reference data"
+✗ "Stock approaching a 52-week high of $403.00"
+  → KNOWN | Evidence: "Stock price data - continuously observable"
+
+✗ "Stock has gained 67% year-to-date"
+  → KNOWN | Evidence: "Stock price data - continuously observable"
+
+✗ "Stock is up 115% over the past year"
+  → KNOWN | Evidence: "Stock price data - continuously observable"
+
+VALUATION RATIOS & MULTIPLES (ALWAYS stale - Category B):
 
 ✗ "P/E ratio of 34.5x per Yahoo Finance"
-  → KNOWN | Evidence: "Valuation ratio - continuously available"
+  → KNOWN | Evidence: "Valuation multiple - continuously observable"
 
-MARKET DATA (stale when old):
+✗ "Trading at 12x forward EV/EBITDA"
+  → KNOWN | Evidence: "Valuation multiple - continuously observable"
+
+✗ "Market cap of $180 billion"
+  → KNOWN | Evidence: "Valuation multiple - continuously observable"
+
+DERIVED METRICS (ALWAYS stale - Category C):
+
+✗ "ROE of 26% for TTM to August 2025"
+  → KNOWN | Evidence: "Derived metric - continuously observable"
+
+✗ "Net income growth of 22% over five years"
+  → KNOWN | Evidence: "Derived metric - continuously observable"
+
+✗ "10% industry average ROE"
+  → KNOWN | Evidence: "Derived metric - continuously observable"
+
+OTHER MARKET DATA (stale when >2 weeks old - Categories D-H):
 
 ✗ "Crack spreads averaged $15/bbl in Q2"
   → KNOWN | Evidence: "Q2 commodity spread - 6 months stale"
@@ -300,34 +363,25 @@ MARKET DATA (stale when old):
 ✗ "Oil averaged $78 last quarter"
   → KNOWN | Evidence: "Prior quarter oil price - continuously available"
 
-✗ "USD/EUR was 1.08 in August"
-  → KNOWN | Evidence: "August FX rate - 4 months stale"
-
-✓ "Crack spreads collapsed to $8/bbl this week, pressuring margins"
-  → NEW (current market data tied to analysis)
-
-✓ "10Y Treasury surged 30bps today on inflation data"
-  → NEW (significant recent move with catalyst)
-
 ✓ "Oil futures suggest $90 by Q1 2026"
   → NEW (forward-looking)
 
-DISCRETE RELEASES (stale after 4 weeks - BACKWARD-LOOKING ONLY):
+DISCRETE RELEASES (stale after 1 week - BACKWARD-LOOKING ONLY):
 
 ✗ "Q3 EBITDA of $10.7B" (Q3 earnings released Sep 4, now Dec 1)
   → KNOWN | Evidence: "Released Sep 4, 2025 - 12 weeks stale"
 
-✗ "Company announced $2B buyback" (announced 2 months ago)
-  → KNOWN | Evidence: "Released Oct 1, 2025 - 8 weeks stale"
+✗ "Company announced $2B buyback" (announced 2 weeks ago)
+  → KNOWN | Evidence: "Released Nov 18, 2025 - 2 weeks stale"
 
 ✗ "Revenue significantly beat guidance" (Q3 earnings released Oct 30, now Dec 1)
   → KNOWN | Evidence: "Guidance beat announced with Q3 results Oct 30 - 5 weeks stale"
 
 ✓ "Q4 revenue of $15.2B" (Q4 earnings released yesterday)
-  → NEW (discrete release <4 weeks old)
+  → NEW (discrete release <1 week old)
 
-✓ "Analyst upgraded to Buy with $200 target" (issued 2 weeks ago)
-  → NEW (discrete release <4 weeks old)
+✓ "Analyst upgraded to Buy with $200 target" (issued 3 days ago)
+  → NEW (discrete release <1 week old)
 
 FORWARD-LOOKING (NEVER stale, regardless of announcement date):
 
@@ -921,6 +975,8 @@ def _build_filter_user_content(ticker: str, phase1_json: Dict, filings: Dict, ei
     """
     filing_lookup = {}  # Maps identifier -> metadata for post-processing
 
+    from datetime import date as date_type, timedelta
+
     content = f"TICKER: {ticker}\n"
     content += f"CURRENT DATE: {datetime.now().strftime('%B %d, %Y')}\n\n"
     content += "=" * 80 + "\n"
@@ -933,51 +989,66 @@ def _build_filter_user_content(ticker: str, phase1_json: Dict, filings: Dict, ei
     content += "FILING SOURCES (check claims against these):\n"
     content += "=" * 80 + "\n\n"
 
-    # Add Transcript if available
+    # T-7 buffer: Only include filings older than 7 days
+    # This gives articles time to react before we mark their content as "known"
+    today = date_type.today()
+    t7_cutoff = today - timedelta(days=7)
+
+    # Add Transcript if available AND older than T-7
     if 'transcript' in filings:
         t = filings['transcript']
         quarter = t.get('fiscal_quarter', 'Q?')
         year = t.get('fiscal_year', '????')
         company = t.get('company_name') or ticker
-        date = t.get('date')
-        date_str = date.strftime('%b %d, %Y') if date else 'Unknown Date'
+        filing_date = t.get('date')
+        date_str = filing_date.strftime('%b %d, %Y') if filing_date else 'Unknown Date'
 
-        filing_id = "TRANSCRIPT_1"
-        filing_lookup[filing_id] = {
-            'type': 'Transcript',
-            'date': date_str,
-            'quarter': quarter,
-            'year': year,
-            'display': f"{quarter} {year} Earnings Call ({date_str})"
-        }
+        # Check T-7 buffer
+        filing_date_only = filing_date.date() if hasattr(filing_date, 'date') else filing_date
+        if filing_date_only and filing_date_only > t7_cutoff:
+            LOG.info(f"[{ticker}] Phase 1.5: Transcript excluded (T-7 buffer - filed {date_str})")
+        else:
+            filing_id = "TRANSCRIPT_1"
+            filing_lookup[filing_id] = {
+                'type': 'Transcript',
+                'date': date_str,
+                'quarter': quarter,
+                'year': year,
+                'display': f"{quarter} {year} Earnings Call ({date_str})"
+            }
 
-        content += f"=== {filing_id}: LATEST EARNINGS CALL (TRANSCRIPT) ===\n"
-        content += f"[{ticker} ({company}) {quarter} {year} Earnings Call ({date_str})]\n"
-        content += f"Use source_type=\"{filing_id}\" when citing this filing.\n\n"
-        content += f"{t.get('text', '')}\n\n\n"
+            content += f"=== {filing_id}: LATEST EARNINGS CALL (TRANSCRIPT) ===\n"
+            content += f"[{ticker} ({company}) {quarter} {year} Earnings Call ({date_str})]\n"
+            content += f"Use source_type=\"{filing_id}\" when citing this filing.\n\n"
+            content += f"{t.get('text', '')}\n\n\n"
 
-    # Add 10-Q if available
+    # Add 10-Q if available AND older than T-7
     if '10q' in filings:
         q = filings['10q']
         quarter = q.get('fiscal_quarter', 'Q?')
         year = q.get('fiscal_year', '????')
         company = q.get('company_name') or ticker
-        date = q.get('filing_date')
-        date_str = date.strftime('%b %d, %Y') if date else 'Unknown Date'
+        filing_date = q.get('filing_date')
+        date_str = filing_date.strftime('%b %d, %Y') if filing_date else 'Unknown Date'
 
-        filing_id = "10Q_1"
-        filing_lookup[filing_id] = {
-            'type': '10-Q',
-            'date': date_str,
-            'quarter': quarter,
-            'year': year,
-            'display': f"{quarter} {year} 10-Q (filed {date_str})"
-        }
+        # Check T-7 buffer
+        filing_date_only = filing_date.date() if hasattr(filing_date, 'date') else filing_date
+        if filing_date_only and filing_date_only > t7_cutoff:
+            LOG.info(f"[{ticker}] Phase 1.5: 10-Q excluded (T-7 buffer - filed {date_str})")
+        else:
+            filing_id = "10Q_1"
+            filing_lookup[filing_id] = {
+                'type': '10-Q',
+                'date': date_str,
+                'quarter': quarter,
+                'year': year,
+                'display': f"{quarter} {year} 10-Q (filed {date_str})"
+            }
 
-        content += f"=== {filing_id}: LATEST QUARTERLY REPORT (10-Q) ===\n"
-        content += f"[{ticker} ({company}) {quarter} {year} 10-Q Filing, Filed: {date_str}]\n"
-        content += f"Use source_type=\"{filing_id}\" when citing this filing.\n\n"
-        content += f"{q.get('text', '')}\n\n\n"
+            content += f"=== {filing_id}: LATEST QUARTERLY REPORT (10-Q) ===\n"
+            content += f"[{ticker} ({company}) {quarter} {year} 10-Q Filing, Filed: {date_str}]\n"
+            content += f"Use source_type=\"{filing_id}\" when citing this filing.\n\n"
+            content += f"{q.get('text', '')}\n\n\n"
 
     # NOTE: 10-K intentionally excluded from knowledge base
     # 10-K causes false positive matches (generic risk categories matching specific news events)

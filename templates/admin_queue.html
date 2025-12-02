@@ -1140,7 +1140,7 @@
         }
 
         async function regenerateEmail(ticker) {
-            if (!confirm(`♻️ Regenerate User Report for ${ticker}?\n\nThis will:\n• Re-generate Phase 1+2+3 executive summary\n• Update user-facing email in queue\n• Send QA + preview emails to your inbox\n\nEstimated time: 30-60 seconds\n\nContinue?`)) return;
+            if (!confirm(`♻️ Regenerate User Report for ${ticker}?\n\nThis will:\n• Re-generate Phase 1+2+3 executive summary\n• Update user-facing email in queue\n• Send QA + preview emails to your inbox\n\nEstimated time: 2-4 minutes\n\nContinue?`)) return;
 
             try {
                 // Show loading state
@@ -1149,7 +1149,8 @@
                 btn.innerHTML = '⏳ Processing...';
                 btn.disabled = true;
 
-                const response = await fetch('/api/regenerate-email', {
+                // Submit job to worker queue (runs in background, allows parallel execution)
+                const response = await fetch('/api/regenerate-email-job', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({token, ticker})
@@ -1157,12 +1158,12 @@
 
                 const result = await response.json();
 
-                // Restore button
+                // Restore button immediately - job runs in background
                 btn.innerHTML = originalText;
                 btn.disabled = false;
 
                 if (result.status === 'success') {
-                    alert(`✅ User report regenerated for ${ticker}\n\n• ${result.article_count} articles analyzed\n• Preview emails sent to your inbox\n• Email queue updated\n\nRefresh the page to see updated content.`);
+                    alert(`✅ Regeneration job submitted for ${ticker}\n\nProcessing in background (2-4 min).\nQA + preview emails will be sent to your inbox when complete.`);
                     fetchQueueStatus();
                 } else {
                     alert('Error: ' + result.message);

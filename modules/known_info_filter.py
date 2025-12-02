@@ -1,8 +1,14 @@
 """
 Known Information Filter (Phase 1.5)
 
-Filters Phase 1 bullets by checking claims against filing knowledge base (10-K, 10-Q, Transcript).
-Identifies which claims are KNOWN (already in filings) vs NEW (not in filings).
+Filters Phase 1 bullets by checking claims against filing knowledge base (Transcript, 10-Q, 8-K).
+Identifies which claims are KNOWN (already in filings or stale) vs NEW (fresh information).
+
+This is a STALENESS FILTER - removes content that provides zero incremental value over
+what an investor learned from recent filings. NOT a comprehensive fact-checker.
+
+Knowledge Base: Transcript + 10-Q + 8-Ks (10-K intentionally excluded - causes false matches)
+Filtering: Sentence-level (keep/remove whole sentences, no surgical word-level editing)
 
 STATUS: TEST MODE - Runs in parallel with Phase 2, emails findings only.
         Does NOT modify the production pipeline.
@@ -25,9 +31,55 @@ LOG = logging.getLogger(__name__)
 # PROMPT
 # =============================================================================
 
-KNOWN_INFO_FILTER_PROMPT = """You are a research analyst filtering a news summary against the company's official SEC filings.
+KNOWN_INFO_FILTER_PROMPT = """You are a research analyst filtering a news summary for an institutional investor who has ALREADY read the latest earnings call, 10-Q, and recent 8-K filings.
 
-Your task: For each bullet/paragraph, decompose into atomic claims and check each against the filings provided. Output filtered content containing ONLY genuinely NEW and material information.
+═══════════════════════════════════════════════════════════════════════════════
+GUIDING PRINCIPLE
+═══════════════════════════════════════════════════════════════════════════════
+
+Your goal is NOT "remove anything that appears in filings."
+Your goal IS "remove content that provides zero incremental value over what the investor learned from recent filings (earnings call, 10-Q, and any 8-Ks since then)."
+
+This is a STALENESS FILTER, not a comprehensive fact-checker.
+
+PRIMARY TARGETS (remove these):
+- Obvious recaps of prior earnings (Q3 results rehashed 8 weeks later)
+- Articles rehashing what management said on the call without new developments
+- Stale market data anyone can look up (TTM metrics, historical prices, P/E ratios)
+- Prior quarter data being presented as if it's news
+
+PRESERVE (even if mentioned in filings):
+- Connective context that makes NEW claims comprehensible
+- Ongoing developments (situation still evolving, new data points)
+- Causal explanations (why something matters to the company)
+- Known themes when they frame genuinely NEW data
+
+The test: "If an investor read the recent filings, would this sentence tell them something they don't already know?"
+
+If YES → KEEP (even if some context overlaps with filings)
+If NO → REMOVE (pure rehash, no incremental value)
+
+═══════════════════════════════════════════════════════════════════════════════
+SENTENCE-LEVEL FILTERING
+═══════════════════════════════════════════════════════════════════════════════
+
+Filtering operates at the SENTENCE level, not the word level:
+
+1. Parse each bullet/paragraph into individual sentences
+2. For each sentence, extract and classify claims (KNOWN vs NEW)
+3. SENTENCE VERDICT:
+   - If sentence contains ANY material NEW claim → KEEP entire sentence
+   - If sentence contains ONLY KNOWN/stale claims → REMOVE sentence
+4. BULLET/PARAGRAPH VERDICT:
+   - Concatenate all KEEP sentences to form filtered_content
+   - If zero sentences remain → action = REMOVE
+   - If any sentences remain → action = KEEP
+
+This approach:
+- Preserves context (known facts sharing a sentence with new facts stay together)
+- Avoids surgical editing failures (no word-level rewriting)
+- Maintains coherence (sentences are complete grammatical units)
+- Keeps paired claims together (comparisons stay intact if any part is new)
 
 ═══════════════════════════════════════════════════════════════════════════════
 WHAT IS "KNOWN" vs "NEW"?
@@ -38,8 +90,6 @@ KNOWN (filter out) - Information already in the filings OR stale information:
 - Events explicitly stated in filings (announced X, reported Y, launched Z)
 - Management quotes from transcripts
 - Guidance figures from earnings calls
-- Risk factors already disclosed in 10-K/10-Q
-- Business model descriptions from filings
 - Historical comparisons already discussed (YoY, QoQ changes mentioned in filings)
 - Material events disclosed in 8-K filings (mergers, acquisitions, executive changes, restructuring)
 - PRIOR QUARTER DATA: Financial metrics from quarters before the current filing period
@@ -84,27 +134,20 @@ that validates or quantifies a known risk is STILL NEW. It carries different epi
 the company's own disclosure of the risk.
 
 ═══════════════════════════════════════════════════════════════════════════════
-CRITICAL: PAIRED CLAIMS RULE
+PAIRED CLAIMS (Handled by Sentence-Level Filtering)
 ═══════════════════════════════════════════════════════════════════════════════
 
-Some claims only make sense as pairs - particularly COMPARISONS. When a bullet
-compares the company to competitors (e.g., "AWS at 20% vs Azure at 30%"), you
-MUST treat the comparison as a unit:
-
-- If the company's metric is KNOWN but competitor's metric is NEW, keep BOTH
-- If removing one side would make the comparison meaningless, keep BOTH
-- The comparison itself may be newsworthy even if individual numbers are known
+Some claims only make sense as pairs - particularly COMPARISONS. Sentence-level
+filtering handles this naturally:
 
 Example:
 "AWS growth of 20% lags Azure and Google Cloud at 30%"
 - "AWS at 20%" = KNOWN (in transcript)
 - "Azure/Google at 30%" = NEW (not in Amazon's filings)
-- CORRECT: Keep BOTH because the comparison is the insight
-- WRONG: Remove 20%, keep 30% (leaves reader without context)
+- Sentence has NEW claim → KEEP entire sentence (comparison stays intact)
 
-When rewriting comparisons, either:
-1. Keep the full comparison (if competitor data is NEW and valuable)
-2. Remove the entire comparison (if it's just restating known competitive position)
+Since we filter at sentence level, paired claims in the same sentence stay together.
+No need to surgically separate comparisons - the whole sentence is kept or removed.
 
 ═══════════════════════════════════════════════════════════════════════════════
 STALENESS CHECK (Independent of Filings)
@@ -160,26 +203,29 @@ EXCEPTION - When market data IS new:
 
 STEP 2: FOR DISCRETE RELEASES, WHEN WAS IT RELEASED?
 
-For company-specific information that WAS released at a specific time:
-- Quarterly earnings → Earnings announcement date
-- Annual metrics (from 10-K) → 10-K filing date
-- Guidance → Announcement date
-- M&A, partnerships, contracts → Press release date
-- Analyst ratings → Publication date of the rating
+CRITICAL: Staleness ONLY applies to BACKWARD-LOOKING claims about PAST events.
+It does NOT apply to forward-looking or present-tense information.
 
-IMPORTANT: The COMPLETE earnings announcement includes ALL of the following:
-- Actual results (revenue, EPS, margins)
-- Comparison to guidance (beat, miss, in-line)
-- Comparison to estimates (beat, miss, in-line)
-- Prior guidance that was being compared against
-- Surprise magnitude ("beat by 5%", "missed by $0.02")
+NEVER mark as stale (regardless of when announced):
+- Future events: expected close dates, scheduled conferences, planned actions
+- Forward guidance: revenue targets, margin expectations, growth projections
+- Regulatory timelines: expected approvals, review periods, compliance deadlines
+- Current conditions: ongoing macro environment, present-tense market analysis
+- Real-time data: current probabilities, today's expectations, live market sentiment
 
-These are ALL announced simultaneously at earnings, so they share the SAME release date.
-"Beat guidance" is NOT new information discovered later - it was announced WITH the results.
+These describe the present or future - they cannot be "stale" because they're still unfolding.
 
-Compare release date to CURRENT DATE:
-- Released ≤4 weeks ago → NEW (recent, investors may not have digested)
-- Released >4 weeks ago → KNOWN (stale - investors have had time to see this)
+CAN be stale (after 4 weeks):
+- Historical results: Q3 revenue, past EPS, prior quarter margins
+- Past events: announcements, completed transactions, historical price moves
+- Backward-looking comparisons: beat/miss vs guidance (announced with results)
+
+For stale-eligible claims, compare release date to CURRENT DATE:
+- Released ≤4 weeks ago → NEW
+- Released >4 weeks ago → KNOWN (stale)
+
+IMPORTANT: The COMPLETE earnings announcement includes actual results AND the beat/miss
+comparison. "Beat guidance" is announced WITH the results, so it shares the same release date.
 
 → Evidence for stale discrete releases: "Released [date], [X] weeks stale"
 
@@ -224,7 +270,7 @@ MARKET DATA (stale when old):
 ✓ "Oil futures suggest $90 by Q1 2026"
   → NEW (forward-looking)
 
-DISCRETE RELEASES (stale after 4 weeks):
+DISCRETE RELEASES (stale after 4 weeks - BACKWARD-LOOKING ONLY):
 
 ✗ "Q3 EBITDA of $10.7B" (Q3 earnings released Sep 4, now Dec 1)
   → KNOWN | Evidence: "Released Sep 4, 2025 - 12 weeks stale"
@@ -235,24 +281,38 @@ DISCRETE RELEASES (stale after 4 weeks):
 ✗ "Revenue significantly beat guidance" (Q3 earnings released Oct 30, now Dec 1)
   → KNOWN | Evidence: "Guidance beat announced with Q3 results Oct 30 - 5 weeks stale"
 
-✗ "Surpassed expectations of $47.5-50.5B" (Q3 earnings released Oct 30, now Dec 1)
-  → KNOWN | Evidence: "Surprise vs guidance announced with Q3 results Oct 30 - 5 weeks stale"
-
 ✓ "Q4 revenue of $15.2B" (Q4 earnings released yesterday)
   → NEW (discrete release <4 weeks old)
-
-✓ "Beat Q4 estimates by 8%" (Q4 earnings released yesterday)
-  → NEW (guidance beat is part of the earnings release, which is <4 weeks old)
 
 ✓ "Analyst upgraded to Buy with $200 target" (issued 2 weeks ago)
   → NEW (discrete release <4 weeks old)
 
-✓ "Stock fell 8% following guidance cut" (guidance cut last week)
-  → NEW (market reaction to recent event)
+FORWARD-LOOKING (NEVER stale, regardless of announcement date):
+
+✓ "Deal expected to close H2 2026" (merger announced 6 weeks ago)
+  → NEW (future event - hasn't happened yet)
+
+✓ "Conference scheduled for December 10" (announced 5 weeks ago)
+  → NEW (upcoming event - hasn't happened yet)
+
+✓ "Company expects 15% revenue growth in FY2026" (guidance given 8 weeks ago)
+  → NEW (forward guidance - still the current projection)
+
+✓ "FDA approval expected by Q2 2026" (announced 3 months ago)
+  → NEW (regulatory timeline - still pending)
+
+✓ "Fed expected to cut rates at December meeting, 85% probability"
+  → NEW (current market expectation about future event)
+
+✓ "Macro environment is pressuring deposit yields"
+  → NEW (present-tense analysis of current conditions)
+
+✓ "Management committed to not closing any branches"
+  → NEW (ongoing commitment about future actions)
 
 IMPORTANT: A claim can be KNOWN because:
 1. It appears in our filings (evidence = quote from filing), OR
-2. It's stale (evidence = staleness reason)
+2. It's stale (evidence = staleness reason) - ONLY for backward-looking claims
 
 Both result in status: "KNOWN" - the evidence field explains why.
 
@@ -284,10 +344,11 @@ VERIFICATION PROCESS
 For each claim:
 1. Search Transcript for exact or paraphrased match
 2. Search 10-Q for exact or paraphrased match
-3. Search 10-K for exact or paraphrased match
-4. Search 8-K filings for exact or paraphrased match (material events since last earnings)
-5. If found in ANY filing → status: "KNOWN"
-6. If NOT found in any filing → status: "NEW"
+3. Search 8-K filings for exact or paraphrased match (material events since last earnings)
+4. If found in ANY filing → status: "KNOWN"
+5. If NOT found in any filing → check STALENESS rules
+6. If stale → status: "KNOWN" (with staleness evidence)
+7. If fresh and not in filings → status: "NEW"
 
 Matching rules:
 - Numbers: Exact match required (allow rounding: $51.2B = $51,200M = $51.2 billion)
@@ -305,99 +366,79 @@ IMPORTANT - What counts as KNOWN:
 FILING IDENTIFIERS (CRITICAL)
 ═══════════════════════════════════════════════════════════════════════════════
 
-Each filing in the input is labeled with a unique identifier like:
-- TRANSCRIPT_1, 10Q_1, 10K_1 (for standard filings)
+Each filing in the input is labeled with a unique identifier:
+- TRANSCRIPT_1, 10Q_1 (for standard filings)
 - 8K_1, 8K_2, 8K_3 (for multiple 8-K filings)
 
-When a claim is KNOWN, you MUST use the EXACT filing identifier in source_type.
+When a claim is KNOWN (from filings), you MUST use the EXACT filing identifier in source_type.
 
 Examples:
 - Claim found in transcript → source_type: "TRANSCRIPT_1"
 - Claim found in 10-Q → source_type: "10Q_1"
-- Claim found in 10-K → source_type: "10K_1"
 - Claim found in first 8-K → source_type: "8K_1"
 - Claim found in second 8-K → source_type: "8K_2"
+- Claim is stale (not in filings) → source_type: null, evidence: "[staleness reason]"
 
 DO NOT use generic labels like "8-K" or "Transcript" - use the specific identifier.
 This allows us to display exactly which filing (with date and title) contained the claim.
 
 ═══════════════════════════════════════════════════════════════════════════════
-ACTION LOGIC
+ACTION LOGIC (SENTENCE-LEVEL)
 ═══════════════════════════════════════════════════════════════════════════════
 
-Based on claim analysis, assign ONE action per bullet/paragraph:
+For each bullet/paragraph:
 
-KEEP - All claims are NEW
-→ Pass original content unchanged
-→ rewritten_content = original_content
+1. Parse into sentences
+2. For each sentence:
+   - Extract claims
+   - Classify each claim as KNOWN or NEW
+   - If ANY claim in the sentence is NEW and material → sentence_action = KEEP
+   - If ALL claims in the sentence are KNOWN or stale → sentence_action = REMOVE
 
-REWRITE - Mix of KNOWN and NEW claims
-→ Rewrite to include ONLY the NEW claims
-→ Maintain narrative coherence (not just a list)
-→ Add minimal context if needed for NEW claims to make sense
-→ Preserve attribution if relevant ("per analyst", "per Reuters")
+3. Concatenate all KEEP sentences to form filtered_content
 
-REMOVE - All claims are KNOWN
-→ Nothing new to report
-→ rewritten_content = "" (empty string)
+4. Determine bullet/paragraph action:
+   - If filtered_content is empty (all sentences removed) → action = REMOVE
+   - If filtered_content has content → action = KEEP
+   - filtered_content = the concatenated KEEP sentences
+
+There is NO "REWRITE" action. We do not surgically edit within sentences.
+Either a sentence is kept whole, or removed whole.
 
 ═══════════════════════════════════════════════════════════════════════════════
-MATERIALITY TEST FOR REWRITE vs REMOVE
+MATERIALITY TEST (For Sentence Verdicts)
 ═══════════════════════════════════════════════════════════════════════════════
 
-Before marking as REWRITE, apply this test:
+A NEW claim is MATERIAL (triggers KEEP for the sentence) if it provides information
+an investor would update beliefs from or act on.
 
-"Would a reader gain ACTIONABLE INSIGHT from ONLY the NEW claims?"
+MATERIAL NEW claims (keep the sentence):
+- Stock price movements
+- Analyst actions (upgrades, downgrades, price targets, ratings)
+- Competitor developments (acquisitions, partnerships, metrics)
+- Events occurring after the latest filing date
+- External quantitative data not from the company
+- Third-party commentary or expert opinions
 
-Mark as REMOVE (not REWRITE) if the NEW claims are merely:
-- Dates or timing details on otherwise KNOWN events
-- Minor wording variations of KNOWN information
-- Context that only supports KNOWN claims
-- Less than 20% of the original content's substance
+NOT MATERIAL (do not save the sentence by themselves):
+- Dates alone ("on Tuesday", "in November")
+- Source attributions alone ("per Reuters", "according to Bloomberg")
+- Rewordings of KNOWN facts with no new substance
+- Generic descriptors ("the tech giant", "the leading utility")
 
-Example - should be REMOVE, not REWRITE:
-Original: "Amazon faces regulatory risks including potential EU investigations in November 2025
-that could classify AWS as a gatekeeper under the DMA, leading to fines."
-KNOWN: regulatory risks, EU investigations, gatekeeper classification, DMA, fines (all in 10-K)
-NEW: "November 2025" (just a date)
-→ Action: REMOVE (the date alone provides no actionable insight)
+If a sentence's ONLY new content is non-material, treat the sentence as REMOVE.
 
-Example - should be REWRITE:
-Original: "AWS growth of 20% lags Azure at 33% and Google Cloud at 35%, per analyst reports."
+Example - sentence should be REMOVED:
+"Amazon faces regulatory risks including potential EU investigations in November 2025."
+KNOWN: regulatory risks, EU investigations (from filings)
+NEW: "November 2025" (just a date - not material)
+→ Sentence verdict: REMOVE (the date alone provides no actionable insight)
+
+Example - sentence should be KEPT:
+"AWS growth of 20% lags Azure at 33% and Google Cloud at 35%, per analyst reports."
 KNOWN: AWS at 20% (in transcript)
-NEW: Azure at 33%, Google Cloud at 35%, analyst commentary
-→ Action: REWRITE (competitor metrics ARE actionable insight)
-→ Rewritten: "AWS growth lags Azure at 33% and Google Cloud at 35%, per analyst reports."
-   (Keep AWS context for comparison to make sense, but note the competitor data is the news)
-
-═══════════════════════════════════════════════════════════════════════════════
-REWRITE GUIDELINES
-═══════════════════════════════════════════════════════════════════════════════
-
-When action is REWRITE:
-
-1. REMOVE all KNOWN claims completely - do not include any information from filings
-2. PRESERVE all NEW claims with their full context and specific details
-3. MAINTAIN narrative coherence - write flowing prose, not a choppy list
-4. ADD minimal bridging context if needed for the NEW claim to make sense
-5. PRESERVE attribution for NEW claims ("per analyst", "according to Reuters")
-6. For PAIRED CLAIMS (comparisons): Keep both sides if removing one makes it meaningless
-7. Do NOT preserve CONCLUSIONS derived from KNOWN data
-   - WRONG: "AWS growth lags competitors" (if "lags" conclusion is from known data)
-   - RIGHT: Remove the lagging narrative entirely, or keep with NEW competitor numbers
-
-CRITICAL - Verify your rewrite:
-- Does the rewritten text contain ANY information from the filings? If yes, remove it.
-- Does the rewritten text preserve conclusions/framing from KNOWN claims? If yes, rewrite.
-- Would the rewritten text make sense to someone who hasn't read the filings? If no, add context.
-
-Example:
-Original: "Meta reported Q3 revenue of $51.2B (+26% YoY), beating guidance, while stock pulled back 25% on AI spending concerns."
-KNOWN: Q3 revenue $51.2B, +26% YoY, beat guidance (all in transcript/10-Q)
-NEW: stock pulled back 25%, AI spending concerns
-
-Rewritten: "META shares pulled back 25% amid investor concerns over AI spending levels."
-(Note: removed "in the past month" if that's not in the article, kept only verifiable NEW claims)
+NEW: Azure at 33%, Google Cloud at 35% (competitor metrics - MATERIAL)
+→ Sentence verdict: KEEP entire sentence (competitor data is actionable)
 
 ═══════════════════════════════════════════════════════════════════════════════
 INPUT FORMAT
@@ -405,23 +446,30 @@ INPUT FORMAT
 
 You will receive:
 1. Phase 1 JSON with bullets and paragraphs
-2. Filing sources (Transcript, 10-Q, 10-K, 8-K) - check claims against these
+2. Filing sources (Transcript, 10-Q, 8-K) - check claims against these
    - 8-K filings are material events filed since the last earnings call
 
-BULLET SECTIONS TO FILTER (apply claim analysis):
+BULLET SECTIONS TO FILTER (apply full sentence-level filtering):
 - major_developments
 - financial_performance
 - risk_factors
 - competitive_industry_dynamics
-- key_variables
 
-BULLET SECTIONS TO EXEMPT (pass through unchanged, action=KEEP, no claim analysis):
-- wall_street_sentiment (analyst opinions ARE the news, even when citing known data)
+BULLET SECTIONS TO EXEMPT (analyze for transparency, but ALWAYS keep original):
+- wall_street_sentiment (analyst opinions ARE the news)
 - upcoming_catalysts (forward-looking editorial value)
+- key_variables (monitoring recommendations, not news claims)
 
-For EXEMPT sections: Do NOT analyze claims. Set action="KEEP", claims=[], rewritten_content=original_content.
+For EXEMPT sections:
+- DO perform claim extraction and sentence analysis (for transparency/QA visibility)
+- DO output the sentence-level structure with claims
+- But ALWAYS set action="KEEP" regardless of findings
+- Set filtered_content="" (we'll use original from input)
+- Add "exempt": true to the output
 
-PARAGRAPH SECTIONS TO FILTER (apply claim analysis):
+This allows QA review of what WOULD have been filtered, without actually filtering.
+
+PARAGRAPH SECTIONS TO FILTER (apply full sentence-level filtering):
 - bottom_line
 - upside_scenario
 - downside_scenario
@@ -436,75 +484,100 @@ Return valid JSON with this exact structure:
   "summary": {
     "total_bullets": 15,
     "total_paragraphs": 3,
-    "kept": 3,
-    "rewritten": 8,
-    "removed": 4,
-    "total_claims": 45,
-    "known_claims": 28,
-    "new_claims": 17
+    "kept": 8,
+    "removed": 7,
+    "total_sentences": 45,
+    "kept_sentences": 28,
+    "removed_sentences": 17,
+    "total_claims": 67,
+    "known_claims": 40,
+    "new_claims": 27
   },
   "bullets": [
     {
       "bullet_id": "FIN_001",
       "section": "financial_performance",
-      "claims": [
+      "sentences": [
         {
-          "claim": "Q3 revenue $51.2B",
-          "status": "KNOWN",
-          "source": "Financial Highlights section",
-          "source_type": "10Q_1",
-          "evidence": "Total net sales increased 11% to $158.9 billion in Q3 2024"
+          "text": "Revenue grew 22% to $15.9B in Q3.",
+          "claims": [
+            {
+              "claim": "revenue $15.9B",
+              "status": "KNOWN",
+              "source_type": "TRANSCRIPT_1",
+              "evidence": "Q3 revenue of $15.9 billion"
+            },
+            {
+              "claim": "grew 22%",
+              "status": "KNOWN",
+              "source_type": "TRANSCRIPT_1",
+              "evidence": "revenue increased 22% year-over-year"
+            }
+          ],
+          "has_material_new": false,
+          "sentence_action": "REMOVE"
         },
         {
-          "claim": "stock pulled back 25%",
-          "status": "NEW",
-          "source": null,
-          "source_type": null,
-          "evidence": null
+          "text": "The stock fell 8% on AI spending concerns.",
+          "claims": [
+            {
+              "claim": "stock fell 8%",
+              "status": "NEW",
+              "source_type": null,
+              "evidence": null
+            },
+            {
+              "claim": "AI spending concerns",
+              "status": "NEW",
+              "source_type": null,
+              "evidence": null
+            }
+          ],
+          "has_material_new": true,
+          "sentence_action": "KEEP"
         }
       ],
-      "action": "REWRITE",
-      "rewritten_content": "Rewritten text with only NEW claims"
+      "action": "KEEP",
+      "filtered_content": "The stock fell 8% on AI spending concerns."
     }
   ],
   "paragraphs": [
     {
       "section": "bottom_line",
-      "claims": [
+      "sentences": [
         {
-          "claim": "...",
-          "status": "KNOWN" or "NEW",
-          "source": "filing section" or null,
-          "source_type": "TRANSCRIPT_1" or "10Q_1" or "10K_1" or "8K_1" or null,
-          "evidence": "exact quote or paraphrase from filing" or null
+          "text": "...",
+          "claims": [...],
+          "has_material_new": true or false,
+          "sentence_action": "KEEP" or "REMOVE"
         }
       ],
-      "action": "KEEP" or "REWRITE" or "REMOVE",
-      "rewritten_content": "..."
+      "action": "KEEP" or "REMOVE",
+      "filtered_content": "Concatenated KEEP sentences..."
     }
   ]
 }
 
-NOTE: You do NOT need to include "original_content" - we already have it from the input.
-
 IMPORTANT:
+- Parse each bullet/paragraph into sentences FIRST
+- Include ALL sentences with their claims and verdicts
+- filtered_content = concatenation of all KEEP sentences (space-separated)
+- If all sentences removed → filtered_content = "", action = "REMOVE"
+- If any sentences kept → action = "KEEP"
+- There is NO "REWRITE" action - only KEEP or REMOVE
 - Include ALL bullets from ALL 7 bullet sections
 - Include ALL 3 paragraph sections
-- Every bullet/paragraph must have bullet_id (for bullets) or section (for paragraphs), claims, action, and rewritten_content
-- For KEEP: rewritten_content can be empty string (we'll use original from input)
-- For REMOVE: rewritten_content = "" (empty string)
-- For REWRITE: rewritten_content = new coherent text with only NEW claims
-- For EXEMPT sections (wall_street_sentiment, upcoming_catalysts):
-  Always set action="KEEP", claims=[]
-- List ALL claims individually - NEVER truncate with "and X more claims" or similar
-- NEVER summarize or abbreviate the claims array
+- For EXEMPT sections (wall_street_sentiment, upcoming_catalysts, key_variables):
+  - DO perform sentence/claim analysis (for QA visibility)
+  - Set action="KEEP", filtered_content="" (we use original)
+  - Add "exempt": true to the output
+- List ALL claims individually - NEVER truncate with "and X more claims"
 
 EVIDENCE FIELD (required for KNOWN claims):
-- For KNOWN claims: Include the actual quote or close paraphrase from the filing that proves
-  this claim is known. This should be the specific text that matches the claim.
-- For NEW claims: Set evidence to null
-- Keep evidence concise (1-2 sentences max) but specific enough to verify the match
-- Example: claim="AWS growth ~20%" → evidence="AWS segment revenue grew 19% year-over-year"
+- For KNOWN claims from filings: Include quote/paraphrase + source_type
+- For KNOWN claims from staleness: Set source_type=null, evidence="[staleness reason]"
+- For NEW claims: Set source_type=null, evidence=null
+- Keep evidence concise (1-2 sentences max)
 
 Return ONLY the JSON object, no other text.
 """
@@ -522,10 +595,13 @@ def _build_filter_user_content(ticker: str, phase1_json: Dict, filings: Dict, ei
     that the AI should use in source_type. This allows us to map back to specific
     filing metadata (date, title) in post-processing.
 
+    NOTE: 10-K is intentionally excluded from the knowledge base (causes false matches
+    with generic risk categories).
+
     Args:
         ticker: Stock ticker symbol
         phase1_json: Phase 1 JSON output
-        filings: Dict with keys '10k', '10q', 'transcript'
+        filings: Dict with keys '10q', 'transcript' (10-K excluded)
         eight_k_filings: List of filtered 8-K filings (optional)
 
     Returns:
@@ -592,26 +668,9 @@ def _build_filter_user_content(ticker: str, phase1_json: Dict, filings: Dict, ei
         content += f"Use source_type=\"{filing_id}\" when citing this filing.\n\n"
         content += f"{q.get('text', '')}\n\n\n"
 
-    # Add 10-K if available
-    if '10k' in filings:
-        k = filings['10k']
-        year = k.get('fiscal_year', '????')
-        company = k.get('company_name') or ticker
-        date = k.get('filing_date')
-        date_str = date.strftime('%b %d, %Y') if date else 'Unknown Date'
-
-        filing_id = "10K_1"
-        filing_lookup[filing_id] = {
-            'type': '10-K',
-            'date': date_str,
-            'year': year,
-            'display': f"FY{year} 10-K (filed {date_str})"
-        }
-
-        content += f"=== {filing_id}: COMPANY 10-K PROFILE ===\n"
-        content += f"[{ticker} ({company}) 10-K FILING FOR FISCAL YEAR {year}, Filed: {date_str}]\n"
-        content += f"Use source_type=\"{filing_id}\" when citing this filing.\n\n"
-        content += f"{k.get('text', '')}\n\n\n"
+    # NOTE: 10-K intentionally excluded from knowledge base
+    # 10-K causes false positive matches (generic risk categories matching specific news events)
+    # Knowledge base: Transcript + 10-Q + 8-Ks only
 
     # Add 8-K filings if available (filtered material events since last earnings)
     if eight_k_filings:
@@ -674,12 +733,7 @@ def _get_filings_info(filings: Dict, eight_k_filings: List[Dict] = None) -> Dict
             'date': q.get('filing_date').strftime('%b %d, %Y') if q.get('filing_date') else 'Unknown'
         }
 
-    if '10k' in filings:
-        k = filings['10k']
-        info['10k'] = {
-            'year': k.get('fiscal_year', '????'),
-            'date': k.get('filing_date').strftime('%b %d, %Y') if k.get('filing_date') else 'Unknown'
-        }
+    # NOTE: 10-K intentionally excluded from knowledge base (causes false matches)
 
     # Add 8-K summary
     if eight_k_filings:
@@ -722,8 +776,21 @@ def _merge_original_content(ai_response: Dict, phase1_json: Dict) -> Dict:
       }
     }
 
+    AI Response structure (sentence-level):
+    {
+      "bullets": [
+        {
+          "bullet_id": "...",
+          "sentences": [...],  # Sentence-level analysis
+          "action": "KEEP" or "REMOVE",
+          "filtered_content": "..."  # Concatenated KEEP sentences
+        }
+      ],
+      "paragraphs": [...]
+    }
+
     Args:
-        ai_response: Parsed JSON from AI (bullets, paragraphs with claims/actions)
+        ai_response: Parsed JSON from AI (sentence-level structure)
         phase1_json: Original Phase 1 JSON that was sent to the filter
 
     Returns:
@@ -787,10 +854,13 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
 
     This modifies the Phase 1 JSON to remove KNOWN information before Phase 2 enrichment.
 
-    Actions:
-    - REMOVE: Delete bullet/paragraph entirely from Phase 1 JSON
-    - REWRITE: Replace content with rewritten_content (NEW-only claims)
-    - KEEP: Leave unchanged
+    Sentence-level filtering actions:
+    - REMOVE: Delete bullet entirely OR clear paragraph content
+    - KEEP: Leave unchanged (includes exempt sections where we always use original)
+
+    Note: There is no REWRITE action in sentence-level filtering.
+    KEEP with filtered_content means we use filtered_content (concatenated KEEP sentences).
+    Exempt sections (action=KEEP, exempt=true) use original content unchanged.
 
     Args:
         phase1_json: Original Phase 1 JSON with structure:
@@ -801,10 +871,10 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
                     ...
                 }
             }
-        filter_result: Output from filter_known_information() with:
+        filter_result: Output from filter_known_information() with sentence-level structure:
             {
-                "bullets": [{"bullet_id": "...", "action": "REMOVE|REWRITE|KEEP", "rewritten_content": "..."}],
-                "paragraphs": [{"section": "...", "action": "REMOVE|REWRITE|KEEP", "rewritten_content": "..."}]
+                "bullets": [{"bullet_id": "...", "action": "KEEP|REMOVE", "filtered_content": "...", "exempt": true/false}],
+                "paragraphs": [{"section": "...", "action": "KEEP|REMOVE", "filtered_content": "...", "exempt": true/false}]
             }
 
     Returns:
@@ -823,7 +893,8 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
         if bullet_id:
             bullet_actions[bullet_id] = {
                 'action': bullet.get('action', 'KEEP').upper(),
-                'rewritten_content': bullet.get('rewritten_content', '')
+                'filtered_content': bullet.get('filtered_content', ''),
+                'exempt': bullet.get('exempt', False)
             }
 
     # Build lookup for filter actions by section name (paragraphs)
@@ -833,7 +904,8 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
         if section:
             paragraph_actions[section] = {
                 'action': para.get('action', 'KEEP').upper(),
-                'rewritten_content': para.get('rewritten_content', '')
+                'filtered_content': para.get('filtered_content', ''),
+                'exempt': para.get('exempt', False)
             }
 
     # Process bullet sections
@@ -844,7 +916,7 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
     ]
 
     removed_count = 0
-    rewritten_count = 0
+    filtered_count = 0
 
     for section_name in bullet_section_names:
         section_data = sections.get(section_name, [])
@@ -866,24 +938,29 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
 
             action_info = bullet_actions[bullet_id]
             action = action_info['action']
+            exempt = action_info['exempt']
 
             if action == 'REMOVE':
                 # Skip this bullet entirely
                 removed_count += 1
                 continue
-            elif action == 'REWRITE':
-                # Replace content with rewritten version
-                rewritten_content = action_info['rewritten_content']
-                if rewritten_content:
-                    # Update the content field (could be 'content' or 'content_integrated')
-                    if 'content_integrated' in bullet:
-                        bullet['content_integrated'] = rewritten_content
-                    else:
-                        bullet['content'] = rewritten_content
-                    rewritten_count += 1
-                new_bullets.append(bullet)
+            elif action == 'KEEP':
+                if exempt:
+                    # Exempt section - use original unchanged
+                    new_bullets.append(bullet)
+                else:
+                    # Non-exempt KEEP - use filtered_content if available
+                    filtered_content = action_info['filtered_content']
+                    if filtered_content:
+                        # Update the content field with filtered content
+                        if 'content_integrated' in bullet:
+                            bullet['content_integrated'] = filtered_content
+                        else:
+                            bullet['content'] = filtered_content
+                        filtered_count += 1
+                    new_bullets.append(bullet)
             else:
-                # KEEP - add unchanged
+                # Unknown action - keep unchanged for safety
                 new_bullets.append(bullet)
 
         sections[section_name] = new_bullets
@@ -902,6 +979,7 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
 
         action_info = paragraph_actions[section_name]
         action = action_info['action']
+        exempt = action_info['exempt']
 
         if action == 'REMOVE':
             # For paragraphs, we don't remove entirely - we clear the content
@@ -911,17 +989,20 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
             else:
                 section_data['content'] = ''
             removed_count += 1
-        elif action == 'REWRITE':
-            rewritten_content = action_info['rewritten_content']
-            if rewritten_content:
-                if 'content_integrated' in section_data:
-                    section_data['content_integrated'] = rewritten_content
-                else:
-                    section_data['content'] = rewritten_content
-                rewritten_count += 1
-        # KEEP - no changes needed
+        elif action == 'KEEP':
+            if not exempt:
+                # Non-exempt KEEP - use filtered_content if available
+                filtered_content = action_info['filtered_content']
+                if filtered_content:
+                    if 'content_integrated' in section_data:
+                        section_data['content_integrated'] = filtered_content
+                    else:
+                        section_data['content'] = filtered_content
+                    filtered_count += 1
+            # Exempt section - leave unchanged
+        # Unknown action - leave unchanged
 
-    LOG.info(f"Phase 1.5 apply_filter: {removed_count} removed, {rewritten_count} rewritten")
+    LOG.info(f"Phase 1.5 apply_filter: {removed_count} removed, {filtered_count} filtered")
 
     return result
 
@@ -1515,11 +1596,11 @@ def _resolve_source_type(source_type: str, filing_lookup: Dict) -> str:
 
 def generate_known_info_filter_email(ticker: str, filter_result: Dict) -> str:
     """
-    Generate simple HTML email showing filter results.
+    Generate simple HTML email showing sentence-level filter results.
 
     Args:
         ticker: Stock ticker
-        filter_result: Output from filter_known_information()
+        filter_result: Output from filter_known_information() with sentence-level structure
 
     Returns:
         HTML string for email body
@@ -1535,7 +1616,7 @@ def generate_known_info_filter_email(ticker: str, filter_result: Dict) -> str:
     model = filter_result.get("model_used", "unknown")
     gen_time = filter_result.get("generation_time_ms", 0)
 
-    # Build filing list string
+    # Build filing list string (10-K intentionally excluded)
     filing_parts = []
     if 'transcript' in filings:
         t = filings['transcript']
@@ -1543,9 +1624,7 @@ def generate_known_info_filter_email(ticker: str, filter_result: Dict) -> str:
     if '10q' in filings:
         q = filings['10q']
         filing_parts.append(f"10-Q ({q['quarter']} {q['year']})")
-    if '10k' in filings:
-        k = filings['10k']
-        filing_parts.append(f"10-K (FY{k['year']})")
+    # NOTE: 10-K intentionally excluded from knowledge base
     if '8k' in filings:
         eight_k = filings['8k']
         filing_parts.append(f"8-K ({eight_k['count']} filing{'s' if eight_k['count'] != 1 else ''})")
@@ -1562,54 +1641,66 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
 .header h2 {{ margin: 0 0 10px 0; }}
 .header p {{ margin: 0; opacity: 0.8; font-size: 14px; }}
 .summary {{ background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
-.summary-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 15px; margin-top: 15px; }}
+.summary-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 15px; margin-top: 15px; }}
 .stat {{ text-align: center; padding: 10px; background: #f5f5f5; border-radius: 6px; }}
 .stat-value {{ font-size: 24px; font-weight: bold; color: #1a1a2e; }}
-.stat-label {{ font-size: 12px; color: #666; margin-top: 5px; }}
+.stat-label {{ font-size: 11px; color: #666; margin-top: 5px; }}
 .bullet {{ background: white; padding: 15px; margin: 10px 0; border-radius: 8px; border-left: 4px solid #ddd; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
 .bullet-keep {{ border-left-color: #28a745; }}
-.bullet-rewrite {{ border-left-color: #ffc107; }}
 .bullet-remove {{ border-left-color: #dc3545; }}
+.bullet-exempt {{ border-left-color: #6c757d; }}
 .bullet-header {{ font-weight: bold; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }}
 .action-badge {{ padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }}
 .badge-keep {{ background: #d4edda; color: #155724; }}
-.badge-rewrite {{ background: #fff3cd; color: #856404; }}
 .badge-remove {{ background: #f8d7da; color: #721c24; }}
+.badge-exempt {{ background: #e9ecef; color: #495057; }}
 .content-box {{ background: #f8f9fa; padding: 10px; border-radius: 4px; margin: 10px 0; font-size: 14px; }}
-.claims {{ margin: 10px 0; }}
-.claim {{ padding: 5px 0; font-size: 13px; }}
+.sentence {{ padding: 8px; margin: 5px 0; border-radius: 4px; font-size: 13px; }}
+.sentence-keep {{ background: #d4edda; border-left: 3px solid #28a745; }}
+.sentence-remove {{ background: #f8d7da; border-left: 3px solid #dc3545; }}
+.sentence-text {{ margin-bottom: 5px; }}
+.claims {{ margin: 5px 0 0 15px; }}
+.claim {{ padding: 2px 0; font-size: 12px; }}
 .claim-known {{ color: #dc3545; }}
 .claim-new {{ color: #28a745; }}
-.rewritten {{ background: #e8f5e9; padding: 10px; border-radius: 4px; margin-top: 10px; }}
+.filtered {{ background: #e8f5e9; padding: 10px; border-radius: 4px; margin-top: 10px; }}
 .section-header {{ background: #e9ecef; padding: 10px 15px; margin: 20px 0 10px 0; border-radius: 6px; font-weight: bold; }}
 </style>
 </head>
 <body>
 
 <div class="header">
-<h2>Phase 1.5: Known Info Filter - {ticker}</h2>
+<h2>Phase 1.5: Staleness Filter - {ticker}</h2>
 <p>{filter_result.get('timestamp', '')[:19]} | Model: {model} | {gen_time}ms</p>
-<p>Filings: {filing_str}</p>
+<p>Knowledge Base: {filing_str}</p>
 </div>
 
 <div class="summary">
-<strong>Summary</strong>
+<strong>Sentence-Level Filter Summary</strong>
 <div class="summary-grid">
 <div class="stat">
 <div class="stat-value">{summary.get('total_bullets', 0) + summary.get('total_paragraphs', 0)}</div>
-<div class="stat-label">Total Items</div>
+<div class="stat-label">Bullets/Paras</div>
 </div>
 <div class="stat">
 <div class="stat-value" style="color: #28a745;">{summary.get('kept', 0)}</div>
 <div class="stat-label">Kept</div>
 </div>
 <div class="stat">
-<div class="stat-value" style="color: #ffc107;">{summary.get('rewritten', 0)}</div>
-<div class="stat-label">Rewritten</div>
-</div>
-<div class="stat">
 <div class="stat-value" style="color: #dc3545;">{summary.get('removed', 0)}</div>
 <div class="stat-label">Removed</div>
+</div>
+<div class="stat">
+<div class="stat-value">{summary.get('total_sentences', 0)}</div>
+<div class="stat-label">Sentences</div>
+</div>
+<div class="stat">
+<div class="stat-value" style="color: #28a745;">{summary.get('kept_sentences', 0)}</div>
+<div class="stat-label">Kept Sent.</div>
+</div>
+<div class="stat">
+<div class="stat-value" style="color: #dc3545;">{summary.get('removed_sentences', 0)}</div>
+<div class="stat-label">Removed Sent.</div>
 </div>
 <div class="stat">
 <div class="stat-value">{summary.get('known_claims', 0)}</div>
@@ -1628,54 +1719,64 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
         html += '<div class="section-header">Paragraph Sections</div>\n'
         for p in paragraphs:
             action = p.get('action', 'KEEP').upper()
-            action_class = f"bullet-{action.lower()}"
-            badge_class = f"badge-{action.lower()}"
+            exempt = p.get('exempt', False)
+
+            if exempt:
+                action_class = "bullet-exempt"
+                badge_class = "badge-exempt"
+                badge_text = "EXEMPT"
+            else:
+                action_class = f"bullet-{action.lower()}"
+                badge_class = f"badge-{action.lower()}"
+                badge_text = action
 
             html += f'<div class="bullet {action_class}">\n'
-            html += f'<div class="bullet-header"><span>[{p.get("section", "?")}]</span><span class="action-badge {badge_class}">{action}</span></div>\n'
+            html += f'<div class="bullet-header"><span>[{p.get("section", "?")}]</span><span class="action-badge {badge_class}">{badge_text}</span></div>\n'
 
-            # Original content (no truncation)
+            # Original content
             original = p.get('original_content', '') or p.get('content', '')
             if original:
                 html += f'<div class="content-box"><strong>Original:</strong><br>{_escape_html(original)}</div>\n'
-            else:
-                html += f'<div class="content-box"><strong>Original:</strong><br><em style="color: #999;">(content not returned by AI)</em></div>\n'
 
-            # Claims (no truncation)
-            claims = p.get('claims', [])
-            if claims:
-                html += '<div class="claims"><strong>Claims:</strong><br>\n'
-                for c in claims:
-                    status = c.get('status', 'NEW')
-                    claim_class = 'claim-known' if status == 'KNOWN' else 'claim-new'
-                    icon = '❌' if status == 'KNOWN' else '✅'
-                    source_type_raw = c.get('source_type', '')
-                    source_type_display = _resolve_source_type(source_type_raw, filing_lookup)
-                    source_section = c.get('source', '')
-                    evidence = c.get('evidence', '')
+            # Sentence-level breakdown
+            sentences = p.get('sentences', [])
+            if sentences:
+                html += '<div style="margin: 10px 0;"><strong>Sentence Analysis:</strong></div>\n'
+                for s in sentences:
+                    sent_action = s.get('sentence_action', 'KEEP').upper()
+                    sent_class = 'sentence-keep' if sent_action == 'KEEP' else 'sentence-remove'
+                    sent_icon = '✅' if sent_action == 'KEEP' else '❌'
 
-                    # Build the claim line
-                    html += f'<div class="claim {claim_class}">{icon} {status}: {_escape_html(c.get("claim", ""))}'
+                    html += f'<div class="sentence {sent_class}">\n'
+                    html += f'<div class="sentence-text">{sent_icon} {_escape_html(s.get("text", ""))}</div>\n'
 
-                    # For KNOWN claims, show evidence with source
-                    if status == 'KNOWN' and evidence:
-                        if source_type_raw:
-                            # Filing-based KNOWN - show quote with resolved source
-                            html += f'<br><span style="margin-left: 20px; color: #666; font-size: 12px;">→ "{_escape_html(evidence)}" ({source_type_display})</span>'
-                        else:
-                            # Staleness-based KNOWN - show reason without quotes
-                            html += f'<br><span style="margin-left: 20px; color: #856404; font-size: 12px;">→ ⏰ {_escape_html(evidence)}</span>'
-                    elif status == 'KNOWN' and source_section:
-                        html += f'<br><span style="margin-left: 20px; color: #666; font-size: 12px;">→ {source_type_display}</span>'
+                    # Claims within sentence
+                    claims = s.get('claims', [])
+                    if claims:
+                        html += '<div class="claims">\n'
+                        for c in claims:
+                            status = c.get('status', 'NEW')
+                            claim_class = 'claim-known' if status == 'KNOWN' else 'claim-new'
+                            icon = '❌' if status == 'KNOWN' else '✅'
+                            source_type_raw = c.get('source_type', '')
+                            source_type_display = _resolve_source_type(source_type_raw, filing_lookup)
+                            evidence = c.get('evidence', '')
 
+                            html += f'<div class="claim {claim_class}">{icon} {_escape_html(c.get("claim", ""))}'
+                            if status == 'KNOWN' and evidence:
+                                if source_type_raw:
+                                    html += f' <span style="color: #666; font-size: 11px;">({source_type_display})</span>'
+                                else:
+                                    html += f' <span style="color: #856404; font-size: 11px;">⏰ {_escape_html(evidence)}</span>'
+                            html += '</div>\n'
+                        html += '</div>\n'
                     html += '</div>\n'
-                html += '</div>\n'
 
-            # Rewritten content (no truncation)
-            if action == 'REWRITE':
-                rewritten = p.get('rewritten_content', '')
-                if rewritten:
-                    html += f'<div class="rewritten"><strong>Rewritten:</strong><br>{_escape_html(rewritten)}</div>\n'
+            # Filtered content (for non-exempt sections with KEEP action)
+            if action == 'KEEP' and not exempt:
+                filtered = p.get('filtered_content', '')
+                if filtered:
+                    html += f'<div class="filtered"><strong>Filtered Content:</strong><br>{_escape_html(filtered)}</div>\n'
 
             html += '</div>\n'
 
@@ -1684,54 +1785,64 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
         html += '<div class="section-header">Bullet Sections</div>\n'
         for b in bullets:
             action = b.get('action', 'KEEP').upper()
-            action_class = f"bullet-{action.lower()}"
-            badge_class = f"badge-{action.lower()}"
+            exempt = b.get('exempt', False)
+
+            if exempt:
+                action_class = "bullet-exempt"
+                badge_class = "badge-exempt"
+                badge_text = "EXEMPT"
+            else:
+                action_class = f"bullet-{action.lower()}"
+                badge_class = f"badge-{action.lower()}"
+                badge_text = action
 
             html += f'<div class="bullet {action_class}">\n'
-            html += f'<div class="bullet-header"><span>[{b.get("bullet_id", "?")}] {b.get("section", "")}</span><span class="action-badge {badge_class}">{action}</span></div>\n'
+            html += f'<div class="bullet-header"><span>[{b.get("bullet_id", "?")}] {b.get("section", "")}</span><span class="action-badge {badge_class}">{badge_text}</span></div>\n'
 
-            # Original content (no truncation)
+            # Original content
             original = b.get('original_content', '') or b.get('content', '')
             if original:
                 html += f'<div class="content-box"><strong>Original:</strong><br>{_escape_html(original)}</div>\n'
-            else:
-                html += f'<div class="content-box"><strong>Original:</strong><br><em style="color: #999;">(content not returned by AI)</em></div>\n'
 
-            # Claims (no truncation)
-            claims = b.get('claims', [])
-            if claims:
-                html += '<div class="claims"><strong>Claims:</strong><br>\n'
-                for c in claims:
-                    status = c.get('status', 'NEW')
-                    claim_class = 'claim-known' if status == 'KNOWN' else 'claim-new'
-                    icon = '❌' if status == 'KNOWN' else '✅'
-                    source_type_raw = c.get('source_type', '')
-                    source_type_display = _resolve_source_type(source_type_raw, filing_lookup)
-                    source_section = c.get('source', '')
-                    evidence = c.get('evidence', '')
+            # Sentence-level breakdown
+            sentences = b.get('sentences', [])
+            if sentences:
+                html += '<div style="margin: 10px 0;"><strong>Sentence Analysis:</strong></div>\n'
+                for s in sentences:
+                    sent_action = s.get('sentence_action', 'KEEP').upper()
+                    sent_class = 'sentence-keep' if sent_action == 'KEEP' else 'sentence-remove'
+                    sent_icon = '✅' if sent_action == 'KEEP' else '❌'
 
-                    # Build the claim line
-                    html += f'<div class="claim {claim_class}">{icon} {status}: {_escape_html(c.get("claim", ""))}'
+                    html += f'<div class="sentence {sent_class}">\n'
+                    html += f'<div class="sentence-text">{sent_icon} {_escape_html(s.get("text", ""))}</div>\n'
 
-                    # For KNOWN claims, show evidence with source
-                    if status == 'KNOWN' and evidence:
-                        if source_type_raw:
-                            # Filing-based KNOWN - show quote with resolved source
-                            html += f'<br><span style="margin-left: 20px; color: #666; font-size: 12px;">→ "{_escape_html(evidence)}" ({source_type_display})</span>'
-                        else:
-                            # Staleness-based KNOWN - show reason without quotes
-                            html += f'<br><span style="margin-left: 20px; color: #856404; font-size: 12px;">→ ⏰ {_escape_html(evidence)}</span>'
-                    elif status == 'KNOWN' and source_section:
-                        html += f'<br><span style="margin-left: 20px; color: #666; font-size: 12px;">→ {source_type_display}</span>'
+                    # Claims within sentence
+                    claims = s.get('claims', [])
+                    if claims:
+                        html += '<div class="claims">\n'
+                        for c in claims:
+                            status = c.get('status', 'NEW')
+                            claim_class = 'claim-known' if status == 'KNOWN' else 'claim-new'
+                            icon = '❌' if status == 'KNOWN' else '✅'
+                            source_type_raw = c.get('source_type', '')
+                            source_type_display = _resolve_source_type(source_type_raw, filing_lookup)
+                            evidence = c.get('evidence', '')
 
+                            html += f'<div class="claim {claim_class}">{icon} {_escape_html(c.get("claim", ""))}'
+                            if status == 'KNOWN' and evidence:
+                                if source_type_raw:
+                                    html += f' <span style="color: #666; font-size: 11px;">({source_type_display})</span>'
+                                else:
+                                    html += f' <span style="color: #856404; font-size: 11px;">⏰ {_escape_html(evidence)}</span>'
+                            html += '</div>\n'
+                        html += '</div>\n'
                     html += '</div>\n'
-                html += '</div>\n'
 
-            # Rewritten content (no truncation)
-            if action == 'REWRITE':
-                rewritten = b.get('rewritten_content', '')
-                if rewritten:
-                    html += f'<div class="rewritten"><strong>Rewritten:</strong><br>{_escape_html(rewritten)}</div>\n'
+            # Filtered content (for non-exempt sections with KEEP action)
+            if action == 'KEEP' and not exempt:
+                filtered = b.get('filtered_content', '')
+                if filtered:
+                    html += f'<div class="filtered"><strong>Filtered Content:</strong><br>{_escape_html(filtered)}</div>\n'
 
             html += '</div>\n'
 

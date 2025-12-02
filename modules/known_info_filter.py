@@ -475,6 +475,183 @@ PARAGRAPH SECTIONS TO FILTER (apply full sentence-level filtering):
 - downside_scenario
 
 ═══════════════════════════════════════════════════════════════════════════════
+CRITICAL REQUIREMENTS (READ CAREFULLY)
+═══════════════════════════════════════════════════════════════════════════════
+
+You MUST follow these requirements - no shortcuts allowed:
+
+1. ALWAYS ANALYZE EVERY BULLET/PARAGRAPH
+   - Even if you will ultimately REMOVE a bullet, you MUST show the full analysis
+   - Empty "sentences" array is NEVER acceptable
+   - We need to see WHY something was removed
+
+2. ALWAYS PARSE INTO SENTENCES
+   - Every bullet/paragraph must be split into individual sentences
+   - Each sentence gets its own entry in the "sentences" array
+   - Single-sentence bullets still have a "sentences" array with one entry
+
+3. ALWAYS EXTRACT CLAIMS FROM EACH SENTENCE
+   - Every sentence must have a "claims" array
+   - Decompose into atomic claims (numbers, events, quotes, etc.)
+   - Even sentences with just one claim need the array
+
+4. ALWAYS PROVIDE EVIDENCE FOR KNOWN CLAIMS
+   - source_type: The filing identifier (TRANSCRIPT_1, 10Q_1, 8K_1, etc.)
+   - evidence: The quote or paraphrase from the filing
+   - For staleness: source_type=null, evidence="[staleness reason]"
+
+5. THE OUTPUT MUST SHOW THE COMPLETE CHAIN OF LOGIC
+   - claims → sentence verdicts → bullet verdict → filtered_content
+   - A reader should be able to follow exactly why each decision was made
+
+═══════════════════════════════════════════════════════════════════════════════
+WORKED EXAMPLES (Study These Carefully)
+═══════════════════════════════════════════════════════════════════════════════
+
+EXAMPLE 1: Bullet with MIXED content → action=KEEP
+
+Original bullet: "Revenue grew 22% to $15.9B in Q3. The stock fell 8% on AI spending concerns."
+
+Analysis:
+├─ Sentence 1: "Revenue grew 22% to $15.9B in Q3."
+│  ├─ Claim: "revenue $15.9B" → KNOWN (TRANSCRIPT_1: "Q3 revenue of $15.9 billion")
+│  ├─ Claim: "grew 22%" → KNOWN (TRANSCRIPT_1: "revenue increased 22% YoY")
+│  ├─ has_material_new: false (0 NEW claims)
+│  └─ sentence_action: REMOVE
+│
+├─ Sentence 2: "The stock fell 8% on AI spending concerns."
+│  ├─ Claim: "stock fell 8%" → NEW (market reaction, not in filings)
+│  ├─ Claim: "AI spending concerns" → NEW (investor sentiment, not in filings)
+│  ├─ has_material_new: true (2 NEW claims)
+│  └─ sentence_action: KEEP
+│
+├─ Bullet verdict: 1 KEEP sentence → action = KEEP
+└─ filtered_content: "The stock fell 8% on AI spending concerns."
+
+JSON output for this bullet:
+{
+  "bullet_id": "FIN_001",
+  "section": "financial_performance",
+  "sentences": [
+    {
+      "text": "Revenue grew 22% to $15.9B in Q3.",
+      "claims": [
+        {"claim": "revenue $15.9B", "status": "KNOWN", "source_type": "TRANSCRIPT_1", "evidence": "Q3 revenue of $15.9 billion"},
+        {"claim": "grew 22%", "status": "KNOWN", "source_type": "TRANSCRIPT_1", "evidence": "revenue increased 22% YoY"}
+      ],
+      "has_material_new": false,
+      "sentence_action": "REMOVE"
+    },
+    {
+      "text": "The stock fell 8% on AI spending concerns.",
+      "claims": [
+        {"claim": "stock fell 8%", "status": "NEW", "source_type": null, "evidence": null},
+        {"claim": "AI spending concerns", "status": "NEW", "source_type": null, "evidence": null}
+      ],
+      "has_material_new": true,
+      "sentence_action": "KEEP"
+    }
+  ],
+  "action": "KEEP",
+  "filtered_content": "The stock fell 8% on AI spending concerns."
+}
+
+EXAMPLE 2: Bullet that is FULLY REMOVED → action=REMOVE (STILL requires full analysis!)
+
+Original bullet: "Q3 EBITDA reached $10.7B, up 15% YoY, beating guidance of $10.2B."
+
+Analysis:
+├─ Sentence 1: "Q3 EBITDA reached $10.7B, up 15% YoY, beating guidance of $10.2B."
+│  ├─ Claim: "EBITDA $10.7B" → KNOWN (TRANSCRIPT_1: "EBITDA of $10.7 billion")
+│  ├─ Claim: "up 15% YoY" → KNOWN (TRANSCRIPT_1: "EBITDA grew 15% year-over-year")
+│  ├─ Claim: "beating guidance of $10.2B" → KNOWN (staleness: "Released Oct 30, 5 weeks stale")
+│  ├─ has_material_new: false (0 NEW claims)
+│  └─ sentence_action: REMOVE
+│
+├─ Bullet verdict: 0 KEEP sentences → action = REMOVE
+└─ filtered_content: ""
+
+JSON output for this bullet (NOTE: sentences array is REQUIRED even for REMOVE):
+{
+  "bullet_id": "FIN_002",
+  "section": "financial_performance",
+  "sentences": [
+    {
+      "text": "Q3 EBITDA reached $10.7B, up 15% YoY, beating guidance of $10.2B.",
+      "claims": [
+        {"claim": "EBITDA $10.7B", "status": "KNOWN", "source_type": "TRANSCRIPT_1", "evidence": "EBITDA of $10.7 billion"},
+        {"claim": "up 15% YoY", "status": "KNOWN", "source_type": "TRANSCRIPT_1", "evidence": "EBITDA grew 15% year-over-year"},
+        {"claim": "beating guidance of $10.2B", "status": "KNOWN", "source_type": null, "evidence": "Released Oct 30, 5 weeks stale"}
+      ],
+      "has_material_new": false,
+      "sentence_action": "REMOVE"
+    }
+  ],
+  "action": "REMOVE",
+  "filtered_content": ""
+}
+
+EXAMPLE 3: EXEMPT section (wall_street_sentiment) → action=KEEP, show analysis anyway
+
+Original bullet: "Morgan Stanley upgraded to Buy with $150 price target, citing strong Q3 results."
+
+Analysis (for transparency only - exempt sections always KEEP):
+├─ Sentence 1: "Morgan Stanley upgraded to Buy with $150 price target, citing strong Q3 results."
+│  ├─ Claim: "Morgan Stanley upgraded to Buy" → NEW (analyst action)
+│  ├─ Claim: "$150 price target" → NEW (analyst target)
+│  ├─ Claim: "citing strong Q3 results" → KNOWN (TRANSCRIPT_1: Q3 results discussed)
+│  ├─ has_material_new: true
+│  └─ sentence_action: KEEP (but irrelevant - section is exempt)
+│
+├─ Bullet verdict: EXEMPT → action = KEEP (regardless of analysis)
+└─ filtered_content: "" (we use original from input)
+
+JSON output for exempt bullet:
+{
+  "bullet_id": "WSS_001",
+  "section": "wall_street_sentiment",
+  "sentences": [
+    {
+      "text": "Morgan Stanley upgraded to Buy with $150 price target, citing strong Q3 results.",
+      "claims": [
+        {"claim": "Morgan Stanley upgraded to Buy", "status": "NEW", "source_type": null, "evidence": null},
+        {"claim": "$150 price target", "status": "NEW", "source_type": null, "evidence": null},
+        {"claim": "citing strong Q3 results", "status": "KNOWN", "source_type": "TRANSCRIPT_1", "evidence": "Q3 results discussed in earnings call"}
+      ],
+      "has_material_new": true,
+      "sentence_action": "KEEP"
+    }
+  ],
+  "action": "KEEP",
+  "filtered_content": "",
+  "exempt": true
+}
+
+EXAMPLE 4: Paragraph (bottom_line) with multiple sentences
+
+Original paragraph: "Company reported strong Q3 with revenue up 20%. However, stock fell 12% on weak guidance. Analysts are mixed on the outlook."
+
+Analysis:
+├─ Sentence 1: "Company reported strong Q3 with revenue up 20%."
+│  ├─ Claim: "revenue up 20%" → KNOWN (TRANSCRIPT_1: "revenue grew 20%")
+│  ├─ has_material_new: false
+│  └─ sentence_action: REMOVE
+│
+├─ Sentence 2: "However, stock fell 12% on weak guidance."
+│  ├─ Claim: "stock fell 12%" → NEW (market reaction)
+│  ├─ Claim: "weak guidance" → KNOWN (TRANSCRIPT_1: guidance discussed)
+│  ├─ has_material_new: true (stock price is material)
+│  └─ sentence_action: KEEP
+│
+├─ Sentence 3: "Analysts are mixed on the outlook."
+│  ├─ Claim: "analysts are mixed" → NEW (analyst sentiment)
+│  ├─ has_material_new: true
+│  └─ sentence_action: KEEP
+│
+├─ Paragraph verdict: 2 KEEP sentences → action = KEEP
+└─ filtered_content: "However, stock fell 12% on weak guidance. Analysts are mixed on the outlook."
+
+═══════════════════════════════════════════════════════════════════════════════
 OUTPUT FORMAT
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -558,20 +735,34 @@ Return valid JSON with this exact structure:
   ]
 }
 
-IMPORTANT:
-- Parse each bullet/paragraph into sentences FIRST
-- Include ALL sentences with their claims and verdicts
-- filtered_content = concatenation of all KEEP sentences (space-separated)
-- If all sentences removed → filtered_content = "", action = "REMOVE"
-- If any sentences kept → action = "KEEP"
-- There is NO "REWRITE" action - only KEEP or REMOVE
-- Include ALL bullets from ALL 7 bullet sections
-- Include ALL 3 paragraph sections
-- For EXEMPT sections (wall_street_sentiment, upcoming_catalysts, key_variables):
-  - DO perform sentence/claim analysis (for QA visibility)
-  - Set action="KEEP", filtered_content="" (we use original)
-  - Add "exempt": true to the output
-- List ALL claims individually - NEVER truncate with "and X more claims"
+IMPORTANT - DO NOT SKIP ANY OF THESE:
+
+1. NEVER return an empty "sentences" array
+   - Even for action="REMOVE", you MUST include the sentences array with full analysis
+   - We need to see the claims and evidence for WHY it was removed
+   - See EXAMPLE 2 above - REMOVE bullets still have complete sentence/claim analysis
+
+2. Parse each bullet/paragraph into sentences FIRST
+   - Include ALL sentences with their claims and verdicts
+   - Every sentence needs: text, claims[], has_material_new, sentence_action
+
+3. filtered_content rules:
+   - = concatenation of all KEEP sentences (space-separated)
+   - If all sentences removed → filtered_content = "", action = "REMOVE"
+   - If any sentences kept → action = "KEEP"
+
+4. There is NO "REWRITE" action - only KEEP or REMOVE
+
+5. Include ALL bullets from ALL 7 bullet sections
+
+6. Include ALL 3 paragraph sections
+
+7. For EXEMPT sections (wall_street_sentiment, upcoming_catalysts, key_variables):
+   - DO perform sentence/claim analysis (for QA visibility)
+   - Set action="KEEP", filtered_content="" (we use original)
+   - Add "exempt": true to the output
+
+8. List ALL claims individually - NEVER truncate with "and X more claims"
 
 EVIDENCE FIELD (required for KNOWN claims):
 - For KNOWN claims from filings: Include quote/paraphrase + source_type

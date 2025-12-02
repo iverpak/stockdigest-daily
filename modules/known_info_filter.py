@@ -781,6 +781,151 @@ def _merge_original_content(ai_response: Dict, phase1_json: Dict) -> Dict:
     return ai_response
 
 
+def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
+    """
+    Apply Phase 1.5 filter results to Phase 1 JSON.
+
+    This modifies the Phase 1 JSON to remove KNOWN information before Phase 2 enrichment.
+
+    Actions:
+    - REMOVE: Delete bullet/paragraph entirely from Phase 1 JSON
+    - REWRITE: Replace content with rewritten_content (NEW-only claims)
+    - KEEP: Leave unchanged
+
+    Args:
+        phase1_json: Original Phase 1 JSON with structure:
+            {
+                "sections": {
+                    "major_developments": [...],  # Array of bullet objects
+                    "bottom_line": {...},         # Paragraph object
+                    ...
+                }
+            }
+        filter_result: Output from filter_known_information() with:
+            {
+                "bullets": [{"bullet_id": "...", "action": "REMOVE|REWRITE|KEEP", "rewritten_content": "..."}],
+                "paragraphs": [{"section": "...", "action": "REMOVE|REWRITE|KEEP", "rewritten_content": "..."}]
+            }
+
+    Returns:
+        Modified Phase 1 JSON ready for Phase 2 (deep copy, original unchanged)
+    """
+    import copy
+
+    # Deep copy to avoid modifying original
+    result = copy.deepcopy(phase1_json)
+    sections = result.get('sections', {})
+
+    # Build lookup for filter actions by bullet_id
+    bullet_actions = {}
+    for bullet in filter_result.get('bullets', []):
+        bullet_id = bullet.get('bullet_id', '')
+        if bullet_id:
+            bullet_actions[bullet_id] = {
+                'action': bullet.get('action', 'KEEP').upper(),
+                'rewritten_content': bullet.get('rewritten_content', '')
+            }
+
+    # Build lookup for filter actions by section name (paragraphs)
+    paragraph_actions = {}
+    for para in filter_result.get('paragraphs', []):
+        section = para.get('section', '')
+        if section:
+            paragraph_actions[section] = {
+                'action': para.get('action', 'KEEP').upper(),
+                'rewritten_content': para.get('rewritten_content', '')
+            }
+
+    # Process bullet sections
+    bullet_section_names = [
+        'major_developments', 'financial_performance', 'risk_factors',
+        'wall_street_sentiment', 'competitive_industry_dynamics',
+        'upcoming_catalysts', 'key_variables'
+    ]
+
+    removed_count = 0
+    rewritten_count = 0
+
+    for section_name in bullet_section_names:
+        section_data = sections.get(section_name, [])
+        if not isinstance(section_data, list):
+            continue
+
+        # Filter bullets - keep only those not marked REMOVE
+        new_bullets = []
+        for bullet in section_data:
+            if not isinstance(bullet, dict):
+                new_bullets.append(bullet)
+                continue
+
+            bullet_id = bullet.get('bullet_id', '')
+            if bullet_id not in bullet_actions:
+                # No filter action for this bullet - keep unchanged
+                new_bullets.append(bullet)
+                continue
+
+            action_info = bullet_actions[bullet_id]
+            action = action_info['action']
+
+            if action == 'REMOVE':
+                # Skip this bullet entirely
+                removed_count += 1
+                continue
+            elif action == 'REWRITE':
+                # Replace content with rewritten version
+                rewritten_content = action_info['rewritten_content']
+                if rewritten_content:
+                    # Update the content field (could be 'content' or 'content_integrated')
+                    if 'content_integrated' in bullet:
+                        bullet['content_integrated'] = rewritten_content
+                    else:
+                        bullet['content'] = rewritten_content
+                    rewritten_count += 1
+                new_bullets.append(bullet)
+            else:
+                # KEEP - add unchanged
+                new_bullets.append(bullet)
+
+        sections[section_name] = new_bullets
+
+    # Process paragraph sections
+    paragraph_section_names = ['bottom_line', 'upside_scenario', 'downside_scenario']
+
+    for section_name in paragraph_section_names:
+        section_data = sections.get(section_name, {})
+        if not isinstance(section_data, dict):
+            continue
+
+        if section_name not in paragraph_actions:
+            # No filter action for this paragraph - keep unchanged
+            continue
+
+        action_info = paragraph_actions[section_name]
+        action = action_info['action']
+
+        if action == 'REMOVE':
+            # For paragraphs, we don't remove entirely - we clear the content
+            # Phase 2 and Email generation can handle empty content gracefully
+            if 'content_integrated' in section_data:
+                section_data['content_integrated'] = ''
+            else:
+                section_data['content'] = ''
+            removed_count += 1
+        elif action == 'REWRITE':
+            rewritten_content = action_info['rewritten_content']
+            if rewritten_content:
+                if 'content_integrated' in section_data:
+                    section_data['content_integrated'] = rewritten_content
+                else:
+                    section_data['content'] = rewritten_content
+                rewritten_count += 1
+        # KEEP - no changes needed
+
+    LOG.info(f"Phase 1.5 apply_filter: {removed_count} removed, {rewritten_count} rewritten")
+
+    return result
+
+
 def _fetch_filtered_8k_filings(ticker: str, db_func, last_transcript_date=None) -> List[Dict]:
     """
     Fetch filtered 8-K filings for inclusion in knowledge base.

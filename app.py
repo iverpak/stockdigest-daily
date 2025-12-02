@@ -580,10 +580,11 @@ def log_cost_summary(ticker: str, company_name: str = ""):
         "fundamental_driver_scoring": ("⚖️ Industry Scoring", 11),
         "executive_summary": ("📊 Executive Summary (OLD)", 12),
         "executive_summary_phase1": ("📊 Executive Summary - Phase 1", 13),
-        "executive_summary_phase2": ("📄 Executive Summary - Phase 2", 14),
-        "executive_summary_phase3": ("📝 Executive Summary - Phase 3", 15),
-        "research_summary": ("📋 Research Summary (Transcript/PR)", 16),
-        "ticker_metadata_generation": ("🏷️ Ticker Metadata Generation", 17)
+        "executive_summary_phase1_5": ("🔍 Executive Summary - Phase 1.5", 14),
+        "executive_summary_phase2": ("📄 Executive Summary - Phase 2", 15),
+        "executive_summary_phase3": ("📝 Executive Summary - Phase 3", 16),
+        "research_summary": ("📋 Research Summary (Transcript/PR)", 17),
+        "ticker_metadata_generation": ("🏷️ Ticker Metadata Generation", 18)
     }
 
     # Sort by display order
@@ -2360,6 +2361,11 @@ def ensure_schema():
 
                 INSERT INTO system_config (key, value, description, updated_by)
                 VALUES ('weekly_lookback_minutes', '10080', 'Lookback window for weekly reports (Monday)', 'system')
+                ON CONFLICT (key) DO NOTHING;
+
+                -- Phase 1.5 Known Information Filter toggle
+                INSERT INTO system_config (key, value, description, updated_by)
+                VALUES ('phase_1_5_enabled', 'false', 'Enable Phase 1.5 Known Information Filter to remove claims already in SEC filings', 'system')
                 ON CONFLICT (key) DO NOTHING;
 
                 -- Add report_type and summary_date columns to email_queue
@@ -12711,46 +12717,74 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
                 ai_analysis_summary = json.dumps(json_output, indent=2)
 
                 # ========================================================================
-                # PHASE 1.5: Known Information Filter (TEST MODE - non-blocking)
+                # PHASE 1.5: Known Information Filter
                 # ========================================================================
-                # Runs in parallel conceptually - emails findings but does NOT modify pipeline
-                # This is for testing/validation only. Once validated, Phase 2 will receive
-                # filtered output instead of original Phase 1 JSON.
+                # When enabled: Filters out claims already known from SEC filings
+                # before passing to Phase 2. Reduces redundancy in final output.
+                # When disabled: Skips entirely (original Phase 1 behavior)
+                # Toggle: system_config.phase_1_5_enabled
                 # ========================================================================
+                phase1_5_model_used = None  # Track for ai_models dict
+                phase1_5_prompt_tokens = 0
+                phase1_5_completion_tokens = 0
+                phase1_5_generation_time_ms = 0
+
                 try:
-                    from modules.known_info_filter import filter_known_information, generate_known_info_filter_email
+                    from modules.known_info_filter import filter_known_information, generate_known_info_filter_email, apply_filter_to_phase1
 
-                    LOG.info(f"[{ticker}] Phase 1.5: Running known info filter (TEST MODE - non-blocking)")
+                    phase1_5_enabled = is_phase_1_5_enabled()
 
-                    filter_result = filter_known_information(
-                        ticker=ticker,
-                        phase1_json=json_output,  # Original Phase 1 JSON (not modified)
-                        db_func=db,
-                        gemini_api_key=GEMINI_API_KEY,
-                        anthropic_api_key=ANTHROPIC_API_KEY
-                    )
+                    if phase1_5_enabled:
+                        LOG.info(f"[{ticker}] Phase 1.5: Running known info filter (PRODUCTION MODE)")
 
-                    if filter_result:
-                        # Generate and send email to admin
-                        filter_email_html = generate_known_info_filter_email(ticker, filter_result)
-                        email_subject = f"[TEST] Phase 1.5 Known Info Filter: {ticker}"
-
-                        send_email(
-                            subject=email_subject,
-                            html_body=filter_email_html,
-                            to=ADMIN_EMAIL
+                        filter_result = filter_known_information(
+                            ticker=ticker,
+                            phase1_json=json_output,
+                            db_func=db,
+                            gemini_api_key=GEMINI_API_KEY,
+                            anthropic_api_key=ANTHROPIC_API_KEY
                         )
-                        LOG.info(f"[{ticker}] Phase 1.5: Email sent to admin (TEST MODE)")
 
-                        # Log summary stats
-                        summary = filter_result.get("summary", {})
-                        LOG.info(f"[{ticker}] Phase 1.5 Summary: {summary.get('kept', 0)} kept, {summary.get('rewritten', 0)} rewritten, {summary.get('removed', 0)} removed")
+                        if filter_result:
+                            # Track Phase 1.5 cost
+                            phase1_5_model_used = filter_result.get("model_used", "")
+                            phase1_5_prompt_tokens = filter_result.get("prompt_tokens", 0)
+                            phase1_5_completion_tokens = filter_result.get("completion_tokens", 0)
+                            phase1_5_generation_time_ms = filter_result.get("generation_time_ms", 0)
+
+                            phase1_5_usage = {
+                                "input_tokens": phase1_5_prompt_tokens,
+                                "output_tokens": phase1_5_completion_tokens
+                            }
+
+                            if "gemini" in phase1_5_model_used.lower():
+                                calculate_gemini_api_cost(phase1_5_usage, "executive_summary_phase1_5", model="flash", model_name=phase1_5_model_used)
+                            elif "claude" in phase1_5_model_used.lower():
+                                calculate_claude_api_cost(phase1_5_usage, "executive_summary_phase1_5", model_name=phase1_5_model_used)
+
+                            # Send email for monitoring (always, even in production)
+                            filter_email_html = generate_known_info_filter_email(ticker, filter_result)
+                            send_email(
+                                subject=f"Phase 1.5 Known Info Filter: {ticker}",
+                                html_body=filter_email_html,
+                                to=ADMIN_EMAIL
+                            )
+
+                            # Apply filter to Phase 1 JSON
+                            json_output = apply_filter_to_phase1(json_output, filter_result)
+                            ai_analysis_summary = json.dumps(json_output, indent=2)
+
+                            # Log summary stats
+                            summary = filter_result.get("summary", {})
+                            LOG.info(f"[{ticker}] ✅ Phase 1.5 Applied: {summary.get('kept', 0)} kept, {summary.get('rewritten', 0)} rewritten, {summary.get('removed', 0)} removed ({phase1_5_model_used}, {phase1_5_prompt_tokens} prompt, {phase1_5_completion_tokens} completion)")
+                        else:
+                            LOG.warning(f"[{ticker}] Phase 1.5: Filter returned no results, using original Phase 1 JSON")
                     else:
-                        LOG.warning(f"[{ticker}] Phase 1.5: Filter returned no results (non-blocking)")
+                        LOG.info(f"[{ticker}] Phase 1.5: Skipped (disabled in system_config)")
 
                 except Exception as e:
                     # Phase 1.5 failure should NEVER block the main pipeline
-                    LOG.warning(f"[{ticker}] Phase 1.5: Test failed (non-blocking): {e}")
+                    LOG.warning(f"[{ticker}] Phase 1.5: Failed (non-blocking, using original Phase 1 JSON): {e}")
 
         # PHASE 2: Enrich Phase 1 with filing context (10-K, 10-Q, Transcript)
         final_json = json_output  # Default to Phase 1 JSON
@@ -12859,6 +12893,7 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
             # Build AI models tracking dict
             ai_models = {
                 "phase1": phase1_result.get("model_used") if phase1_result else None,  # Phase 1 still uses "model_used"
+                "phase1_5": phase1_5_model_used,  # Phase 1.5 Known Info Filter (None if disabled/skipped)
                 "phase2": phase2_result.get("ai_model") if phase2_result else None,  # Phase 2 uses "ai_model"
                 "phase3": None  # Phase 3 not run yet
             }
@@ -13850,9 +13885,13 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
                         ai_models = result['ai_models']
                         if isinstance(ai_models, dict):
                             p1 = ai_models.get('phase1', 'N/A')
+                            p1_5 = ai_models.get('phase1_5')  # May be None if disabled
                             p2 = ai_models.get('phase2', 'N/A')
                             p3 = ai_models.get('phase3', 'N/A')
-                            models_display = f"Phase 1: {p1} | Phase 2: {p2} | Phase 3: {p3}"
+                            if p1_5:
+                                models_display = f"P1: {p1} | P1.5: {p1_5} | P2: {p2} | P3: {p3}"
+                            else:
+                                models_display = f"P1: {p1} | P1.5: OFF | P2: {p2} | P3: {p3}"
             except Exception as e:
                 LOG.warning(f"[{ticker}] Could not fetch model info: {e}")
 
@@ -24692,6 +24731,32 @@ def get_phase3_primary_model() -> str:
         LOG.error(f"Failed to fetch phase3_primary_model: {e}, using default 'claude'")
         return 'claude'  # Default
 
+
+def is_phase_1_5_enabled() -> bool:
+    """
+    Check if Phase 1.5 (Known Information Filter) is enabled in system_config.
+
+    When enabled, Phase 1.5 filters out claims that are already known from SEC filings
+    before passing to Phase 2 for enrichment. This reduces redundant information
+    in the final output.
+
+    Returns:
+        True if enabled, False if disabled or on error (fail closed for safety)
+    """
+    try:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("SELECT value FROM system_config WHERE key = 'phase_1_5_enabled'")
+            row = cur.fetchone()
+            if row:
+                return row['value'].lower() == 'true'
+            else:
+                LOG.info("No phase_1_5_enabled in system_config, defaulting to False")
+                return False  # Default to disabled
+    except Exception as e:
+        LOG.error(f"Failed to fetch phase_1_5_enabled: {e}, defaulting to False")
+        return False  # Fail closed (disabled)
+
+
 @APP.get("/admin")
 def admin_dashboard(request: Request, token: str = Query(...)):
     """Admin dashboard landing page"""
@@ -29387,39 +29452,65 @@ async def regenerate_email_api(request: Request):
             LOG.warning(f"[{ticker}] Phase 1 cost tracking: Unknown model '{model_used}', skipping cost tracking")
 
         # ========================================================================
-        # PHASE 1.5: Known Information Filter (TEST MODE - non-blocking)
+        # PHASE 1.5: Known Information Filter
         # ========================================================================
+        # Same logic as production flow - respects system_config toggle
+        # ========================================================================
+        phase1_5_model_used = None  # Track for ai_models dict
+
         try:
-            from modules.known_info_filter import filter_known_information, generate_known_info_filter_email
+            from modules.known_info_filter import filter_known_information, generate_known_info_filter_email, apply_filter_to_phase1
 
-            LOG.info(f"[{ticker}] Phase 1.5: Running known info filter (TEST MODE - regenerate)")
+            phase1_5_enabled = is_phase_1_5_enabled()
 
-            filter_result = filter_known_information(
-                ticker=ticker,
-                phase1_json=json_output,
-                db_func=db,
-                gemini_api_key=GEMINI_API_KEY,
-                anthropic_api_key=ANTHROPIC_API_KEY
-            )
+            if phase1_5_enabled:
+                LOG.info(f"[{ticker}] Phase 1.5: Running known info filter (Regenerate - PRODUCTION MODE)")
 
-            if filter_result:
-                filter_email_html = generate_known_info_filter_email(ticker, filter_result)
-                email_subject = f"[TEST] Phase 1.5 Known Info Filter (Regen): {ticker}"
-
-                send_email(
-                    subject=email_subject,
-                    html_body=filter_email_html,
-                    to=ADMIN_EMAIL
+                filter_result = filter_known_information(
+                    ticker=ticker,
+                    phase1_json=json_output,
+                    db_func=db,
+                    gemini_api_key=GEMINI_API_KEY,
+                    anthropic_api_key=ANTHROPIC_API_KEY
                 )
-                LOG.info(f"[{ticker}] Phase 1.5: Email sent to admin (TEST MODE - regenerate)")
 
-                summary = filter_result.get("summary", {})
-                LOG.info(f"[{ticker}] Phase 1.5 Summary: {summary.get('kept', 0)} kept, {summary.get('rewritten', 0)} rewritten, {summary.get('removed', 0)} removed")
+                if filter_result:
+                    # Track Phase 1.5 cost
+                    phase1_5_model_used = filter_result.get("model_used", "")
+                    phase1_5_prompt_tokens = filter_result.get("prompt_tokens", 0)
+                    phase1_5_completion_tokens = filter_result.get("completion_tokens", 0)
+
+                    phase1_5_usage = {
+                        "input_tokens": phase1_5_prompt_tokens,
+                        "output_tokens": phase1_5_completion_tokens
+                    }
+
+                    if "gemini" in phase1_5_model_used.lower():
+                        calculate_gemini_api_cost(phase1_5_usage, "executive_summary_phase1_5", model="flash", model_name=phase1_5_model_used)
+                    elif "claude" in phase1_5_model_used.lower():
+                        calculate_claude_api_cost(phase1_5_usage, "executive_summary_phase1_5", model_name=phase1_5_model_used)
+
+                    # Send email for monitoring
+                    filter_email_html = generate_known_info_filter_email(ticker, filter_result)
+                    send_email(
+                        subject=f"Phase 1.5 Known Info Filter (Regen): {ticker}",
+                        html_body=filter_email_html,
+                        to=ADMIN_EMAIL
+                    )
+
+                    # Apply filter to Phase 1 JSON
+                    json_output = apply_filter_to_phase1(json_output, filter_result)
+
+                    # Log summary stats
+                    summary = filter_result.get("summary", {})
+                    LOG.info(f"[{ticker}] ✅ Phase 1.5 Applied (Regen): {summary.get('kept', 0)} kept, {summary.get('rewritten', 0)} rewritten, {summary.get('removed', 0)} removed")
+                else:
+                    LOG.warning(f"[{ticker}] Phase 1.5: Filter returned no results, using original Phase 1 JSON")
             else:
-                LOG.warning(f"[{ticker}] Phase 1.5: Filter returned no results (non-blocking)")
+                LOG.info(f"[{ticker}] Phase 1.5: Skipped (disabled in system_config)")
 
         except Exception as e:
-            LOG.warning(f"[{ticker}] Phase 1.5: Test failed (non-blocking): {e}")
+            LOG.warning(f"[{ticker}] Phase 1.5: Failed (non-blocking, using original Phase 1 JSON): {e}")
 
         # PHASE 2: Enrich Phase 1 with filing context (10-K, 10-Q, Transcript)
         final_json = json_output  # Default to Phase 1 only
@@ -29511,12 +29602,21 @@ async def regenerate_email_api(request: Request):
         industry_count = len(categories['industry'])
         competitor_count = len(categories['competitor'])
 
+        # Build ai_models dict for tracking
+        ai_models = {
+            "phase1": model_used,  # Phase 1 model
+            "phase1_5": phase1_5_model_used,  # Phase 1.5 model (None if disabled/skipped)
+            "phase2": phase2_result.get("ai_model") if phase2_result else None,  # Phase 2 model
+            "phase3": None  # Phase 3 not run yet (will be updated later)
+        }
+
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
                 UPDATE executive_summaries
                 SET summary_text = %s,
                     summary_json = %s,
                     ai_provider = %s,
+                    ai_models = %s,
                     company_articles_count = %s,
                     industry_articles_count = %s,
                     competitor_articles_count = %s,
@@ -29530,6 +29630,7 @@ async def regenerate_email_api(request: Request):
                 summary_text,
                 json.dumps(final_json) if final_json else None,
                 model_used.lower(),
+                json.dumps(ai_models),
                 company_count,
                 industry_count,
                 competitor_count,
@@ -30809,6 +30910,68 @@ async def set_weekly_lookback_window_api(
 
     except Exception as e:
         LOG.error(f"Failed to update weekly lookback: {e}")
+        return {"status": "error", "message": str(e)}
+
+# NEW (Dec 2025): Phase 1.5 Known Information Filter toggle
+@APP.get("/api/get-phase15-enabled")
+async def get_phase15_enabled_api(token: str = Query(...)):
+    """Get Phase 1.5 (Known Information Filter) enabled status"""
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        enabled = is_phase_1_5_enabled()
+        return {
+            "status": "success",
+            "enabled": enabled,
+            "label": "ON" if enabled else "OFF"
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to get Phase 1.5 status: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/set-phase15-enabled")
+async def set_phase15_enabled_api(request: Request):
+    """Enable or disable Phase 1.5 (Known Information Filter)"""
+    # Check admin token from header (matches Phase 3 model pattern)
+    token = request.headers.get('X-Admin-Token')
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        body = await request.json()
+        enabled_str = body.get('enabled')
+
+        if enabled_str is None:
+            return {"status": "error", "message": "Missing 'enabled' parameter"}
+
+        # Handle both string ("true"/"false") and boolean values
+        if isinstance(enabled_str, bool):
+            enabled = enabled_str
+        else:
+            enabled = str(enabled_str).lower() == 'true'
+
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE system_config
+                SET value = %s, updated_at = NOW()
+                WHERE key = 'phase_1_5_enabled'
+            """, ('true' if enabled else 'false',))
+            conn.commit()
+
+        label = "ON" if enabled else "OFF"
+        LOG.info(f"✅ Phase 1.5 Known Info Filter set to {label}")
+
+        return {
+            "status": "success",
+            "message": f"Phase 1.5 set to {label}",
+            "enabled": enabled,
+            "label": label
+        }
+
+    except Exception as e:
+        LOG.error(f"Failed to update Phase 1.5 status: {e}")
         return {"status": "error", "message": str(e)}
 
 @APP.get("/api/get-phase3-model")

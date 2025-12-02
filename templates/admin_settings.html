@@ -384,6 +384,55 @@
             </div>
         </div>
 
+        <!-- Phase 1.5 Known Info Filter Toggle -->
+        <div class="settings-card">
+            <h2>🔍 Phase 1.5 Known Information Filter</h2>
+
+            <div class="setting-group">
+                <label class="setting-label">Enable Known Information Filter</label>
+                <div class="setting-description">
+                    When enabled, Phase 1.5 filters out claims from articles that are already known from SEC filings
+                    (10-K, 10-Q, Transcripts, 8-K) before passing to Phase 2.
+                    <br><strong>Result:</strong> Cleaner reports with only genuinely new information.
+                </div>
+
+                <div class="current-value" id="current-phase15-display">
+                    <strong>Current:</strong> Loading...
+                </div>
+
+                <div class="radio-group" style="margin: 20px 0;">
+                    <label style="display: block; margin-bottom: 15px; cursor: pointer; padding: 12px; border: 1px solid #e2e8f0; border-radius: 6px;">
+                        <input type="radio" name="phase15Enabled" value="true" style="margin-right: 8px;">
+                        <strong>ON</strong> - Filter known information (Production Mode)
+                    </label>
+                    <label style="display: block; cursor: pointer; padding: 12px; border: 1px solid #e2e8f0; border-radius: 6px;">
+                        <input type="radio" name="phase15Enabled" value="false" checked style="margin-right: 8px;">
+                        <strong>OFF</strong> - Skip Phase 1.5 (Original behavior)
+                    </label>
+                </div>
+
+                <div class="button-group">
+                    <button class="btn btn-primary" onclick="savePhase15Toggle()">
+                        💾 Save Phase 1.5 Setting
+                    </button>
+                </div>
+
+                <div id="phase15-status" class="status-message"></div>
+
+                <div class="info-box">
+                    <strong>ℹ️ How it works:</strong>
+                    <ul style="margin: 10px 0 0 20px; padding: 0;">
+                        <li>Decomposes each bullet into atomic claims</li>
+                        <li>Checks each claim against SEC filings</li>
+                        <li>REMOVE: All claims known → bullet removed entirely</li>
+                        <li>REWRITE: Mix of known/new → rewritten with only new claims</li>
+                        <li>KEEP: All claims new → unchanged</li>
+                    </ul>
+                    <br><strong>Note:</strong> Phase 1.5 email sent to admin for monitoring regardless of setting.
+                </div>
+            </div>
+        </div>
+
     </div>
 
     <script>
@@ -653,11 +702,69 @@
             }
         }
 
+        // Phase 1.5 Toggle Functions
+        async function loadPhase15Toggle() {
+            try {
+                const response = await fetch(`/api/get-phase15-enabled?token=${getToken()}`);
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    // Set radio button
+                    const radioButton = document.querySelector(`input[name="phase15Enabled"][value="${data.enabled}"]`);
+                    if (radioButton) {
+                        radioButton.checked = true;
+                    }
+                    // Update display
+                    const displayText = data.enabled === 'true' ? 'ON (Production Mode)' : 'OFF (Skipped)';
+                    document.getElementById('current-phase15-display').innerHTML =
+                        `<strong>Current:</strong> ${displayText}`;
+                } else {
+                    document.getElementById('current-phase15-display').innerHTML =
+                        `<strong>Current:</strong> Error loading`;
+                }
+            } catch (error) {
+                console.error('Error loading Phase 1.5 setting:', error);
+                document.getElementById('current-phase15-display').innerHTML =
+                    `<strong>Current:</strong> Error loading`;
+            }
+        }
+
+        async function savePhase15Toggle() {
+            const statusDiv = document.getElementById('phase15-status');
+            const selectedValue = document.querySelector('input[name="phase15Enabled"]:checked').value;
+
+            try {
+                const response = await fetch('/api/set-phase15-enabled', {
+                    method: 'POST',
+                    headers: {
+                        'X-Admin-Token': getToken(),
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ enabled: selectedValue })
+                });
+
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    showStatus(statusDiv, 'success', '✅ ' + result.message);
+                    // Update display
+                    const displayText = selectedValue === 'true' ? 'ON (Production Mode)' : 'OFF (Skipped)';
+                    document.getElementById('current-phase15-display').innerHTML =
+                        `<strong>Current:</strong> ${displayText}`;
+                } else {
+                    showStatus(statusDiv, 'error', '❌ ' + (result.message || 'Failed to update setting'));
+                }
+            } catch (error) {
+                showStatus(statusDiv, 'error', '❌ Error: ' + error.message);
+            }
+        }
+
         // Load on page load
         document.addEventListener('DOMContentLoaded', function() {
             loadCurrentLookback();
             loadDailyWeeklyLookback();  // NEW (Nov 2025): Load daily/weekly settings
             loadPhase3Model();
+            loadPhase15Toggle();  // NEW (Dec 2025): Load Phase 1.5 setting
         });
     </script>
 </body>

@@ -1,7 +1,7 @@
 # Known Information Filter (Phase 1.5)
 
 **Created:** December 1, 2025
-**Status:** TEST MODE - Runs in parallel, emails findings only, does NOT modify production pipeline
+**Status:** PRODUCTION - Toggleable via Admin Settings, modifies Phase 1 output before Phase 2
 
 ## Overview
 
@@ -370,32 +370,99 @@ For KNOWN claims, the `evidence` field contains the actual quote or paraphrase f
 
 ## Integration Points
 
+### Admin Settings Toggle
+
+Phase 1.5 can be enabled/disabled via `/admin/settings`:
+
+- **Toggle:** ON/OFF radio buttons in "Phase 1.5 Known Information Filter" section
+- **Database:** `system_config` table, key `phase_1_5_enabled` (value: 'true' or 'false')
+- **Default:** Disabled (false)
+- **Helper function:** `is_phase_1_5_enabled()` in app.py
+
+**API Endpoints:**
+- `GET /api/get-phase15-enabled` - Returns current status
+- `POST /api/set-phase15-enabled?enabled=true|false` - Update status
+
 ### app.py
 
 Phase 1.5 is called in two places:
 
-1. **`generate_ai_final_summaries()`** (lines 12720-12753) - Production/test runs
-2. **`/api/regenerate-email`** endpoint (lines 29389-29422) - Regenerate runs
+1. **`generate_ai_final_summaries()`** - Production/test runs
+2. **`/api/regenerate-email`** endpoint - Regenerate runs
 
-Both use try/except with non-blocking behavior:
+**Production Flow (when enabled):**
 ```python
-try:
-    from modules.known_info_filter import filter_known_information, generate_known_info_filter_email
+# Check if Phase 1.5 is enabled
+if is_phase_1_5_enabled():
+    try:
+        from modules.known_info_filter import filter_known_information, generate_known_info_filter_email, apply_filter_to_phase1
 
-    filter_result = filter_known_information(
-        ticker=ticker,
-        phase1_json=json_output,
-        db_func=db,
-        gemini_api_key=GEMINI_API_KEY,
-        anthropic_api_key=ANTHROPIC_API_KEY
-    )
+        filter_result = filter_known_information(
+            ticker=ticker,
+            phase1_json=json_output,
+            db_func=db,
+            gemini_api_key=GEMINI_API_KEY,
+            anthropic_api_key=ANTHROPIC_API_KEY
+        )
 
-    if filter_result:
-        filter_email_html = generate_known_info_filter_email(ticker, filter_result)
-        send_email(subject=email_subject, html_body=filter_email_html, to=ADMIN_EMAIL)
-except Exception as e:
-    LOG.warning(f"[{ticker}] Phase 1.5: Test failed (non-blocking): {e}")
+        if filter_result:
+            # Track costs
+            if filter_result.get('ai_provider') == 'gemini':
+                cost = calculate_gemini_api_cost(...)
+            else:
+                cost = calculate_claude_api_cost(...)
+            add_api_cost(cost, "executive_summary_phase1_5", ticker)
+
+            # Apply filter to Phase 1 output
+            json_output = apply_filter_to_phase1(json_output, filter_result)
+            phase1_5_model_used = filter_result.get('model', 'unknown')
+
+            # Send diagnostic email
+            filter_email_html = generate_known_info_filter_email(ticker, filter_result)
+            send_email(subject=email_subject, html_body=filter_email_html, to=ADMIN_EMAIL)
+    except Exception as e:
+        LOG.warning(f"[{ticker}] Phase 1.5: Failed, falling back to Phase 1: {e}")
+        # Falls back to original Phase 1 output
 ```
+
+### apply_filter_to_phase1()
+
+Applies Phase 1.5 filter results to Phase 1 JSON:
+
+```python
+def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
+    """
+    Apply Phase 1.5 filter results to Phase 1 JSON.
+
+    Actions:
+    - REMOVE: Delete bullet/paragraph entirely from Phase 1 JSON
+    - REWRITE: Replace content with rewritten_content (NEW-only claims)
+    - KEEP: Leave unchanged
+
+    Returns modified JSON ready for Phase 2.
+    """
+```
+
+**Key behaviors:**
+- Creates deep copy (never modifies original)
+- Matches by `bullet_id` (robust, order-independent)
+- REMOVE bullets are deleted from output
+- REWRITE bullets get `content` replaced with `rewritten_content`
+- KEEP bullets pass through unchanged
+
+### Cost Tracking
+
+Phase 1.5 costs are tracked alongside Phase 1, 2, and 3:
+
+- **Function name:** `executive_summary_phase1_5`
+- **Display name:** "🔍 Executive Summary - Phase 1.5" (position 14)
+- **Tracking:** `ai_models` JSONB field includes `phase1_5` key
+
+### Email #2 Display
+
+Email #2 shows the model used for each phase:
+- **When enabled:** `P1: claude-3-sonnet | P1.5: gemini-2.5-flash | P2: claude-3-sonnet | P3: claude-sonnet-4.5`
+- **When disabled:** `P1: claude-3-sonnet | P1.5: OFF | P2: claude-3-sonnet | P3: claude-sonnet-4.5`
 
 ## Email Report
 
@@ -468,10 +535,11 @@ ORDER BY ticker, filing_date DESC, rn;
 
 ## Future Enhancements
 
-1. **Phase 2 Integration:** Add 8-K data to Phase 2's filing context (same filtering logic)
-2. **Production Mode:** Apply filtered output to Phase 2 instead of original Phase 1 JSON
+1. ~~**Phase 2 Integration:** Add 8-K data to Phase 2's filing context~~ ✅ DONE
+2. ~~**Production Mode:** Apply filtered output to Phase 2~~ ✅ DONE (toggleable via Admin Settings)
 3. **Claude Fallback:** Re-enable after Gemini stability confirmed
 4. **Metrics Dashboard:** Track KNOWN vs NEW claim ratios over time
+5. **A/B Testing Analysis:** Compare email quality with Phase 1.5 ON vs OFF
 
 ## Commits
 

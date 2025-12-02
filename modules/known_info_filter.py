@@ -199,22 +199,6 @@ which risks are SALIENT NOW and carry editorial weight. An analyst's risk assess
 a company's boilerplate disclosure is not.
 
 ═══════════════════════════════════════════════════════════════════════════════
-PAIRED CLAIMS (Handled by Sentence-Level Filtering)
-═══════════════════════════════════════════════════════════════════════════════
-
-Some claims only make sense as pairs - particularly COMPARISONS. Sentence-level
-filtering handles this naturally:
-
-Example:
-"AWS growth of 20% lags Azure and Google Cloud at 30%"
-- "AWS at 20%" = KNOWN (in transcript)
-- "Azure/Google at 30%" = NEW (not in Amazon's filings)
-- Sentence has NEW claim → KEEP entire sentence (comparison stays intact)
-
-Since we filter at sentence level, paired claims in the same sentence stay together.
-No need to surgically separate comparisons - the whole sentence is kept or removed.
-
-═══════════════════════════════════════════════════════════════════════════════
 STALENESS CHECK (Independent of Filings)
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -313,104 +297,28 @@ comparison. "Beat guidance" is announced WITH the results, so it shares the same
 STALENESS EXAMPLES
 ═══════════════════════════════════════════════════════════════════════════════
 
-STOCK PRICES & TRADING DATA (ALWAYS stale - Category A):
+ALWAYS STALE (Categories A-C):
 
-✗ "Shares were up 0.79% at $389.12 in premarket trading"
-  → KNOWN | Evidence: "Stock price data - continuously observable"
+✗ "Stock has gained 67% year-to-date" → KNOWN | "Stock price data - continuously observable"
+✗ "P/E ratio of 34.5x" → KNOWN | "Valuation multiple - continuously observable"
+✗ "ROE of 26% for TTM" → KNOWN | "Derived metric - continuously observable"
 
-✗ "Stock closed down 3.17% at $390.18 on Monday"
-  → KNOWN | Evidence: "Stock price data - continuously observable"
+STALE WHEN >2 WEEKS OLD (Categories D-H):
 
-✗ "Stock approaching a 52-week high of $403.00"
-  → KNOWN | Evidence: "Stock price data - continuously observable"
-
-✗ "Stock has gained 67% year-to-date"
-  → KNOWN | Evidence: "Stock price data - continuously observable"
-
-✗ "Stock is up 115% over the past year"
-  → KNOWN | Evidence: "Stock price data - continuously observable"
-
-VALUATION RATIOS & MULTIPLES (ALWAYS stale - Category B):
-
-✗ "P/E ratio of 34.5x per Yahoo Finance"
-  → KNOWN | Evidence: "Valuation multiple - continuously observable"
-
-✗ "Trading at 12x forward EV/EBITDA"
-  → KNOWN | Evidence: "Valuation multiple - continuously observable"
-
-✗ "Market cap of $180 billion"
-  → KNOWN | Evidence: "Valuation multiple - continuously observable"
-
-DERIVED METRICS (ALWAYS stale - Category C):
-
-✗ "ROE of 26% for TTM to August 2025"
-  → KNOWN | Evidence: "Derived metric - continuously observable"
-
-✗ "Net income growth of 22% over five years"
-  → KNOWN | Evidence: "Derived metric - continuously observable"
-
-✗ "10% industry average ROE"
-  → KNOWN | Evidence: "Derived metric - continuously observable"
-
-OTHER MARKET DATA (stale when >2 weeks old - Categories D-H):
-
-✗ "Crack spreads averaged $15/bbl in Q2"
-  → KNOWN | Evidence: "Q2 commodity spread - 6 months stale"
-
-✗ "10Y Treasury was 4.5% in September"
-  → KNOWN | Evidence: "September interest rate - 3 months stale"
-
-✗ "Oil averaged $78 last quarter"
-  → KNOWN | Evidence: "Prior quarter oil price - continuously available"
-
-✓ "Oil futures suggest $90 by Q1 2026"
-  → NEW (forward-looking)
+✗ "Oil averaged $78 last quarter" → KNOWN | "Prior quarter oil price - continuously available"
+✓ "Oil futures suggest $90 by Q1 2026" → NEW (forward-looking exception)
 
 DISCRETE RELEASES (stale after 1 week - BACKWARD-LOOKING ONLY):
 
-✗ "Q3 EBITDA of $10.7B" (Q3 earnings released Sep 4, now Dec 1)
-  → KNOWN | Evidence: "Released Sep 4, 2025 - 12 weeks stale"
-
-✗ "Company announced $2B buyback" (announced 2 weeks ago)
-  → KNOWN | Evidence: "Released Nov 18, 2025 - 2 weeks stale"
-
-✗ "Revenue significantly beat guidance" (Q3 earnings released Oct 30, now Dec 1)
-  → KNOWN | Evidence: "Guidance beat announced with Q3 results Oct 30 - 5 weeks stale"
-
-✓ "Q4 revenue of $15.2B" (Q4 earnings released yesterday)
-  → NEW (discrete release <1 week old)
-
-✓ "Analyst upgraded to Buy with $200 target" (issued 3 days ago)
-  → NEW (discrete release <1 week old)
+✗ "Q3 EBITDA of $10.7B" (released Sep 4, now Dec 1) → KNOWN | "Released Sep 4 - 12 weeks stale"
+✓ "Q4 revenue of $15.2B" (released yesterday) → NEW (discrete release <1 week old)
 
 FORWARD-LOOKING (NEVER stale, regardless of announcement date):
 
-✓ "Deal expected to close H2 2026" (merger announced 6 weeks ago)
-  → NEW (future event - hasn't happened yet)
-
-✓ "Conference scheduled for December 10" (announced 5 weeks ago)
-  → NEW (upcoming event - hasn't happened yet)
-
-✓ "Company expects 15% revenue growth in FY2026" (guidance given 8 weeks ago)
-  → NEW (forward guidance - still the current projection)
-
-✓ "FDA approval expected by Q2 2026" (announced 3 months ago)
-  → NEW (regulatory timeline - still pending)
-
-✓ "Fed expected to cut rates at December meeting, 85% probability"
-  → NEW (current market expectation about future event)
-
-✓ "Macro environment is pressuring deposit yields"
-  → NEW (present-tense analysis of current conditions)
-
-✓ "Management committed to not closing any branches"
-  → NEW (ongoing commitment about future actions)
-
-IMPORTANT: A claim can be KNOWN because:
-1. It appears in our filings (evidence = quote from filing), OR
-2. It's stale (evidence = staleness reason) - ONLY for backward-looking claims
-
-Both result in status: "KNOWN" - the evidence field explains why.
+✓ "Deal expected to close H2 2026" (announced 6 weeks ago) → NEW (future event)
+✓ "Company expects 15% revenue growth in FY2026" (guidance 8 weeks ago) → NEW (forward guidance)
+✓ "FDA approval expected by Q2 2026" (announced 3 months ago) → NEW (regulatory timeline)
+✓ "Macro environment is pressuring deposit yields" → NEW (present-tense analysis)
 
 ═══════════════════════════════════════════════════════════════════════════════
 CLAIM EXTRACTION
@@ -721,64 +629,6 @@ JSON output for exempt bullet:
   "action": "KEEP",
   "filtered_content": "",
   "exempt": true
-}
-
-EXAMPLE 4: Paragraph (bottom_line) with multiple sentences
-
-Original paragraph: "Company reported strong Q3 with revenue up 20%. However, stock fell 12% on weak guidance. Analysts are mixed on the outlook."
-
-Analysis:
-├─ Sentence 1: "Company reported strong Q3 with revenue up 20%."
-│  ├─ Claim: "revenue up 20%" → KNOWN (TRANSCRIPT_1: "revenue grew 20%")
-│  ├─ has_material_new: false
-│  └─ sentence_action: REMOVE
-│
-├─ Sentence 2: "However, stock fell 12% on weak guidance."
-│  ├─ Claim: "stock fell 12%" → NEW (market reaction)
-│  ├─ Claim: "weak guidance" → KNOWN (TRANSCRIPT_1: guidance discussed)
-│  ├─ has_material_new: true (stock price is material)
-│  └─ sentence_action: KEEP
-│
-├─ Sentence 3: "Analysts are mixed on the outlook."
-│  ├─ Claim: "analysts are mixed" → NEW (analyst sentiment)
-│  ├─ has_material_new: true
-│  └─ sentence_action: KEEP
-│
-├─ Paragraph verdict: 2 KEEP sentences → action = KEEP
-└─ filtered_content: "However, stock fell 12% on weak guidance. Analysts are mixed on the outlook."
-
-JSON output for this paragraph:
-{
-  "section": "bottom_line",
-  "sentences": [
-    {
-      "text": "Company reported strong Q3 with revenue up 20%.",
-      "claims": [
-        {"claim": "revenue up 20%", "status": "KNOWN", "source_type": "TRANSCRIPT_1", "evidence": "revenue grew 20%"}
-      ],
-      "has_material_new": false,
-      "sentence_action": "REMOVE"
-    },
-    {
-      "text": "However, stock fell 12% on weak guidance.",
-      "claims": [
-        {"claim": "stock fell 12%", "status": "NEW", "source_type": null, "evidence": null},
-        {"claim": "weak guidance", "status": "KNOWN", "source_type": "TRANSCRIPT_1", "evidence": "guidance discussed in call"}
-      ],
-      "has_material_new": true,
-      "sentence_action": "KEEP"
-    },
-    {
-      "text": "Analysts are mixed on the outlook.",
-      "claims": [
-        {"claim": "analysts are mixed", "status": "NEW", "source_type": null, "evidence": null}
-      ],
-      "has_material_new": true,
-      "sentence_action": "KEEP"
-    }
-  ],
-  "action": "KEEP",
-  "filtered_content": "However, stock fell 12% on weak guidance. Analysts are mixed on the outlook."
 }
 
 ═══════════════════════════════════════════════════════════════════════════════

@@ -817,42 +817,50 @@ Return ONLY the JSON object, no other text.
 # SONNET REWRITE PROMPT (Step 3 - Mixed content only)
 # =============================================================================
 
-SONNET_REWRITE_PROMPT = """You are editing a financial news summary for institutional investors. Some sentences contain information already known from company filings (KNOWN), while others contain fresh information (NEW).
+SONNET_REWRITE_PROMPT = """You are a surgical text editor. Your ONLY job is to DELETE specific sentences and GLUE the remaining text for coherence.
 
-Your task: Rewrite to preserve NEW information while removing KNOWN content.
+## YOUR TASK
 
-Rules:
-1. Keep all NEW sentences - this is the valuable content
-2. Remove KNOWN sentences unless minimal context is needed for coherence
-3. You may combine sentences or add brief transitions for flow
-4. Maintain professional financial writing style
-5. If the remaining NEW content is not substantive (just dates, attributions, or trivial details), return REMOVE
+1. DELETE the sentences listed under "SENTENCES TO DELETE" - remove them entirely
+2. GLUE the remaining text:
+   - Add minimal transition words if needed (e.g., "Additionally", "Meanwhile")
+   - Fix capitalization if a sentence now starts the paragraph
+   - Smooth any awkward transitions caused by deletion
 
-CRITICAL CONSTRAINTS:
-- Do NOT introduce any new information, facts, or claims
-- Do NOT infer or extrapolate beyond what is explicitly stated
-- Your role is strictly to surgically remove, restructure, and connect
-- Every fact in your output must come directly from the NEW sentences
-- Minimal bridging words (e.g., "The", "Additionally", "Meanwhile") are allowed, but no new substantive content
+## STRICT RULES - DO NOT VIOLATE
 
-Bias: Err on the side of REMOVE, especially when multiple sentences were already flagged as KNOWN. One surviving sentence must carry genuine analytical value to justify keeping the bullet.
+❌ DO NOT change ANY claims, facts, or numbers in the remaining sentences
+❌ DO NOT remove ANY attributions (e.g., "per reports", "according to analysts", "per company announcements")
+❌ DO NOT add new information
+❌ DO NOT rephrase, summarize, or "improve" the remaining sentences
+❌ DO NOT remove any sentence not in the deletion list
 
-NOT SUBSTANTIVE (return REMOVE if these are the only NEW content):
-- Attributions alone ("per Reuters", "according to Bloomberg")
-- Dates/times without material context ("on Tuesday", "in November")
-- Entity names without new facts about them
-- Generic descriptors ("the regional bank", "the tech giant")
+✅ The remaining sentences must be IDENTICAL to the original, except for:
+   - Minor transition words for flow
+   - Capitalization fixes (if sentence now starts the paragraph)
+   - Punctuation adjustments at deletion boundaries
 
-SUBSTANTIVE (worth keeping):
+## SPECIAL CASE: REMOVE ACTION
+
+If after deleting the specified sentences, the remaining content is NOT substantive, return REMOVE.
+
+NOT SUBSTANTIVE (return REMOVE):
+- Only attributions remain ("per Reuters", "according to Bloomberg")
+- Only dates/times remain ("on Tuesday", "in November")
+- Only entity names without facts
+- Only generic descriptors ("the regional bank")
+
+SUBSTANTIVE (return REWRITE with glued content):
 - Specific numbers, metrics, or data points
 - Named analyst actions (upgrades, downgrades, price targets)
-- New events or developments not in filings
+- New events or developments
 - Third-party commentary with specific claims
 
-Output format (JSON only):
+## OUTPUT FORMAT (JSON only)
+
 {
   "action": "REWRITE" or "REMOVE",
-  "content": "rewritten text here"
+  "content": "text with deletions applied and minimal glue"
 }
 
 If action is REMOVE, content should be empty string.
@@ -1800,59 +1808,37 @@ def _classify_bullet_for_rewrite(item: Dict) -> str:
 
 def _build_rewrite_input(item: Dict, section_type: str) -> Dict:
     """
-    Build JSON input for Sonnet rewrite.
+    Build input for surgical deletion rewrite.
 
     Args:
         item: Bullet or paragraph dict with sentences
         section_type: 'bullet' or 'paragraph'
 
     Returns:
-        Dict formatted for Sonnet rewrite prompt
+        Dict with original content and sentences to delete
     """
     original_content = item.get('original_content', '') or item.get('content', '')
     sentences = item.get('sentences', [])
 
-    known_sentences = []
-    new_sentences = []
+    sentences_to_delete = []
 
     for s in sentences:
         action = s.get('sentence_action', 'KEEP').upper()
         text = s.get('text', '')
 
         if action == 'REMOVE':
-            # Collect evidence for known sentence
-            claims = s.get('claims', [])
-            evidence_parts = []
-            for c in claims:
-                if c.get('status') == 'KNOWN':
-                    source = c.get('source_type', '')
-                    ev = c.get('evidence', '')
-                    if source:
-                        evidence_parts.append(f"{source}")
-                    elif ev:
-                        evidence_parts.append(ev[:50])
-
-            reason = ', '.join(evidence_parts[:2]) if evidence_parts else 'Found in filings'
-            known_sentences.append({
-                'text': text,
-                'reason': reason
-            })
-        else:
-            new_sentences.append({
-                'text': text
-            })
+            sentences_to_delete.append(text)
 
     return {
         'original_content': original_content,
-        'known_sentences': known_sentences,
-        'new_sentences': new_sentences,
+        'sentences_to_delete': sentences_to_delete,
         'context': {
             'section': item.get('section', ''),
             'bullet_id': item.get('bullet_id', ''),
             'type': section_type,
             'total_sentences': len(sentences),
-            'known_count': len(known_sentences),
-            'new_count': len(new_sentences)
+            'delete_count': len(sentences_to_delete),
+            'keep_count': len(sentences) - len(sentences_to_delete)
         }
     }
 
@@ -1884,21 +1870,18 @@ def _rewrite_single_item_sonnet(
 
     rewrite_input = _build_rewrite_input(item, section_type)
 
-    # Build user message
-    user_content = f"""Section: {rewrite_input['context']['section']}
-Type: {rewrite_input['context']['type']}
-Known sentences: {rewrite_input['context']['known_count']} | New sentences: {rewrite_input['context']['new_count']}
+    # Build user message for surgical deletion
+    user_content = f"""ORIGINAL CONTENT:
+{rewrite_input['original_content']}
 
-KNOWN SENTENCES (to remove/minimize):
+SENTENCES TO DELETE ({rewrite_input['context']['delete_count']} of {rewrite_input['context']['total_sentences']}):
 """
-    for ks in rewrite_input['known_sentences']:
-        user_content += f"- \"{ks['text']}\"\n  Reason: {ks['reason']}\n"
+    for i, sentence in enumerate(rewrite_input['sentences_to_delete'], 1):
+        user_content += f"{i}. \"{sentence}\"\n"
 
-    user_content += "\nNEW SENTENCES (to preserve):\n"
-    for ns in rewrite_input['new_sentences']:
-        user_content += f"- \"{ns['text']}\"\n"
-
-    user_content += f"\nORIGINAL CONTENT:\n{rewrite_input['original_content']}\n"
+    user_content += f"""
+TASK: Delete the sentences above from the original content. Glue the remaining text for coherence.
+Do NOT modify any other sentence - keep them exactly as they appear in the original."""
 
     headers = {
         "x-api-key": anthropic_api_key,
@@ -2034,21 +2017,18 @@ def _rewrite_single_item_gemini(
 
         rewrite_input = _build_rewrite_input(item, section_type)
 
-        # Build user message (same format as Sonnet)
-        user_content = f"""Section: {rewrite_input['context']['section']}
-Type: {rewrite_input['context']['type']}
-Known sentences: {rewrite_input['context']['known_count']} | New sentences: {rewrite_input['context']['new_count']}
+        # Build user message for surgical deletion (same format as Sonnet)
+        user_content = f"""ORIGINAL CONTENT:
+{rewrite_input['original_content']}
 
-KNOWN SENTENCES (to remove/minimize):
+SENTENCES TO DELETE ({rewrite_input['context']['delete_count']} of {rewrite_input['context']['total_sentences']}):
 """
-        for ks in rewrite_input['known_sentences']:
-            user_content += f"- \"{ks['text']}\"\n  Reason: {ks['reason']}\n"
+        for i, sentence in enumerate(rewrite_input['sentences_to_delete'], 1):
+            user_content += f"{i}. \"{sentence}\"\n"
 
-        user_content += "\nNEW SENTENCES (to preserve):\n"
-        for ns in rewrite_input['new_sentences']:
-            user_content += f"- \"{ns['text']}\"\n"
-
-        user_content += f"\nORIGINAL CONTENT:\n{rewrite_input['original_content']}\n"
+        user_content += f"""
+TASK: Delete the sentences above from the original content. Glue the remaining text for coherence.
+Do NOT modify any other sentence - keep them exactly as they appear in the original."""
 
         # Create Gemini model with system instruction
         model = genai.GenerativeModel(

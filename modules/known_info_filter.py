@@ -1119,7 +1119,7 @@ def _filter_known_info_gemini(
                         full_prompt,
                         generation_config={
                             'temperature': 0.0,
-                            'max_output_tokens': 40000
+                            'max_output_tokens': 60000
                         }
                     )
                     generation_time_ms = int((time.time() - start_time) * 1000)
@@ -1433,22 +1433,22 @@ def filter_known_information(
         if result and result.get("json_output"):
             LOG.info(f"[{ticker}] Phase 1.5: Gemini succeeded")
         else:
-            LOG.warning(f"[{ticker}] Phase 1.5: Gemini failed, falling back to Claude")
+            LOG.warning(f"[{ticker}] Phase 1.5: Gemini failed")
             result = None
 
-    # Claude fallback
-    if result is None and anthropic_api_key:
-        LOG.info(f"[{ticker}] Phase 1.5: Using Claude Sonnet 4.5 (fallback)")
-        result = _filter_known_info_claude(ticker, phase1_json, filings, anthropic_api_key, eight_k_filings)
-
-        if result and result.get("json_output"):
-            LOG.info(f"[{ticker}] Phase 1.5: Claude succeeded (fallback)")
-        else:
-            LOG.error(f"[{ticker}] Phase 1.5: Claude also failed")
-            result = None
+    # Claude fallback - DISABLED (Dec 2025)
+    # if result is None and anthropic_api_key:
+    #     LOG.info(f"[{ticker}] Phase 1.5: Using Claude Sonnet 4.5 (fallback)")
+    #     result = _filter_known_info_claude(ticker, phase1_json, filings, anthropic_api_key, eight_k_filings)
+    #
+    #     if result and result.get("json_output"):
+    #         LOG.info(f"[{ticker}] Phase 1.5: Claude succeeded (fallback)")
+    #     else:
+    #         LOG.error(f"[{ticker}] Phase 1.5: Claude also failed")
+    #         result = None
 
     if result is None:
-        LOG.error(f"[{ticker}] Phase 1.5: Both Gemini and Claude failed")
+        LOG.error(f"[{ticker}] Phase 1.5: Gemini failed, no fallback available")
         return None
 
     # Build final output

@@ -2451,6 +2451,112 @@ def _resolve_source_type(source_type: str, filing_lookup: Dict) -> str:
     return source_type
 
 
+def _build_filing_timeline_html(filing_lookup: Dict) -> str:
+    """
+    Build HTML section showing filing timeline with days-ago calculation.
+
+    Args:
+        filing_lookup: Dict mapping filing IDs to metadata
+
+    Returns:
+        HTML string for timeline section, or empty string if no filings
+    """
+    if not filing_lookup:
+        return ""
+
+    from datetime import datetime as dt, timedelta
+
+    today = dt.now().date()
+    staleness_cutoff = today - timedelta(days=7)
+
+    # Parse dates and sort chronologically (newest first)
+    filings_with_dates = []
+    for filing_id, meta in filing_lookup.items():
+        date_str = meta.get('date', '')
+        filing_type = meta.get('type', 'Unknown')
+
+        # Parse date string (format: "Sep 04, 2025" or "Nov 30, 2025")
+        filing_date = None
+        if date_str and date_str != 'Unknown Date':
+            try:
+                filing_date = dt.strptime(date_str, '%b %d, %Y').date()
+            except ValueError:
+                try:
+                    filing_date = dt.strptime(date_str, '%B %d, %Y').date()
+                except ValueError:
+                    pass
+
+        # Build display info
+        if filing_type == 'Transcript':
+            quarter = meta.get('quarter', 'Q?')
+            year = meta.get('year', '????')
+            display_name = f"Transcript: {quarter} {year} Earnings Call"
+        elif filing_type == '8-K':
+            short_title = meta.get('short_title', meta.get('title', 'Untitled'))
+            display_name = f"8-K: {short_title}"
+        else:
+            display_name = meta.get('display', filing_id)
+
+        filings_with_dates.append({
+            'id': filing_id,
+            'type': filing_type,
+            'date': filing_date,
+            'date_str': date_str,
+            'display_name': display_name
+        })
+
+    # Sort by date descending (newest first), None dates at end
+    filings_with_dates.sort(key=lambda x: x['date'] if x['date'] else dt.min.date(), reverse=True)
+
+    # Build HTML
+    html = """
+<div class="summary" style="margin-top: 20px;">
+<strong>Filing Timeline (Knowledge Base)</strong>
+<table style="width: 100%; margin-top: 15px; border-collapse: collapse; font-size: 14px;">
+<tr style="border-bottom: 1px solid #e0e0e0;">
+<th style="text-align: left; padding: 8px 12px; color: #666; font-weight: 600;">Filing</th>
+<th style="text-align: right; padding: 8px 12px; color: #666; font-weight: 600;">Date</th>
+<th style="text-align: right; padding: 8px 12px; color: #666; font-weight: 600;">Age</th>
+</tr>
+"""
+
+    current_date_str = today.strftime('%B %d, %Y')
+    html += f"""<tr style="background: #f8f9fa;">
+<td colspan="3" style="padding: 8px 12px; font-size: 13px; color: #495057;">
+<strong>Current Date:</strong> {current_date_str}
+</td>
+</tr>
+"""
+
+    for f in filings_with_dates:
+        if f['date']:
+            days_ago = (today - f['date']).days
+            age_str = f"{days_ago} day{'s' if days_ago != 1 else ''} ago"
+            date_display = f['date'].strftime('%b %d, %Y')
+        else:
+            age_str = "Unknown"
+            date_display = "Unknown"
+
+        html += f"""<tr style="border-bottom: 1px solid #f0f0f0;">
+<td style="padding: 10px 12px;">{_escape_html(f['display_name'])}</td>
+<td style="text-align: right; padding: 10px 12px; color: #666;">{date_display}</td>
+<td style="text-align: right; padding: 10px 12px; color: #888;">{age_str}</td>
+</tr>
+"""
+
+    # Add staleness cutoff line
+    cutoff_str = staleness_cutoff.strftime('%b %d, %Y')
+    html += f"""</table>
+<div style="margin-top: 15px; padding: 12px; background: #fff3cd; border-radius: 6px; font-size: 13px; color: #856404;">
+<strong>Staleness Cutoff:</strong> {cutoff_str}<br>
+Any earnings call or company release before this date is STALE.
+</div>
+</div>
+"""
+
+    return html
+
+
 def generate_known_info_filter_email(ticker: str, filter_result: Dict) -> str:
     """
     Generate simple HTML email showing sentence-level filter results.
@@ -2572,6 +2678,9 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
 </table>
 </div>
 """
+
+    # Add filing timeline section (shows what AI was checking against)
+    html += _build_filing_timeline_html(filing_lookup)
 
     # Add paragraphs section
     if paragraphs:

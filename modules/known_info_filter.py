@@ -897,8 +897,64 @@ def _build_filter_user_content(ticker: str, phase1_json: Dict, filings: Dict, ei
 
     from datetime import date as date_type, timedelta
 
+    # T-7 buffer: Only include filings older than 7 days
+    # This gives articles time to react before we mark their content as "known"
+    today = date_type.today()
+    t7_cutoff = today - timedelta(days=7)
+
+    # First pass: collect all filing dates for timeline (before building content)
+    timeline_entries = []
+
+    if 'transcript' in filings:
+        t = filings['transcript']
+        filing_date = t.get('date')
+        filing_date_only = filing_date.date() if hasattr(filing_date, 'date') else filing_date
+        if filing_date_only and filing_date_only <= t7_cutoff:
+            quarter = t.get('fiscal_quarter', 'Q?')
+            year = t.get('fiscal_year', '????')
+            days_ago = (today - filing_date_only).days
+            timeline_entries.append({
+                'name': f"Transcript: {quarter} {year} Earnings Call",
+                'date': filing_date_only,
+                'days_ago': days_ago
+            })
+
+    if eight_k_filings:
+        for filing in eight_k_filings:
+            filing_date = filing.get('filing_date')
+            if filing_date:
+                filing_date_only = filing_date.date() if hasattr(filing_date, 'date') else filing_date
+                if isinstance(filing_date_only, date_type):
+                    days_ago = (today - filing_date_only).days
+                    short_title = filing.get('report_title', 'Untitled')[:40]
+                    timeline_entries.append({
+                        'name': f"8-K: {short_title}",
+                        'date': filing_date_only,
+                        'days_ago': days_ago
+                    })
+
+    # Sort timeline by date descending (newest first)
+    timeline_entries.sort(key=lambda x: x['date'], reverse=True)
+
+    # Build content with timeline at top
     content = f"TICKER: {ticker}\n"
     content += f"CURRENT DATE: {datetime.now().strftime('%B %d, %Y')}\n\n"
+
+    # Add filing timeline section if we have filings
+    if timeline_entries:
+        content += "=" * 80 + "\n"
+        content += "FILING TIMELINE (Knowledge Base)\n"
+        content += "=" * 80 + "\n\n"
+
+        for entry in timeline_entries:
+            date_str = entry['date'].strftime('%b %d, %Y')
+            status = "STALE" if entry['days_ago'] > 7 else "FRESH"
+            content += f"  {entry['name']}\n"
+            content += f"    Filed: {date_str} ({entry['days_ago']} days ago) → {status}\n\n"
+
+        content += f"STALENESS RULE: Any earnings call or company release older than 7 days is STALE.\n"
+        content += f"Claims about results from stale filings are KNOWN information.\n\n"
+
     content += "=" * 80 + "\n"
     content += "PHASE 1 JSON TO FILTER:\n"
     content += "=" * 80 + "\n\n"
@@ -908,11 +964,6 @@ def _build_filter_user_content(ticker: str, phase1_json: Dict, filings: Dict, ei
     content += "=" * 80 + "\n"
     content += "FILING SOURCES (check claims against these):\n"
     content += "=" * 80 + "\n\n"
-
-    # T-7 buffer: Only include filings older than 7 days
-    # This gives articles time to react before we mark their content as "known"
-    today = date_type.today()
-    t7_cutoff = today - timedelta(days=7)
 
     # Add Transcript if available AND older than T-7
     if 'transcript' in filings:

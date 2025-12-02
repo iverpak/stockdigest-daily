@@ -221,6 +221,41 @@ which risks are SALIENT NOW and carry editorial weight. An analyst's risk assess
 a company's boilerplate disclosure is not.
 
 ═══════════════════════════════════════════════════════════════════════════════
+SOURCE ATTRIBUTIONS - ALWAYS NEW
+═══════════════════════════════════════════════════════════════════════════════
+
+Source attributions indicate WHERE information came from, not the information itself.
+These are ALWAYS NEW - never mark as KNOWN or stale:
+
+✓ "per Reuters" → NEW
+✓ "according to Bloomberg" → NEW
+✓ "per analyst reports" → NEW
+✓ "per company announcements" → NEW
+✓ "according to management" → NEW
+✓ "per SEC filings" → NEW
+
+Attributions provide journalistic sourcing and credibility. They cannot be "stale"
+because they describe the source, not the fact. Always preserve attributions.
+
+═══════════════════════════════════════════════════════════════════════════════
+"NO DEVELOPMENTS" STATEMENTS - PROTECTED (NEVER REMOVE)
+═══════════════════════════════════════════════════════════════════════════════
+
+Statements indicating ABSENCE of news are editorial meta-commentary, not claims.
+These MUST be marked sentence_action=KEEP - they can NEVER be removed:
+
+✓ "No new upside catalysts were discussed in recent articles" → KEEP (protected)
+✓ "No material developments were reported" → KEEP (protected)
+✓ "No new risk factors emerged" → KEEP (protected)
+✓ "No significant downside catalysts were identified" → KEEP (protected)
+
+WHY: These sentences describe what was NOT found in the news. They cannot be
+"known from filings" because filings don't say "nothing happened." These are
+valid editorial conclusions about the current news cycle.
+
+Sections where this applies: bottom_line, upside_scenario, downside_scenario
+
+═══════════════════════════════════════════════════════════════════════════════
 STALENESS CHECK (Independent of Filings)
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1256,6 +1291,67 @@ def _merge_original_content(ai_response: Dict, phase1_json: Dict) -> Dict:
             paragraph['original_content'] = ''
 
     return ai_response
+
+
+def _protect_no_developments_sentences(json_output: Dict) -> Dict:
+    """
+    Force 'no developments' sentences to KEEP - they can NEVER be removed.
+
+    This is a code-level safeguard in addition to the prompt rule.
+    These sentences are editorial meta-commentary about the ABSENCE of news,
+    not claims that can be marked as stale.
+
+    Args:
+        json_output: AI response with bullets and paragraphs
+
+    Returns:
+        Modified json_output with protected sentences forced to KEEP
+    """
+    protected_patterns = [
+        "no new upside catalysts",
+        "no new downside catalysts",
+        "no material developments",
+        "no new risk factors",
+        "no significant developments",
+        "no significant upside",
+        "no significant downside",
+        "no notable developments",
+        "no major developments",
+        "no new catalysts",
+    ]
+
+    protected_sections = ["bottom_line", "upside_scenario", "downside_scenario"]
+
+    protected_count = 0
+
+    # Protect paragraphs (bottom_line, upside_scenario, downside_scenario)
+    for paragraph in json_output.get("paragraphs", []):
+        section = paragraph.get("section", "").lower()
+        if section not in protected_sections:
+            continue
+
+        content = (paragraph.get("original_content", "") or paragraph.get("content", "")).lower()
+
+        for pattern in protected_patterns:
+            if pattern in content:
+                # Force to KEEP - override any AI decision
+                if paragraph.get("action", "").upper() == "REMOVE":
+                    paragraph["action"] = "KEEP"
+                    paragraph["protected"] = True
+                    paragraph["protection_reason"] = f"'No developments' statement protected"
+                    protected_count += 1
+
+                    # Also force all sentences to KEEP
+                    for sentence in paragraph.get("sentences", []):
+                        sentence["sentence_action"] = "KEEP"
+
+                    LOG.info(f"Protected 'no developments' paragraph in {section}")
+                break
+
+    if protected_count > 0:
+        LOG.info(f"Phase 1.5: Protected {protected_count} 'no developments' paragraph(s) from REMOVE")
+
+    return json_output
 
 
 def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
@@ -2376,6 +2472,9 @@ def filter_known_information(
 
     # Merge original_content from Phase 1 JSON (AI doesn't need to echo it back)
     json_output = _merge_original_content(json_output, phase1_json)
+
+    # Protect "no developments" sentences from being removed (code-level safeguard)
+    json_output = _protect_no_developments_sentences(json_output)
 
     # =========================================================================
     # STEP 2 & 3: TRIAGE AND SONNET REWRITE (for mixed content)

@@ -20435,7 +20435,7 @@ async def unsubscribe_page(request: Request, token: str = Query(...)):
                     SET status = 'cancelled', cancelled_at = NOW(), updated_at = NOW()
                     WHERE id = %s
                 """, (user_id,))
-                LOG.info(f"Unsubscribed user {user_id} ({email}) at {datetime.now()}")
+                LOG.info(f"Unsubscribed user {user_id} ({email})")
 
             if not already_used:
                 # Mark token as used

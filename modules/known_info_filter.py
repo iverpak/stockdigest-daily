@@ -221,39 +221,27 @@ which risks are SALIENT NOW and carry editorial weight. An analyst's risk assess
 a company's boilerplate disclosure is not.
 
 ═══════════════════════════════════════════════════════════════════════════════
-SOURCE ATTRIBUTIONS - ALWAYS NEW
+SOURCE ATTRIBUTIONS - EXCLUDED FROM CLAIM EXTRACTION
 ═══════════════════════════════════════════════════════════════════════════════
 
-Source attributions indicate WHERE information came from, not the information itself.
-These are ALWAYS NEW - never mark as KNOWN or stale:
+Source attributions are NOT claims - they indicate WHERE information came from.
+Do NOT include attributions in the claims array. Skip them entirely.
 
-✓ "per Reuters" → NEW
-✓ "according to Bloomberg" → NEW
-✓ "per analyst reports" → NEW
-✓ "per company announcements" → NEW
-✓ "according to management" → NEW
-✓ "per SEC filings" → NEW
+When decomposing a sentence into claims:
+  "Q3 revenue was $15.9B, per Reuters"
+  → Claim 1: "Q3 revenue $15.9B" (evaluate this for KNOWN/NEW)
+  → "per Reuters" is NOT a claim - do not add to claims array
 
-Attributions provide journalistic sourcing and credibility. They cannot be "stale"
-because they describe the source, not the fact. Always preserve attributions.
+  "Analysts upgraded the stock to Buy, according to Bloomberg"
+  → Claim 1: "upgraded to Buy" (evaluate this)
+  → "according to Bloomberg" is NOT a claim - skip it
 
-═══════════════════════════════════════════════════════════════════════════════
-"NO DEVELOPMENTS" STATEMENTS - PROTECTED (NEVER REMOVE)
-═══════════════════════════════════════════════════════════════════════════════
+The sentence verdict should be based ONLY on substantive claims, not attributions.
+Attributions are preserved in the final output but do NOT affect KNOWN/NEW scoring.
 
-Statements indicating ABSENCE of news are editorial meta-commentary, not claims.
-These MUST be marked sentence_action=KEEP - they can NEVER be removed:
-
-✓ "No new upside catalysts were discussed in recent articles" → KEEP (protected)
-✓ "No material developments were reported" → KEEP (protected)
-✓ "No new risk factors emerged" → KEEP (protected)
-✓ "No significant downside catalysts were identified" → KEEP (protected)
-
-WHY: These sentences describe what was NOT found in the news. They cannot be
-"known from filings" because filings don't say "nothing happened." These are
-valid editorial conclusions about the current news cycle.
-
-Sections where this applies: bottom_line, upside_scenario, downside_scenario
+WHY: If a sentence has 2 stale claims + 1 attribution, marking the attribution as
+NEW would incorrectly keep the whole sentence. Attributions should be invisible
+to the scoring - they're metadata, not content.
 
 ═══════════════════════════════════════════════════════════════════════════════
 STALENESS CHECK (Independent of Filings)
@@ -1293,63 +1281,44 @@ def _merge_original_content(ai_response: Dict, phase1_json: Dict) -> Dict:
     return ai_response
 
 
-def _protect_no_developments_sentences(json_output: Dict) -> Dict:
+def _protect_scenario_sections(json_output: Dict) -> Dict:
     """
-    Force 'no developments' sentences to KEEP - they can NEVER be removed.
+    Protect scenario sections from REMOVE - default to KEEP with original content.
 
-    This is a code-level safeguard in addition to the prompt rule.
-    These sentences are editorial meta-commentary about the ABSENCE of news,
-    not claims that can be marked as stale.
+    Scenario sections (bottom_line, upside_scenario, downside_scenario) are editorial
+    synthesis. If the AI marks them for REMOVE, we default to KEEP with original
+    content rather than deleting valuable summary content.
 
     Args:
         json_output: AI response with bullets and paragraphs
 
     Returns:
-        Modified json_output with protected sentences forced to KEEP
+        Modified json_output with scenario sections forced to KEEP if marked REMOVE
     """
-    protected_patterns = [
-        "no new upside catalysts",
-        "no new downside catalysts",
-        "no material developments",
-        "no new risk factors",
-        "no significant developments",
-        "no significant upside",
-        "no significant downside",
-        "no notable developments",
-        "no major developments",
-        "no new catalysts",
-    ]
-
     protected_sections = ["bottom_line", "upside_scenario", "downside_scenario"]
 
     protected_count = 0
 
-    # Protect paragraphs (bottom_line, upside_scenario, downside_scenario)
     for paragraph in json_output.get("paragraphs", []):
         section = paragraph.get("section", "").lower()
         if section not in protected_sections:
             continue
 
-        content = (paragraph.get("original_content", "") or paragraph.get("content", "")).lower()
+        if paragraph.get("action", "").upper() == "REMOVE":
+            # Force to KEEP - use original content (already merged by _merge_original_content)
+            paragraph["action"] = "KEEP"
+            paragraph["protected"] = True
+            paragraph["protection_reason"] = "Scenario section protected from REMOVE"
+            protected_count += 1
 
-        for pattern in protected_patterns:
-            if pattern in content:
-                # Force to KEEP - override any AI decision
-                if paragraph.get("action", "").upper() == "REMOVE":
-                    paragraph["action"] = "KEEP"
-                    paragraph["protected"] = True
-                    paragraph["protection_reason"] = f"'No developments' statement protected"
-                    protected_count += 1
+            # Also force all sentences to KEEP
+            for sentence in paragraph.get("sentences", []):
+                sentence["sentence_action"] = "KEEP"
 
-                    # Also force all sentences to KEEP
-                    for sentence in paragraph.get("sentences", []):
-                        sentence["sentence_action"] = "KEEP"
-
-                    LOG.info(f"Protected 'no developments' paragraph in {section}")
-                break
+            LOG.info(f"[Phase 1.5] Protected {section} from REMOVE → KEEP")
 
     if protected_count > 0:
-        LOG.info(f"Phase 1.5: Protected {protected_count} 'no developments' paragraph(s) from REMOVE")
+        LOG.info(f"Phase 1.5: Protected {protected_count} scenario section(s) from REMOVE")
 
     return json_output
 
@@ -2473,8 +2442,8 @@ def filter_known_information(
     # Merge original_content from Phase 1 JSON (AI doesn't need to echo it back)
     json_output = _merge_original_content(json_output, phase1_json)
 
-    # Protect "no developments" sentences from being removed (code-level safeguard)
-    json_output = _protect_no_developments_sentences(json_output)
+    # Protect scenario sections from REMOVE - default to KEEP with original content
+    json_output = _protect_scenario_sections(json_output)
 
     # =========================================================================
     # STEP 2 & 3: TRIAGE AND SONNET REWRITE (for mixed content)

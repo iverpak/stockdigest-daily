@@ -288,19 +288,21 @@
             margin-bottom: 12px;
         }
 
-        .enrichment-quote {
+        .enrichment-article {
             font-size: 14px;
             color: var(--ink);
             line-height: 1.6;
-            font-style: italic;
-            border-left: 3px solid var(--accent);
-            padding-left: 14px;
             margin-bottom: 12px;
         }
 
-        .enrichment-source {
-            font-size: 12px;
-            color: var(--ink-muted);
+        .enrichment-filing {
+            font-size: 14px;
+            color: var(--ink);
+            line-height: 1.6;
+            background: #eef4fb;
+            border-left: 3px solid var(--accent);
+            padding: 10px 14px;
+            border-radius: 0 4px 4px 0;
         }
 
         @media (max-width: 900px) {
@@ -689,38 +691,38 @@
         <div class="analyze-inner">
             <div class="analyze-header">
                 <h2>How We Analyze</h2>
-                <p>We don't just repeat headlines—we enrich them with context from 10-K/10-Q filings and earnings calls so you see what actually matters. We exclude paywalled content, AI-generated articles, stock promotion, and retail investment sites.</p>
+                <p>We don't just repeat headlines. We enrich them with context from 10-K/10-Q/8-K filings and earnings calls so you see what actually matters. We exclude paywalled content, AI-generated articles, stock promotion, and retail investment sites.</p>
             </div>
             <div class="enrichment-grid">
                 <div class="enrichment-card">
                     <div class="enrichment-label">Quantified Materiality</div>
-                    <div class="enrichment-quote">"Potentially reaching $38B in fines—roughly one-third of Apple's FY2025 net income per the 10-K."</div>
-                    <div class="enrichment-source">From: India Antitrust Law Challenge</div>
+                    <div class="enrichment-article">Apple challenges India's new antitrust law, which allows fines based on global turnover</div>
+                    <div class="enrichment-filing">Apple's FY2025 net income was $112B per the 10-K. A potential $38B fine represents 34% of annual profit.</div>
                 </div>
                 <div class="enrichment-card">
-                    <div class="enrichment-label">Filing Context Added</div>
-                    <div class="enrichment-quote">"Indirect channels, including resellers like Best Buy, accounted for 60% of Apple's total net sales in FY2025 per the 10-K."</div>
-                    <div class="enrichment-source">From: Positive Demand Signals from Best Buy</div>
+                    <div class="enrichment-label">Channel Read-Through</div>
+                    <div class="enrichment-article">Best Buy beat estimates, with CEO citing "new iPhones" as driving upgrades</div>
+                    <div class="enrichment-filing">Indirect channels including resellers like Best Buy accounted for 60% of Apple's total net sales in FY2025 per the 10-K</div>
                 </div>
                 <div class="enrichment-card">
-                    <div class="enrichment-label">Management Explanation</div>
-                    <div class="enrichment-quote">"On the Oct 30 call, management called the current lineup its 'strongest ever' and guided to double-digit growth after a record Q4."</div>
-                    <div class="enrichment-source">From: Future iPhone Roadmap</div>
+                    <div class="enrichment-label">Management Validation</div>
+                    <div class="enrichment-article">Bloomberg reports Apple is preparing iPhone Fold, iPhone 17e, and 20th-anniversary model for 2026-2027</div>
+                    <div class="enrichment-filing">On the Oct 30 call, management called the current lineup its "strongest ever" and guided to double-digit growth after a record Q4</div>
                 </div>
                 <div class="enrichment-card">
-                    <div class="enrichment-label">Growth Trend Evidence</div>
-                    <div class="enrichment-quote">"iPhone net sales were $44.6B, up about 13% YoY per the 10-Q, backing up the shipment growth reported by third-party research."</div>
-                    <div class="enrichment-source">From: Q3 Shipment Growth</div>
+                    <div class="enrichment-label">Third-Party Corroboration</div>
+                    <div class="enrichment-article">Counterpoint Research reports Apple smartphone shipments grew 9% YoY in Q3</div>
+                    <div class="enrichment-filing">iPhone net sales were $44.6B in fiscal Q3 2025, up 13% YoY per the 10-Q, corroborating the third-party data</div>
                 </div>
                 <div class="enrichment-card">
                     <div class="enrichment-label">Risk Materialization</div>
-                    <div class="enrichment-quote">"Apple's FY2025 10-K flags a heavy reliance on single- or limited-source suppliers in Asia—exactly the risk highlighted by the TSMC trade-secrets probe."</div>
-                    <div class="enrichment-source">From: TSMC Trade Secret Probe</div>
+                    <div class="enrichment-article">Taiwanese prosecutors raided former TSMC exec's home in trade secrets probe; exec now at Intel</div>
+                    <div class="enrichment-filing">Apple's FY2025 10-K discloses material dependency on single- or limited-source component suppliers located primarily in Asia</div>
                 </div>
                 <div class="enrichment-card">
-                    <div class="enrichment-label">Strategic Validation</div>
-                    <div class="enrichment-quote">"CEO Tim Cook reported a 'September-quarter record for upgraders,' directly backing the thesis that we're in an active replacement cycle."</div>
-                    <div class="enrichment-source">From: Smartphone Market Growth Drivers</div>
+                    <div class="enrichment-label">Strategic Confirmation</div>
+                    <div class="enrichment-article">Counterpoint identifies replacement cycle inflection as key demand driver, with 358M secondhand iPhones sold since 2023</div>
+                    <div class="enrichment-filing">On the Oct 30 call, CEO Tim Cook confirmed a "September quarter record for upgraders"</div>
                 </div>
             </div>
         </div>
@@ -747,18 +749,30 @@
                                         <td align="right" style="font-family: Arial, Helvetica, sans-serif; font-size: 12px; color: #6b6b6b;">Nov 27, 2025 · Last Close</td>
                                     </tr>
                                 </table>
-                                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top: 20px;">
+                                <!-- Spacer -->
+                                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                                    <tr><td height="20" style="font-size: 0; line-height: 0;">&nbsp;</td></tr>
+                                </table>
+
+                                <!-- Header Main Row -->
+                                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
                                     <tr>
-                                        <td valign="bottom">
-                                            <h1 style="margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: 32px; font-weight: normal; color: #1a1a1a;">Apple Inc.</h1>
-                                            <p style="margin: 8px 0 0 0; font-size: 13px; color: #6b6b6b;"><span style="color: #8b2c24; font-weight: 600;">AAPL</span> · Information Technology</p>
+                                        <td valign="top" style="width: 60%;">
+                                            <h1 style="margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: 34px; font-weight: normal; line-height: 1.1; color: #1a1a1a;">Apple Inc.</h1>
+                                            <p style="margin: 8px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #6b6b6b;"><span style="color: #8b2c24; font-weight: 600;">AAPL</span> · Information Technology</p>
                                         </td>
-                                        <td align="right" valign="bottom">
-                                            <p style="margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: 32px; color: #1a1a1a;">$277.55</p>
-                                            <p style="margin: 6px 0 0 0; font-size: 12px;">
-                                                <span style="color: #6b6b6b;">1D</span> <span style="color: #1e6b4a; font-weight: 500;">+0.21%</span>
-                                                <span style="color: #6b6b6b; margin-left: 12px;">YTD</span> <span style="color: #1e6b4a; font-weight: 500;">+13.82%</span>
-                                            </p>
+                                        <td valign="top" align="right" style="width: 40%;">
+                                            <p style="margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: 34px; font-weight: normal; color: #1a1a1a;">$277.55</p>
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="right" style="margin-top: 6px;">
+                                                <tr>
+                                                    <td align="center" style="font-family: Arial, Helvetica, sans-serif; font-size: 12px; font-weight: 500; padding-right: 16px;">
+                                                        <span style="color: #6b6b6b;">1D</span> <span style="color: #1e6b4a;">+0.21%</span>
+                                                    </td>
+                                                    <td style="font-family: Arial, Helvetica, sans-serif; font-size: 12px; font-weight: 500;">
+                                                        <span style="color: #6b6b6b;">YTD</span> <span style="color: #1e6b4a;">+13.82%</span>
+                                                    </td>
+                                                </tr>
+                                            </table>
                                         </td>
                                     </tr>
                                 </table>
@@ -1261,15 +1275,25 @@
                                         <td align="center">
                                             <p style="margin: 0 0 2px 0; font-family: Georgia, 'Times New Roman', serif; font-size: 18px; color: #1a1a1a;">Weavara</p>
                                             <p style="margin: 0 0 10px 0; font-family: Arial, Helvetica, sans-serif; font-size: 12px; color: #6b6b6b;">Intelligence Delivered Daily</p>
-                                            <p style="margin: 0 0 10px 0;">
-                                                <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b; text-decoration: none;">Terms</a>
-                                                <span style="font-family: Arial, Helvetica, sans-serif; color: #c0c0c0; margin: 0 8px;">·</span>
-                                                <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b; text-decoration: none;">Privacy</a>
-                                                <span style="font-family: Arial, Helvetica, sans-serif; color: #c0c0c0; margin: 0 8px;">·</span>
-                                                <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b; text-decoration: none;">Contact</a>
-                                                <span style="font-family: Arial, Helvetica, sans-serif; color: #c0c0c0; margin: 0 8px;">·</span>
-                                                <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b; text-decoration: none;">Unsubscribe</a>
-                                            </p>
+                                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin: 0 auto 10px auto;">
+                                                <tr>
+                                                    <td style="padding: 0 8px;">
+                                                        <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b; text-decoration: none;">Terms</a>
+                                                    </td>
+                                                    <td style="font-family: Arial, Helvetica, sans-serif; color: #c0c0c0;">·</td>
+                                                    <td style="padding: 0 8px;">
+                                                        <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b; text-decoration: none;">Privacy</a>
+                                                    </td>
+                                                    <td style="font-family: Arial, Helvetica, sans-serif; color: #c0c0c0;">·</td>
+                                                    <td style="padding: 0 8px;">
+                                                        <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b; text-decoration: none;">Contact</a>
+                                                    </td>
+                                                    <td style="font-family: Arial, Helvetica, sans-serif; color: #c0c0c0;">·</td>
+                                                    <td style="padding: 0 8px;">
+                                                        <a href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #6b6b6b; text-decoration: none;">Unsubscribe</a>
+                                                    </td>
+                                                </tr>
+                                            </table>
                                             <p style="margin: 0 0 4px 0; font-family: Arial, Helvetica, sans-serif; font-size: 10px; line-height: 1.5; color: #8a8a8a;">For informational and educational purposes only. Not investment advice.</p>
                                             <p style="margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: #a0a0a0;">© 2025 Weavara. All rights reserved.</p>
                                         </td>

@@ -8103,6 +8103,8 @@ RETAIL_PLATFORM_KEYWORDS = [
     "most popular narrative",                 # Their proprietary valuation term (NEW - Oct 2025)
     "read the complete narrative",            # Their standard CTA with proprietary term (NEW - Oct 2025)
     "see our latest analysis for",            # Variant of "see our full analysis for" (NEW - Oct 2025)
+    "view our latest analysis for",           # Another Simply Wall St CTA variant (NEW - Dec 2025)
+    "free analyst report for",                # Simply Wall St upsell CTA (NEW - Dec 2025)
 ]
 
 def is_retail_platform_content(content: str) -> Tuple[bool, Optional[str]]:

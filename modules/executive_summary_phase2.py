@@ -578,7 +578,8 @@ Downstream Customers: {entity_refs['downstream']}
                     user_content,
                     generation_config={
                         'temperature': 0.0,
-                        'max_output_tokens': 20000
+                        'max_output_tokens': 20000,
+                        'response_mime_type': 'application/json'
                     }
                 )
                 generation_time_ms = int((time.time() - start_time) * 1000)

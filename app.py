@@ -13266,31 +13266,35 @@ def send_beta_signup_notification(name: str, email: str, ticker1: str, ticker2: 
 
 def export_beta_users_to_csv() -> int:
     """
-    Export active beta users to CSV for daily processing.
-    Called daily at 11:00 PM EST via Render cron.
+    DEPRECATED: Legacy function. Use export_users_csv() instead.
+    Export active users to CSV for daily processing.
 
+    Uses: users + user_tickers tables (Dec 2025 schema)
     Returns: Number of users exported
     """
     output_path = "data/user_tickers.csv"
 
     try:
         with db() as conn, conn.cursor() as cur:
+            # Get active users with their tickers
             cur.execute("""
-                SELECT name, email, ticker1, ticker2, ticker3
-                FROM beta_users
-                WHERE status = 'active'
-                ORDER BY email
+                SELECT u.name, u.email, STRING_AGG(ut.ticker, ',' ORDER BY ut.ticker) as tickers
+                FROM users u
+                LEFT JOIN user_tickers ut ON u.id = ut.user_id
+                WHERE u.status = 'active'
+                GROUP BY u.id, u.name, u.email
+                ORDER BY u.email
             """)
             users = cur.fetchall()
 
-        # Write CSV with header
+        # Write CSV with header (new format: comma-separated tickers)
         with open(output_path, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow(['name', 'email', 'ticker1', 'ticker2', 'ticker3'])
+            writer.writerow(['name', 'email', 'tickers'])
             for user in users:
-                writer.writerow([user['name'], user['email'], user['ticker1'], user['ticker2'], user['ticker3']])
+                writer.writerow([user['name'], user['email'], user['tickers'] or ''])
 
-        LOG.info(f"✅ Exported {len(users)} active beta users to {output_path}")
+        LOG.info(f"✅ Exported {len(users)} active users to {output_path}")
         return len(users)
 
     except Exception as e:
@@ -25561,12 +25565,12 @@ def get_admin_stats(token: str = Query(...)):
 
     try:
         with db() as conn, conn.cursor() as cur:
-            # Count pending users
-            cur.execute("SELECT COUNT(*) as count FROM beta_users WHERE status = 'pending'")
+            # Count pending users (uses new users table)
+            cur.execute("SELECT COUNT(*) as count FROM users WHERE status = 'pending'")
             pending_users = cur.fetchone()['count']
 
-            # Count active users
-            cur.execute("SELECT COUNT(*) as count FROM beta_users WHERE status = 'active'")
+            # Count active users (uses new users table)
+            cur.execute("SELECT COUNT(*) as count FROM users WHERE status = 'active'")
             active_users = cur.fetchone()['count']
 
             # Get unified queue status (same logic as /api/queue-status)
@@ -28527,15 +28531,14 @@ async def _run_financials_check_job(job_id: str):
     try:
         global _financials_check_job
 
-        # Get all unique tickers from active users
+        # Get all unique tickers from active users (using normalized schema)
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                SELECT DISTINCT ticker1 AS ticker FROM beta_users WHERE status = 'active'
-                UNION
-                SELECT DISTINCT ticker2 AS ticker FROM beta_users WHERE status = 'active'
-                UNION
-                SELECT DISTINCT ticker3 AS ticker FROM beta_users WHERE status = 'active'
-                ORDER BY ticker
+                SELECT DISTINCT ut.ticker
+                FROM user_tickers ut
+                JOIN users u ON ut.user_id = u.id
+                WHERE u.status = 'active'
+                ORDER BY ut.ticker
             """)
             user_tickers = [row['ticker'] for row in cur.fetchall() if row['ticker']]
 
@@ -28612,15 +28615,14 @@ async def get_missing_financials_status(token: str):
         if not check_admin_token(token):
             return {"status": "error", "message": "Unauthorized"}
 
-        # Get all unique tickers from active users
+        # Get all unique tickers from active users (using normalized schema)
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                SELECT DISTINCT ticker1 AS ticker FROM beta_users WHERE status = 'active'
-                UNION
-                SELECT DISTINCT ticker2 AS ticker FROM beta_users WHERE status = 'active'
-                UNION
-                SELECT DISTINCT ticker3 AS ticker FROM beta_users WHERE status = 'active'
-                ORDER BY ticker
+                SELECT DISTINCT ut.ticker
+                FROM user_tickers ut
+                JOIN users u ON ut.user_id = u.id
+                WHERE u.status = 'active'
+                ORDER BY ut.ticker
             """)
             user_tickers = [row['ticker'] for row in cur.fetchall() if row['ticker']]
 
@@ -30620,14 +30622,17 @@ async def generate_user_reports_api(request: Request):
         ticker_recipients = {}
 
         with db() as conn, conn.cursor() as cur:
-            # Use parameterized query to fetch selected user accounts by ID
+            # Use parameterized query to fetch selected user accounts by ID (normalized schema)
             placeholders = ','.join(['%s'] * len(user_ids))
             cur.execute(f"""
-                SELECT name, email, ticker1, ticker2, ticker3
-                FROM beta_users
-                WHERE id IN ({placeholders})
-                AND status = 'active'
-                ORDER BY created_at
+                SELECT u.id, u.name, u.email,
+                       ARRAY_AGG(ut.ticker ORDER BY ut.added_at) AS tickers
+                FROM users u
+                LEFT JOIN user_tickers ut ON u.id = ut.user_id
+                WHERE u.id IN ({placeholders})
+                AND u.status = 'active'
+                GROUP BY u.id, u.name, u.email
+                ORDER BY u.created_at
             """, user_ids)
             users = cur.fetchall()
 
@@ -30642,7 +30647,7 @@ async def generate_user_reports_api(request: Request):
             # Deduplicate tickers and build recipient mapping
             for user in users:
                 email = user['email']
-                tickers = [user['ticker1'], user['ticker2'], user['ticker3']]
+                tickers = user['tickers'] or []  # Handle NULL if no tickers
                 for ticker in tickers:
                     if ticker:
                         ticker = ticker.upper().strip()

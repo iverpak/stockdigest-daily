@@ -1449,14 +1449,13 @@ def _fetch_filtered_8k_filings(ticker: str, db_func, last_transcript_date=None) 
                           exhibit_number = 'MAIN' OR
                           exhibit_number = '2.1'
                       )
-                      -- Layer 3: Title exclusions (legal boilerplate + routine dividends)
+                      -- Layer 3: Title exclusions (legal boilerplate)
                       AND report_title NOT ILIKE '%%Legal Opinion%%'
                       AND report_title NOT ILIKE '%%Underwriting Agreement%%'
                       AND report_title NOT ILIKE '%%Indenture%%'
                       AND report_title NOT ILIKE '%%Officers'' Certificate%%'
                       AND report_title NOT ILIKE '%%Notes Due%%'
                       AND report_title NOT ILIKE '%%Bylaws%%'
-                      AND report_title NOT ILIKE '%%Dividend%%'
                 )
                 SELECT filing_date, report_title, item_codes, summary_markdown
                 FROM filtered_8k

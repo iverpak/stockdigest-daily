@@ -1241,6 +1241,11 @@ When multiple bullets discuss same underlying business (e.g., 4 analyst bullets 
   - Status: Currently unprofitable, breakeven 2026
   - Timeline: Austin by year-end, 8-10 metros pending approvals
 
+VARIETY RULE: Avoid verbatim repetition across bullets
+Each specific filing excerpt (e.g., "$3.8B FSD deferred revenue per Q3 10-Q") should appear
+in at most ONE bullet's context. If the same data point is relevant to multiple bullets,
+use it for the FIRST bullet and find DIFFERENT filing data for subsequent bullets.
+
 ═══════════════════════════════════════════════════════════════════════════════
 IMPACT TAG CALCULATION
 ═══════════════════════════════════════════════════════════════════════════════

@@ -13867,6 +13867,155 @@ async def build_enhanced_digest_html(articles_by_ticker: Dict[str, Dict[str, Lis
             html.append(f"<div>{' | '.join(metrics_parts)}</div>")
             html.append("</div>")
 
+        # Filing Sources box (Phase 2 Context) - shows what filings were available for enrichment
+        try:
+            filing_entries = []
+
+            with db() as conn, conn.cursor() as cur:
+                # Fetch latest Transcript
+                cur.execute("""
+                    SELECT 'Transcript' as filing_type, fiscal_quarter, fiscal_year, report_date as filing_date,
+                           NULL as item_codes, NULL as exhibit_number,
+                           CONCAT(fiscal_quarter, ' ', fiscal_year, ' Earnings Call') as description
+                    FROM transcript_summaries
+                    WHERE ticker = %s AND report_type = 'transcript'
+                    ORDER BY fiscal_year DESC, fiscal_quarter DESC
+                    LIMIT 1
+                """, (ticker,))
+                row = cur.fetchone()
+                if row and row['filing_date']:
+                    filing_entries.append({
+                        'type': 'Transcript',
+                        'description': row['description'],
+                        'date': row['filing_date'],
+                        'item_codes': None,
+                        'exhibit_number': None
+                    })
+
+                # Fetch latest 10-Q
+                cur.execute("""
+                    SELECT 'SEC Filing' as filing_type, fiscal_quarter, fiscal_year, filing_date,
+                           NULL as item_codes, NULL as exhibit_number,
+                           CONCAT(fiscal_quarter, ' ', fiscal_year, ' 10-Q') as description
+                    FROM sec_filings
+                    WHERE ticker = %s AND filing_type = '10-Q'
+                    ORDER BY fiscal_year DESC, fiscal_quarter DESC
+                    LIMIT 1
+                """, (ticker,))
+                row = cur.fetchone()
+                if row and row['filing_date']:
+                    filing_entries.append({
+                        'type': '10-Q',
+                        'description': row['description'],
+                        'date': row['filing_date'],
+                        'item_codes': None,
+                        'exhibit_number': None
+                    })
+
+                # Fetch latest 10-K
+                cur.execute("""
+                    SELECT 'SEC Filing' as filing_type, fiscal_year, filing_date,
+                           NULL as item_codes, NULL as exhibit_number,
+                           CONCAT('FY', fiscal_year, ' 10-K') as description
+                    FROM sec_filings
+                    WHERE ticker = %s AND filing_type = '10-K'
+                    ORDER BY fiscal_year DESC
+                    LIMIT 1
+                """, (ticker,))
+                row = cur.fetchone()
+                if row and row['filing_date']:
+                    filing_entries.append({
+                        'type': '10-K',
+                        'description': row['description'],
+                        'date': row['filing_date'],
+                        'item_codes': None,
+                        'exhibit_number': None
+                    })
+
+                # Fetch 8-K filings (same filter as Phase 2 - no T-7 delay, after last transcript)
+                # Get transcript date for time window
+                cur.execute("""
+                    SELECT report_date FROM transcript_summaries
+                    WHERE ticker = %s AND report_type = 'transcript'
+                    ORDER BY fiscal_year DESC, fiscal_quarter DESC
+                    LIMIT 1
+                """, (ticker,))
+                transcript_row = cur.fetchone()
+                transcript_date = transcript_row['report_date'] if transcript_row else None
+
+                from datetime import date as date_type, timedelta
+                today = date_type.today()
+                max_lookback = today - timedelta(days=90)
+
+                if transcript_date:
+                    t_date = transcript_date.date() if hasattr(transcript_date, 'date') else transcript_date
+                    start_date = max(t_date, max_lookback)
+                else:
+                    start_date = max_lookback
+
+                cur.execute("""
+                    SELECT filing_date, report_title, item_codes, exhibit_number
+                    FROM company_releases
+                    WHERE ticker = %s
+                      AND source_type = '8k_exhibit'
+                      AND filing_date > %s
+                      AND filing_date <= %s
+                      AND (
+                          item_codes LIKE '%%1.01%%' OR item_codes LIKE '%%1.02%%' OR
+                          item_codes LIKE '%%2.01%%' OR item_codes LIKE '%%2.02%%' OR
+                          item_codes LIKE '%%2.03%%' OR item_codes LIKE '%%2.05%%' OR
+                          item_codes LIKE '%%2.06%%' OR item_codes LIKE '%%4.01%%' OR
+                          item_codes LIKE '%%4.02%%' OR item_codes LIKE '%%5.01%%' OR
+                          item_codes LIKE '%%5.02%%' OR item_codes LIKE '%%5.07%%' OR
+                          item_codes LIKE '%%7.01%%' OR item_codes LIKE '%%8.01%%' OR
+                          item_codes = 'Unknown'
+                      )
+                      AND (exhibit_number LIKE '99%%' OR exhibit_number = 'MAIN' OR exhibit_number = '2.1')
+                      AND report_title NOT ILIKE '%%Legal Opinion%%'
+                      AND report_title NOT ILIKE '%%Underwriting Agreement%%'
+                      AND report_title NOT ILIKE '%%Indenture%%'
+                      AND report_title NOT ILIKE '%%Officers'' Certificate%%'
+                      AND report_title NOT ILIKE '%%Notes Due%%'
+                      AND report_title NOT ILIKE '%%Bylaws%%'
+                    ORDER BY filing_date DESC, exhibit_number ASC
+                """, (ticker, start_date, today))
+
+                for row in cur.fetchall():
+                    filing_entries.append({
+                        'type': '8-K',
+                        'description': row['report_title'],
+                        'date': row['filing_date'],
+                        'item_codes': row['item_codes'],
+                        'exhibit_number': row['exhibit_number']
+                    })
+
+            # Sort all entries by date descending (newest first)
+            filing_entries.sort(key=lambda x: x['date'] if x['date'] else date_type.min, reverse=True)
+
+            if filing_entries:
+                html.append("<div style='background:#f0f7ff; padding:12px; margin:16px 0; font-size:13px; border-left:3px solid #6366f1;'>")
+                html.append("<div style='font-weight:bold; margin-bottom:6px;'>📁 Filing Sources (Phase 2 Context)</div>")
+                html.append("<div>")
+
+                for entry in filing_entries:
+                    date_str = entry['date'].strftime('%b %d, %Y') if hasattr(entry['date'], 'strftime') else str(entry['date'])
+
+                    if entry['type'] == '8-K':
+                        # Full details for 8-K: name, date, items, exhibit
+                        item_codes = entry['item_codes'] or 'Unknown'
+                        exhibit = entry['exhibit_number'] or 'N/A'
+                        # Truncate long titles
+                        title = entry['description'][:60] + '...' if len(entry['description'] or '') > 60 else entry['description']
+                        html.append(f"• <strong>8-K:</strong> {title} ({date_str}) [Items: {item_codes}] [Ex: {exhibit}]<br>")
+                    else:
+                        # Simple format for Transcript, 10-Q, 10-K
+                        html.append(f"• <strong>{entry['type']}:</strong> {entry['description']} ({date_str})<br>")
+
+                html.append("</div>")
+                html.append("</div>")
+        except Exception as e:
+            LOG.warning(f"[{ticker}] Could not fetch filing sources for Email #2: {e}")
+
         html.append(f"<h2>🎯 Target Company: {company_name} ({ticker})</h2>")
 
         # Display executive summary

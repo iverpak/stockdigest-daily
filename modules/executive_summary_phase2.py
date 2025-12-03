@@ -244,7 +244,129 @@ def _fetch_available_filings(ticker: str, db_func) -> Dict[str, Dict]:
         LOG.error(f"[{ticker}] Failed to fetch filings: {e}")
         return {}
 
+    # Fetch 8-K filings (after transcript date, no T-7 delay for Phase 2)
+    transcript_date = None
+    if 'transcript' in filings and filings['transcript'].get('date'):
+        t_date = filings['transcript']['date']
+        transcript_date = t_date.date() if hasattr(t_date, 'date') else t_date
+
+    eight_k_list = _fetch_8k_filings_for_phase2(ticker, db_func, transcript_date)
+    if eight_k_list:
+        filings['8k'] = eight_k_list
+
     return filings
+
+
+def _fetch_8k_filings_for_phase2(ticker: str, db_func, last_transcript_date=None) -> List[Dict]:
+    """
+    Fetch 8-K filings for Phase 2 context enrichment.
+
+    Unlike Phase 1.5 (which uses T-7 buffer for duplicate detection), Phase 2 fetches
+    8-Ks IMMEDIATELY (no delay) since the purpose is context enrichment, not filtering.
+
+    Applies 3-layer filtering (same as Phase 1.5):
+    - Layer 1: Item code filter (material events only)
+    - Layer 2: Exhibit number filter (press releases, not legal docs)
+    - Layer 3: Title keyword filter (exclude boilerplate)
+
+    Time window:
+    - Start: Last transcript date (or 90-day fallback)
+    - End: Today (NO T-7 delay - immediate access for context)
+    - Max: 90 days
+
+    No exhibit cap (unlike Phase 1.5's max 3 per filing date).
+
+    Args:
+        ticker: Stock ticker
+        db_func: Database connection function
+        last_transcript_date: Date of last earnings call (optional)
+
+    Returns:
+        List of 8-K filings with filing_date, report_title, item_codes, exhibit_number, summary_markdown
+    """
+    from datetime import date, timedelta
+
+    try:
+        with db_func() as conn, conn.cursor() as cur:
+            # Calculate time window
+            today = date.today()
+            end_date = today  # NO T-7 delay for Phase 2 (immediate access)
+            max_lookback = today - timedelta(days=90)  # 90-day safety cap
+
+            # Start date: after last transcript, or 90-day fallback
+            if last_transcript_date:
+                start_date = max(last_transcript_date, max_lookback)
+            else:
+                start_date = max_lookback
+
+            LOG.info(f"[{ticker}] Phase 2: Fetching 8-Ks from {start_date} to {end_date} (no T-7 delay)")
+
+            # Query with 3-layer filtering (no exhibit cap)
+            cur.execute("""
+                SELECT
+                    filing_date,
+                    report_title,
+                    item_codes,
+                    exhibit_number,
+                    summary_markdown
+                FROM company_releases
+                WHERE ticker = %s
+                  AND source_type = '8k_exhibit'
+                  -- Time window
+                  AND filing_date > %s
+                  AND filing_date <= %s
+                  -- Layer 1: Item code filter (include if ANY of these material codes)
+                  AND (
+                      item_codes LIKE '%%1.01%%' OR
+                      item_codes LIKE '%%1.02%%' OR
+                      item_codes LIKE '%%2.01%%' OR
+                      item_codes LIKE '%%2.02%%' OR
+                      item_codes LIKE '%%2.03%%' OR
+                      item_codes LIKE '%%2.05%%' OR
+                      item_codes LIKE '%%2.06%%' OR
+                      item_codes LIKE '%%4.01%%' OR
+                      item_codes LIKE '%%4.02%%' OR
+                      item_codes LIKE '%%5.01%%' OR
+                      item_codes LIKE '%%5.02%%' OR
+                      item_codes LIKE '%%5.07%%' OR
+                      item_codes LIKE '%%7.01%%' OR
+                      item_codes LIKE '%%8.01%%' OR
+                      item_codes = 'Unknown'
+                  )
+                  -- Layer 2: Exhibit number filter (press releases + main body + merger agreements)
+                  AND (
+                      exhibit_number LIKE '99%%' OR
+                      exhibit_number = 'MAIN' OR
+                      exhibit_number = '2.1'
+                  )
+                  -- Layer 3: Title exclusions (legal boilerplate)
+                  AND report_title NOT ILIKE '%%Legal Opinion%%'
+                  AND report_title NOT ILIKE '%%Underwriting Agreement%%'
+                  AND report_title NOT ILIKE '%%Indenture%%'
+                  AND report_title NOT ILIKE '%%Officers'' Certificate%%'
+                  AND report_title NOT ILIKE '%%Notes Due%%'
+                  AND report_title NOT ILIKE '%%Bylaws%%'
+                ORDER BY filing_date DESC, exhibit_number ASC
+            """, (ticker, start_date, end_date))
+
+            rows = cur.fetchall()
+
+            filings = []
+            for row in rows:
+                filings.append({
+                    'filing_date': row['filing_date'] if isinstance(row, dict) else row[0],
+                    'report_title': row['report_title'] if isinstance(row, dict) else row[1],
+                    'item_codes': row['item_codes'] if isinstance(row, dict) else row[2],
+                    'exhibit_number': row['exhibit_number'] if isinstance(row, dict) else row[3],
+                    'summary_markdown': row['summary_markdown'] if isinstance(row, dict) else row[4]
+                })
+
+            LOG.info(f"[{ticker}] Phase 2: Found {len(filings)} 8-K filings (no exhibit cap)")
+            return filings
+
+    except Exception as e:
+        LOG.error(f"[{ticker}] Phase 2: Error fetching 8-K filings: {e}")
+        return []
 
 
 # Emoji converter deleted - Phase 2 accepts text with emoji or markdown headers
@@ -258,12 +380,12 @@ def _build_phase2_user_content(ticker: str, phase1_json: Dict, filings: Dict) ->
     Format matches old _build_executive_summary_prompt() structure:
     - Current date for temporal checks
     - Phase 1 JSON first
-    - Then filing sources with proper headers (Transcript, 10-Q, 10-K)
+    - Then filing sources with proper headers (Transcript, 8-Ks, 10-Q, 10-K)
 
     Args:
         ticker: Stock ticker symbol
         phase1_json: Complete Phase 1 JSON output
-        filings: Dict with keys '10k', '10q', 'transcript'
+        filings: Dict with keys '10k', '10q', 'transcript', '8k'
 
     Returns:
         str: Formatted user content for Phase 2 prompt
@@ -294,6 +416,48 @@ def _build_phase2_user_content(ticker: str, phase1_json: Dict, filings: Dict) ->
         content += f"LATEST EARNINGS CALL (TRANSCRIPT):\n\n"
         content += f"[{ticker} ({company}) {quarter} {year} Earnings Call ({date})]\n\n"
         content += f"{transcript_text}\n\n\n"
+
+    # Add 8-K filings if available (after Transcript, before 10-Q)
+    # These are material events since last earnings call
+    if '8k' in filings and filings['8k']:
+        eight_k_list = filings['8k']
+
+        # Calculate date range for display
+        dates = [f['filing_date'] for f in eight_k_list if f.get('filing_date')]
+        if dates:
+            # Dates are already sorted DESC, so last is oldest, first is newest
+            newest_date = dates[0]
+            oldest_date = dates[-1]
+            if hasattr(newest_date, 'strftime'):
+                newest_str = newest_date.strftime('%b %d, %Y')
+                oldest_str = oldest_date.strftime('%b %d, %Y')
+            else:
+                newest_str = str(newest_date)
+                oldest_str = str(oldest_date)
+            date_range = f"between {oldest_str} and {newest_str}"
+        else:
+            date_range = "recent"
+
+        content += f"RECENT 8-K FILINGS (SINCE LAST EARNINGS):\n\n"
+        content += f"[{len(eight_k_list)} filing(s) {date_range}]\n\n"
+
+        for i, filing in enumerate(eight_k_list, start=1):
+            filing_date = filing.get('filing_date')
+            if hasattr(filing_date, 'strftime'):
+                date_str = filing_date.strftime('%b %d, %Y')
+            else:
+                date_str = str(filing_date) if filing_date else 'Unknown Date'
+
+            report_title = filing.get('report_title', 'Untitled')
+            item_codes = filing.get('item_codes', 'Unknown')
+            exhibit_number = filing.get('exhibit_number', 'Unknown')
+            summary = filing.get('summary_markdown', '')
+
+            content += f"--- 8-K #{i}: {date_str} (Exhibit {exhibit_number}) ---\n"
+            content += f"[{ticker} - {report_title} (Items: {item_codes})]\n\n"
+            content += f"{summary}\n\n"
+
+        content += "\n"
 
     # Add 10-Q if available (matches old format)
     if '10q' in filings:

@@ -307,6 +307,13 @@ Keep context that:
 ✅ Adds scale (denominators, baselines, comparisons)
 ✅ Provides dependencies (sole suppliers, customer concentration, contractual terms)
 
+Step 1.5: DEDUPLICATE FILING EXCERPTS ACROSS BULLETS
+Before integrating, scan ALL bullets' "context" fields for repeated filing facts.
+If the same filing excerpt appears in multiple bullets (e.g., "$3.8B FSD deferred revenue
+per Q3 10-Q"), keep it in the FIRST bullet encountered and REMOVE it from subsequent
+bullets' context before integration. This ensures each filing fact appears only once
+in the final report.
+
 Step 2: INTEGRATE what remains
 Weave Phase 1 content + filtered Phase 2 context into one cohesive paragraph.
 Preserve ALL Phase 1 facts and ALL useful Phase 2 context.

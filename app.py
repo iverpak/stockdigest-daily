@@ -12778,7 +12778,7 @@ async def generate_ai_final_summaries(articles_by_ticker: Dict[str, Dict[str, Li
 
                             # Log summary stats
                             summary = filter_result.get("summary", {})
-                            LOG.info(f"[{ticker}] ✅ Phase 1.5 Applied: {summary.get('kept', 0)} kept, {summary.get('rewritten', 0)} rewritten, {summary.get('removed', 0)} removed ({phase1_5_model_used}, {phase1_5_prompt_tokens} prompt, {phase1_5_completion_tokens} completion)")
+                            LOG.info(f"[{ticker}] ✅ Phase 1.5 Applied: {summary.get('kept', 0)} kept, {summary.get('removed', 0)} removed ({phase1_5_model_used}, {phase1_5_prompt_tokens} prompt, {phase1_5_completion_tokens} completion)")
                         else:
                             LOG.warning(f"[{ticker}] Phase 1.5: Filter returned no results, using original Phase 1 JSON")
                     else:
@@ -17369,7 +17369,7 @@ async def process_regenerate_email_phase(job: dict):
                     json_output = apply_filter_to_phase1(json_output, filter_result)
 
                     summary = filter_result.get("summary", {})
-                    LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 1.5 Applied: {summary.get('kept', 0)} kept, {summary.get('rewritten', 0)} rewritten, {summary.get('removed', 0)} removed")
+                    LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 1.5 Applied: {summary.get('kept', 0)} kept, {summary.get('removed', 0)} removed")
                 else:
                     LOG.warning(f"[{ticker}] [JOB {job_id}] Phase 1.5: Filter returned no results")
             else:

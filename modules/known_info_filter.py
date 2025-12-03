@@ -11,21 +11,16 @@ Knowledge Base: Transcript + 8-Ks only
 - 10-K excluded (causes false matches with generic risk categories)
 - 10-Q excluded (Dec 2025) - same issue, Item 1A boilerplate matches specific news
 
-3-Step Flow:
+2-Step Flow:
 1. Sentence-level tagging (Gemini Flash) - Tag each sentence KNOWN or NEW
-2. Mechanical triage:
-   - 100% KNOWN → REMOVE (skip LLM)
-   - 100% NEW → KEEP as-is (skip LLM)
-   - Mixed → proceed to step 3
-3. LLM Rewrite (Sonnet 4.5, only for mixed bullets)
-   - Surgically remove KNOWN content, preserve NEW
-   - Restructure for coherence
-   - Return REWRITE or REMOVE
+2. Threshold-based classification:
+   - EXEMPT sections (scenarios, wall_street, catalysts, key_vars) → KEEP unchanged
+   - 100% KNOWN → REMOVE
+   - ≥2/3 KNOWN → REMOVE
+   - <2/3 KNOWN (includes 1/2, 1/3) → KEEP original
+   - 100% NEW → KEEP original
 
-STATUS: TEST MODE - Runs in parallel with Phase 2, emails findings only.
-        Does NOT modify the production pipeline.
-
-Future: Once validated, Phase 2 will receive filtered output instead of original Phase 1 JSON.
+STATUS: PRODUCTION - Filters Phase 1 JSON before Phase 2 enrichment.
 """
 
 import json
@@ -551,10 +546,17 @@ BULLET SECTIONS TO FILTER (apply full sentence-level filtering):
 - risk_factors
 - competitive_industry_dynamics
 
-BULLET SECTIONS TO EXEMPT (analyze for transparency, but ALWAYS keep original):
+SECTIONS TO EXEMPT (analyze for transparency, but ALWAYS keep original):
+
+BULLET SECTIONS:
 - wall_street_sentiment (analyst opinions ARE the news)
 - upcoming_catalysts (forward-looking editorial value)
 - key_variables (monitoring recommendations, not news claims)
+
+PARAGRAPH SECTIONS (scenarios are editorial synthesis):
+- bottom_line
+- upside_scenario
+- downside_scenario
 
 For EXEMPT sections:
 - DO perform claim extraction and sentence analysis (for transparency/QA visibility)
@@ -564,11 +566,6 @@ For EXEMPT sections:
 - Add "exempt": true to the output
 
 This allows QA review of what WOULD have been filtered, without actually filtering.
-
-PARAGRAPH SECTIONS TO FILTER (apply full sentence-level filtering):
-- bottom_line
-- upside_scenario
-- downside_scenario
 
 ═══════════════════════════════════════════════════════════════════════════════
 CRITICAL REQUIREMENTS (READ CAREFULLY)
@@ -894,59 +891,6 @@ Return ONLY the JSON object, no other text.
 """
 
 
-# =============================================================================
-# SONNET REWRITE PROMPT (Step 3 - Mixed content only)
-# =============================================================================
-
-SONNET_REWRITE_PROMPT = """You are a surgical text editor. Your ONLY job is to DELETE specific sentences and GLUE the remaining text for coherence.
-
-## YOUR TASK
-
-1. DELETE the sentences listed under "SENTENCES TO DELETE" - remove them entirely
-2. GLUE the remaining text:
-   - Add minimal transition words if needed (e.g., "Additionally", "Meanwhile")
-   - Fix capitalization if a sentence now starts the paragraph
-   - Smooth any awkward transitions caused by deletion
-
-## STRICT RULES - DO NOT VIOLATE
-
-❌ DO NOT change ANY claims, facts, or numbers in the remaining sentences
-❌ DO NOT remove ANY attributions (e.g., "per reports", "according to analysts", "per company announcements")
-❌ DO NOT add new information
-❌ DO NOT rephrase, summarize, or "improve" the remaining sentences
-❌ DO NOT remove any sentence not in the deletion list
-
-✅ The remaining sentences must be IDENTICAL to the original, except for:
-   - Minor transition words for flow
-   - Capitalization fixes (if sentence now starts the paragraph)
-   - Punctuation adjustments at deletion boundaries
-
-## SPECIAL CASE: REMOVE ACTION
-
-If after deleting the specified sentences, the remaining content is NOT substantive, return REMOVE.
-
-NOT SUBSTANTIVE (return REMOVE):
-- Only attributions remain ("per Reuters", "according to Bloomberg")
-- Only dates/times remain ("on Tuesday", "in November")
-- Only entity names without facts
-- Only generic descriptors ("the regional bank")
-
-SUBSTANTIVE (return REWRITE with glued content):
-- Specific numbers, metrics, or data points
-- Named analyst actions (upgrades, downgrades, price targets)
-- New events or developments
-- Third-party commentary with specific claims
-
-## OUTPUT FORMAT (JSON only)
-
-{
-  "action": "REWRITE" or "REMOVE",
-  "content": "text with deletions applied and minimal glue"
-}
-
-If action is REMOVE, content should be empty string.
-Return ONLY the JSON object, no other text.
-"""
 
 
 # =============================================================================
@@ -1281,58 +1225,15 @@ def _merge_original_content(ai_response: Dict, phase1_json: Dict) -> Dict:
     return ai_response
 
 
-def _protect_scenario_sections(json_output: Dict) -> Dict:
-    """
-    Protect scenario sections from REMOVE - default to KEEP with original content.
-
-    Scenario sections (bottom_line, upside_scenario, downside_scenario) are editorial
-    synthesis. If the AI marks them for REMOVE, we default to KEEP with original
-    content rather than deleting valuable summary content.
-
-    Args:
-        json_output: AI response with bullets and paragraphs
-
-    Returns:
-        Modified json_output with scenario sections forced to KEEP if marked REMOVE
-    """
-    protected_sections = ["bottom_line", "upside_scenario", "downside_scenario"]
-
-    protected_count = 0
-
-    for paragraph in json_output.get("paragraphs", []):
-        section = paragraph.get("section", "").lower()
-        if section not in protected_sections:
-            continue
-
-        if paragraph.get("action", "").upper() == "REMOVE":
-            # Force to KEEP - use original content (already merged by _merge_original_content)
-            paragraph["action"] = "KEEP"
-            paragraph["protected"] = True
-            paragraph["protection_reason"] = "Scenario section protected from REMOVE"
-            protected_count += 1
-
-            # Also force all sentences to KEEP
-            for sentence in paragraph.get("sentences", []):
-                sentence["sentence_action"] = "KEEP"
-
-            LOG.info(f"[Phase 1.5] Protected {section} from REMOVE → KEEP")
-
-    if protected_count > 0:
-        LOG.info(f"Phase 1.5: Protected {protected_count} scenario section(s) from REMOVE")
-
-    return json_output
-
-
 def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
     """
     Apply Phase 1.5 filter results to Phase 1 JSON.
 
-    This modifies the Phase 1 JSON to remove KNOWN information before Phase 2 enrichment.
+    This modifies the Phase 1 JSON to remove stale information before Phase 2 enrichment.
 
-    Three-step filtering actions:
-    - REMOVE: Delete bullet entirely OR clear paragraph content (100% KNOWN)
-    - KEEP: Use filtered_content if available, otherwise original (100% NEW or exempt)
-    - REWRITE: Use rewritten_content from LLM (mixed NEW+KNOWN, surgically edited)
+    Two-step filtering actions:
+    - REMOVE: Delete bullet entirely OR clear paragraph content (≥2/3 stale)
+    - KEEP: Use original content unchanged (exempt, <2/3 stale, or 100% new)
 
     Exempt sections (action=KEEP, exempt=true) always use original content unchanged.
 
@@ -1347,10 +1248,8 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
             }
         filter_result: Output from filter_known_information() with structure:
             {
-                "bullets": [{"bullet_id": "...", "action": "KEEP|REMOVE|REWRITE",
-                            "filtered_content": "...", "rewritten_content": "...", "exempt": true/false}],
-                "paragraphs": [{"section": "...", "action": "KEEP|REMOVE|REWRITE",
-                               "filtered_content": "...", "rewritten_content": "...", "exempt": true/false}]
+                "bullets": [{"bullet_id": "...", "action": "KEEP|REMOVE", "exempt": true/false}],
+                "paragraphs": [{"section": "...", "action": "KEEP|REMOVE", "exempt": true/false}]
             }
 
     Returns:
@@ -1369,8 +1268,6 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
         if bullet_id:
             bullet_actions[bullet_id] = {
                 'action': bullet.get('action', 'KEEP').upper(),
-                'filtered_content': bullet.get('filtered_content', ''),
-                'rewritten_content': bullet.get('rewritten_content', ''),  # For REWRITE action
                 'exempt': bullet.get('exempt', False)
             }
 
@@ -1381,8 +1278,6 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
         if section:
             paragraph_actions[section] = {
                 'action': para.get('action', 'KEEP').upper(),
-                'filtered_content': para.get('filtered_content', ''),
-                'rewritten_content': para.get('rewritten_content', ''),  # For REWRITE action
                 'exempt': para.get('exempt', False)
             }
 
@@ -1394,8 +1289,7 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
     ]
 
     removed_count = 0
-    filtered_count = 0
-    rewrite_count = 0
+    kept_count = 0
 
     for section_name in bullet_section_names:
         section_data = sections.get(section_name, [])
@@ -1413,49 +1307,24 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
             if bullet_id not in bullet_actions:
                 # No filter action for this bullet - keep unchanged
                 new_bullets.append(bullet)
+                kept_count += 1
                 continue
 
             action_info = bullet_actions[bullet_id]
             action = action_info['action']
-            exempt = action_info['exempt']
 
             if action == 'REMOVE':
                 # Skip this bullet entirely
                 removed_count += 1
                 continue
-            elif action == 'REWRITE':
-                # Use LLM-rewritten content (from mixed classification)
-                rewritten_content = action_info['rewritten_content']
-                if rewritten_content:
-                    # Update the content field with rewritten content
-                    if 'content_integrated' in bullet:
-                        bullet['content_integrated'] = rewritten_content
-                    else:
-                        bullet['content'] = rewritten_content
-                    rewrite_count += 1
-                new_bullets.append(bullet)
-            elif action == 'KEEP':
-                if exempt:
-                    # Exempt section - use original unchanged
-                    new_bullets.append(bullet)
-                else:
-                    # Non-exempt KEEP - use filtered_content if available
-                    filtered_content = action_info['filtered_content']
-                    if filtered_content:
-                        # Update the content field with filtered content
-                        if 'content_integrated' in bullet:
-                            bullet['content_integrated'] = filtered_content
-                        else:
-                            bullet['content'] = filtered_content
-                        filtered_count += 1
-                    new_bullets.append(bullet)
             else:
-                # Unknown action - keep unchanged for safety
+                # KEEP - use original unchanged
                 new_bullets.append(bullet)
+                kept_count += 1
 
         sections[section_name] = new_bullets
 
-    # Process paragraph sections
+    # Process paragraph sections (scenarios are always exempt, so always KEEP)
     paragraph_section_names = ['bottom_line', 'upside_scenario', 'downside_scenario']
 
     for section_name in paragraph_section_names:
@@ -1465,43 +1334,24 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
 
         if section_name not in paragraph_actions:
             # No filter action for this paragraph - keep unchanged
+            kept_count += 1
             continue
 
         action_info = paragraph_actions[section_name]
         action = action_info['action']
-        exempt = action_info['exempt']
 
         if action == 'REMOVE':
-            # For paragraphs, we don't remove entirely - we clear the content
-            # Phase 2 and Email generation can handle empty content gracefully
+            # For paragraphs, clear the content (shouldn't happen for exempt sections)
             if 'content_integrated' in section_data:
                 section_data['content_integrated'] = ''
             else:
                 section_data['content'] = ''
             removed_count += 1
-        elif action == 'REWRITE':
-            # Use LLM-rewritten content (from mixed classification)
-            rewritten_content = action_info['rewritten_content']
-            if rewritten_content:
-                if 'content_integrated' in section_data:
-                    section_data['content_integrated'] = rewritten_content
-                else:
-                    section_data['content'] = rewritten_content
-                rewrite_count += 1
-        elif action == 'KEEP':
-            if not exempt:
-                # Non-exempt KEEP - use filtered_content if available
-                filtered_content = action_info['filtered_content']
-                if filtered_content:
-                    if 'content_integrated' in section_data:
-                        section_data['content_integrated'] = filtered_content
-                    else:
-                        section_data['content'] = filtered_content
-                    filtered_count += 1
-            # Exempt section - leave unchanged
-        # Unknown action - leave unchanged
+        else:
+            # KEEP - leave unchanged
+            kept_count += 1
 
-    LOG.info(f"Phase 1.5 apply_filter: {removed_count} removed, {rewrite_count} rewritten, {filtered_count} filtered")
+    LOG.info(f"Phase 1.5 apply_filter: {kept_count} kept, {removed_count} removed")
 
     return result
 
@@ -1941,20 +1791,48 @@ def _filter_known_info_claude(
 
 
 # =============================================================================
-# STEP 2 & 3: TRIAGE AND SONNET REWRITE
+# STEP 2: THRESHOLD-BASED CLASSIFICATION
 # =============================================================================
 
-def _classify_bullet_for_rewrite(item: Dict) -> str:
+# Sections that are always exempt (never filtered)
+EXEMPT_SECTIONS = {
+    # Bullet sections
+    'wall_street_sentiment',
+    'upcoming_catalysts',
+    'key_variables',
+    # Paragraph sections (scenarios)
+    'bottom_line',
+    'upside_scenario',
+    'downside_scenario'
+}
+
+
+def _classify_bullet_with_threshold(item: Dict, section: str) -> str:
     """
-    Classify a bullet/paragraph for rewrite step.
+    Classify bullet/paragraph using 2/3 threshold rule.
+
+    Rules:
+    - Exempt sections: Always KEEP (bottom_line, upside_scenario, downside_scenario,
+      wall_street_sentiment, upcoming_catalysts, key_variables)
+    - 0% stale (100% NEW): KEEP
+    - <2/3 stale (e.g., 1/2, 1/3): KEEP
+    - ≥2/3 stale: REMOVE
+    - 100% stale: REMOVE
+
+    Args:
+        item: Bullet or paragraph dict with sentences
+        section: Section name (e.g., 'major_developments', 'bottom_line')
 
     Returns:
-        'all_known' - 100% KNOWN sentences → REMOVE (skip LLM)
-        'all_new' - 100% NEW sentences → KEEP as-is (skip LLM)
-        'mixed' - Mixed KNOWN/NEW → needs Sonnet rewrite
-        'exempt' - Exempt section → skip entirely
+        'exempt' - Exempt section → KEEP unchanged
+        'all_new' - 0% stale → KEEP unchanged
+        'mostly_new' - <2/3 stale → KEEP unchanged
+        'mostly_known' - ≥2/3 stale → REMOVE
+        'all_known' - 100% stale → REMOVE
     """
-    if item.get('exempt', False):
+    # Check if section is exempt
+    section_lower = section.lower() if section else ''
+    if section_lower in EXEMPT_SECTIONS or item.get('exempt', False):
         return 'exempt'
 
     sentences = item.get('sentences', [])
@@ -1962,387 +1840,19 @@ def _classify_bullet_for_rewrite(item: Dict) -> str:
         # No sentence analysis available, treat as all_new (keep original)
         return 'all_new'
 
-    known_count = 0
-    new_count = 0
+    # Count stale sentences (those marked for REMOVE by AI)
+    stale_count = sum(1 for s in sentences
+                      if s.get('sentence_action', 'KEEP').upper() == 'REMOVE')
+    total = len(sentences)
 
-    for s in sentences:
-        action = s.get('sentence_action', 'KEEP').upper()
-        if action == 'REMOVE':
-            known_count += 1
-        else:
-            new_count += 1
-
-    if known_count == 0:
+    if stale_count == 0:
         return 'all_new'
-    elif new_count == 0:
+    elif stale_count == total:
         return 'all_known'
+    elif stale_count / total >= 2/3:
+        return 'mostly_known'  # ≥66.7% stale → REMOVE
     else:
-        return 'mixed'
-
-
-def _build_rewrite_input(item: Dict, section_type: str) -> Dict:
-    """
-    Build input for surgical deletion rewrite.
-
-    Args:
-        item: Bullet or paragraph dict with sentences
-        section_type: 'bullet' or 'paragraph'
-
-    Returns:
-        Dict with original content and sentences to delete
-    """
-    original_content = item.get('original_content', '') or item.get('content', '')
-    sentences = item.get('sentences', [])
-
-    sentences_to_delete = []
-
-    for s in sentences:
-        action = s.get('sentence_action', 'KEEP').upper()
-        text = s.get('text', '')
-
-        if action == 'REMOVE':
-            sentences_to_delete.append(text)
-
-    return {
-        'original_content': original_content,
-        'sentences_to_delete': sentences_to_delete,
-        'context': {
-            'section': item.get('section', ''),
-            'bullet_id': item.get('bullet_id', ''),
-            'type': section_type,
-            'total_sentences': len(sentences),
-            'delete_count': len(sentences_to_delete),
-            'keep_count': len(sentences) - len(sentences_to_delete)
-        }
-    }
-
-
-def _rewrite_single_item_sonnet(
-    ticker: str,
-    idx: int,
-    item: Dict,
-    section_type: str,
-    anthropic_api_key: str
-) -> Optional[Dict]:
-    """
-    Rewrite a single mixed-content item using Claude Sonnet 4.5.
-
-    Includes internal HTTP retry logic for transient errors (429, 500, 503, 529).
-
-    Args:
-        ticker: Stock ticker
-        idx: Item index
-        item: Bullet or paragraph dict
-        section_type: 'bullet' or 'paragraph'
-        anthropic_api_key: Anthropic API key
-
-    Returns:
-        Dict with {'action': 'REWRITE'/'REMOVE', 'content': str, 'model': str}
-        or None if failed (caller should try fallback)
-    """
-    from modules.json_utils import extract_json_from_claude_response
-
-    rewrite_input = _build_rewrite_input(item, section_type)
-
-    # Build user message for surgical deletion
-    user_content = f"""ORIGINAL CONTENT:
-{rewrite_input['original_content']}
-
-SENTENCES TO DELETE ({rewrite_input['context']['delete_count']} of {rewrite_input['context']['total_sentences']}):
-"""
-    for i, sentence in enumerate(rewrite_input['sentences_to_delete'], 1):
-        user_content += f"{i}. \"{sentence}\"\n"
-
-    user_content += f"""
-TASK: Delete the sentences above from the original content. Glue the remaining text for coherence.
-Do NOT modify any other sentence - keep them exactly as they appear in the original."""
-
-    headers = {
-        "x-api-key": anthropic_api_key,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json"
-    }
-
-    data = {
-        "model": "claude-sonnet-4-5-20250929",
-        "max_tokens": 2000,
-        "temperature": 0.0,
-        "system": SONNET_REWRITE_PROMPT,
-        "messages": [
-            {
-                "role": "user",
-                "content": user_content
-            }
-        ]
-    }
-
-    # Internal HTTP retry logic for transient errors
-    max_retries = 2
-    response = None
-
-    for attempt in range(max_retries + 1):
-        try:
-            start_time = time.time()
-            response = requests.post(
-                "https://api.anthropic.com/v1/messages",
-                headers=headers,
-                json=data,
-                timeout=60
-            )
-            elapsed_ms = int((time.time() - start_time) * 1000)
-
-            # Success - break retry loop
-            if response.status_code == 200:
-                break
-
-            # Transient errors - retry with exponential backoff
-            if response.status_code in [429, 500, 503, 529] and attempt < max_retries:
-                wait_time = 2 ** attempt  # 1s, 2s
-                LOG.warning(f"[{ticker}] ⚠️ Sonnet rewrite [{idx}] HTTP {response.status_code} "
-                           f"(attempt {attempt + 1}/{max_retries + 1}), retrying in {wait_time}s...")
-                time.sleep(wait_time)
-                continue
-
-            # Non-retryable error or max retries reached
-            break
-
-        except requests.exceptions.Timeout:
-            if attempt < max_retries:
-                wait_time = 2 ** attempt
-                LOG.warning(f"[{ticker}] ⏱️ Sonnet rewrite [{idx}] timeout "
-                           f"(attempt {attempt + 1}/{max_retries + 1}), retrying in {wait_time}s...")
-                time.sleep(wait_time)
-                continue
-            else:
-                LOG.error(f"[{ticker}] ❌ Sonnet rewrite [{idx}] timeout after {max_retries + 1} attempts")
-                return None
-
-        except requests.exceptions.RequestException as e:
-            if attempt < max_retries:
-                wait_time = 2 ** attempt
-                LOG.warning(f"[{ticker}] 🔌 Sonnet rewrite [{idx}] network error "
-                           f"(attempt {attempt + 1}/{max_retries + 1}): {e}, retrying in {wait_time}s...")
-                time.sleep(wait_time)
-                continue
-            else:
-                LOG.error(f"[{ticker}] ❌ Sonnet rewrite [{idx}] network error after {max_retries + 1} attempts: {e}")
-                return None
-
-    # Check response
-    if response is None:
-        LOG.error(f"[{ticker}] ❌ Sonnet rewrite [{idx}] no response after {max_retries + 1} attempts")
-        return None
-
-    if response.status_code != 200:
-        LOG.warning(f"[{ticker}] ❌ Sonnet rewrite [{idx}] failed with HTTP {response.status_code}")
-        return None
-
-    # Parse response
-    response_json = response.json()
-    response_text = response_json.get('content', [{}])[0].get('text', '')
-
-    parsed = extract_json_from_claude_response(response_text, ticker)
-
-    if parsed and 'action' in parsed:
-        action = parsed.get('action', 'KEEP').upper()
-        content = parsed.get('content', '')
-
-        LOG.info(f"[{ticker}] ✅ Sonnet rewrite [{idx}]: {action} ({elapsed_ms}ms)")
-
-        return {
-            'action': action,
-            'content': content if action == 'REWRITE' else '',
-            'rewrite_time_ms': elapsed_ms,
-            'model': 'claude-sonnet-4-5'
-        }
-    else:
-        LOG.warning(f"[{ticker}] ❌ Sonnet rewrite [{idx}] failed to parse JSON response")
-        return None
-
-
-def _rewrite_single_item_gemini(
-    ticker: str,
-    idx: int,
-    item: Dict,
-    section_type: str,
-    gemini_api_key: str
-) -> Optional[Dict]:
-    """
-    Rewrite a single mixed-content item using Gemini 2.5 Pro (fallback).
-
-    Includes internal retry logic for transient errors.
-
-    Args:
-        ticker: Stock ticker
-        idx: Item index
-        item: Bullet or paragraph dict
-        section_type: 'bullet' or 'paragraph'
-        gemini_api_key: Google Gemini API key
-
-    Returns:
-        Dict with {'action': 'REWRITE'/'REMOVE', 'content': str, 'model': str}
-        or None if failed
-    """
-    import google.generativeai as genai
-    from modules.json_utils import extract_json_from_claude_response
-
-    try:
-        genai.configure(api_key=gemini_api_key)
-
-        rewrite_input = _build_rewrite_input(item, section_type)
-
-        # Build user message for surgical deletion (same format as Sonnet)
-        user_content = f"""ORIGINAL CONTENT:
-{rewrite_input['original_content']}
-
-SENTENCES TO DELETE ({rewrite_input['context']['delete_count']} of {rewrite_input['context']['total_sentences']}):
-"""
-        for i, sentence in enumerate(rewrite_input['sentences_to_delete'], 1):
-            user_content += f"{i}. \"{sentence}\"\n"
-
-        user_content += f"""
-TASK: Delete the sentences above from the original content. Glue the remaining text for coherence.
-Do NOT modify any other sentence - keep them exactly as they appear in the original."""
-
-        # Create Gemini model with system instruction
-        model = genai.GenerativeModel(
-            'gemini-2.5-pro',
-            system_instruction=SONNET_REWRITE_PROMPT  # Reuse same prompt
-        )
-
-        # Internal retry logic
-        max_retries = 2
-        response = None
-
-        for attempt in range(max_retries + 1):
-            try:
-                start_time = time.time()
-                response = model.generate_content(
-                    user_content,
-                    generation_config={
-                        'temperature': 0.0,
-                        'max_output_tokens': 2000
-                    }
-                )
-                elapsed_ms = int((time.time() - start_time) * 1000)
-                break  # Success
-
-            except Exception as e:
-                error_str = str(e)
-                is_retryable = (
-                    'ResourceExhausted' in error_str or
-                    'quota' in error_str.lower() or
-                    '429' in error_str or
-                    'ServiceUnavailable' in error_str or
-                    '503' in error_str or
-                    'DeadlineExceeded' in error_str or
-                    'timeout' in error_str.lower()
-                )
-
-                if is_retryable and attempt < max_retries:
-                    wait_time = 2 ** attempt
-                    LOG.warning(f"[{ticker}] ⚠️ Gemini rewrite [{idx}] error "
-                               f"(attempt {attempt + 1}/{max_retries + 1}): {error_str[:100]}, retrying in {wait_time}s...")
-                    time.sleep(wait_time)
-                    continue
-                else:
-                    LOG.error(f"[{ticker}] ❌ Gemini rewrite [{idx}] failed after {attempt + 1} attempts: {error_str[:200]}")
-                    return None
-
-        if response is None:
-            LOG.error(f"[{ticker}] ❌ Gemini rewrite [{idx}] no response after {max_retries + 1} attempts")
-            return None
-
-        response_text = response.text
-
-        if not response_text or len(response_text.strip()) < 5:
-            LOG.warning(f"[{ticker}] ❌ Gemini rewrite [{idx}] empty response")
-            return None
-
-        # Parse JSON response (reuse same parser)
-        parsed = extract_json_from_claude_response(response_text, ticker)
-
-        if parsed and 'action' in parsed:
-            action = parsed.get('action', 'KEEP').upper()
-            content = parsed.get('content', '')
-
-            LOG.info(f"[{ticker}] ✅ Gemini rewrite [{idx}]: {action} ({elapsed_ms}ms)")
-
-            return {
-                'action': action,
-                'content': content if action == 'REWRITE' else '',
-                'rewrite_time_ms': elapsed_ms,
-                'model': 'gemini-2.5-pro'
-            }
-        else:
-            LOG.warning(f"[{ticker}] ❌ Gemini rewrite [{idx}] failed to parse JSON response")
-            return None
-
-    except Exception as e:
-        LOG.error(f"[{ticker}] ❌ Gemini rewrite [{idx}] exception: {e}")
-        return None
-
-
-def _rewrite_mixed_content(
-    ticker: str,
-    items_to_rewrite: List[Tuple[int, Dict, str]],
-    anthropic_api_key: str,
-    gemini_api_key: str = None
-) -> Dict[int, Dict]:
-    """
-    Rewrite mixed-content bullets/paragraphs with retry and fallback.
-
-    Flow per item:
-    1. Sonnet attempt 1 → success → done
-    2. Sonnet attempt 2 (orchestrator retry) → success → done
-    3. Gemini 2.5 Pro fallback → success → done
-    4. All failed → mark as rewrite_failed
-
-    Args:
-        ticker: Stock ticker
-        items_to_rewrite: List of (index, item_dict, section_type) tuples
-        anthropic_api_key: Anthropic API key
-        gemini_api_key: Google Gemini API key (optional, for fallback)
-
-    Returns:
-        Dict mapping index -> {'action': 'REWRITE'/'REMOVE'/'KEEP', 'content': str, ...}
-    """
-    if not items_to_rewrite:
-        return {}
-
-    results = {}
-
-    LOG.info(f"[{ticker}] Phase 1.5: Rewriting {len(items_to_rewrite)} mixed-content items")
-
-    for idx, item, section_type in items_to_rewrite:
-        result = None
-
-        # Attempt 1: Sonnet
-        if anthropic_api_key:
-            result = _rewrite_single_item_sonnet(ticker, idx, item, section_type, anthropic_api_key)
-
-        # Attempt 2: Sonnet retry (orchestrator level)
-        if result is None and anthropic_api_key:
-            LOG.info(f"[{ticker}] 🔄 Retrying Sonnet for item [{idx}]...")
-            result = _rewrite_single_item_sonnet(ticker, idx, item, section_type, anthropic_api_key)
-
-        # Attempt 3: Gemini fallback
-        if result is None and gemini_api_key:
-            LOG.info(f"[{ticker}] 🔄 Falling back to Gemini 2.5 Pro for item [{idx}]...")
-            result = _rewrite_single_item_gemini(ticker, idx, item, section_type, gemini_api_key)
-
-        # All failed - keep original
-        if result is None:
-            LOG.warning(f"[{ticker}] ❌ All rewrite attempts failed for item [{idx}], keeping original")
-            results[idx] = {
-                'action': 'KEEP',
-                'content': item.get('filtered_content', ''),
-                'rewrite_failed': True
-            }
-        else:
-            results[idx] = result
-
-    return results
+        return 'mostly_new'  # <66.7% stale → KEEP
 
 
 # =============================================================================
@@ -2442,133 +1952,81 @@ def filter_known_information(
     # Merge original_content from Phase 1 JSON (AI doesn't need to echo it back)
     json_output = _merge_original_content(json_output, phase1_json)
 
-    # Protect scenario sections from REMOVE - default to KEEP with original content
-    json_output = _protect_scenario_sections(json_output)
-
     # =========================================================================
-    # STEP 2 & 3: TRIAGE AND SONNET REWRITE (for mixed content)
+    # STEP 2: THRESHOLD-BASED CLASSIFICATION (no rewrite step)
     # =========================================================================
     bullets = json_output.get("bullets", [])
     paragraphs = json_output.get("paragraphs", [])
 
-    # Step 2: Classify each item
+    # Classify each bullet with section context
     bullet_classifications = {}
-    paragraph_classifications = {}
-
     for idx, bullet in enumerate(bullets):
-        bullet_classifications[idx] = _classify_bullet_for_rewrite(bullet)
+        section = bullet.get('section', '')
+        bullet_classifications[idx] = _classify_bullet_with_threshold(bullet, section)
 
+    # Classify each paragraph with section context
+    paragraph_classifications = {}
     for idx, para in enumerate(paragraphs):
-        paragraph_classifications[idx] = _classify_bullet_for_rewrite(para)
+        section = para.get('section', '')
+        paragraph_classifications[idx] = _classify_bullet_with_threshold(para, section)
 
-    # Count classifications for logging
-    mixed_bullet_count = sum(1 for c in bullet_classifications.values() if c == 'mixed')
-    mixed_para_count = sum(1 for c in paragraph_classifications.values() if c == 'mixed')
-    total_mixed = mixed_bullet_count + mixed_para_count
+    # Log classification counts
+    classification_keys = ['all_known', 'mostly_known', 'all_new', 'mostly_new', 'exempt']
+    LOG.info(f"[{ticker}] Phase 1.5 Step 2 Classification - "
+             f"Bullets: {dict((k, sum(1 for v in bullet_classifications.values() if v == k)) for k in classification_keys)} | "
+             f"Paragraphs: {dict((k, sum(1 for v in paragraph_classifications.values() if v == k)) for k in classification_keys)}")
 
-    LOG.info(f"[{ticker}] Phase 1.5 Step 2 Triage - "
-             f"Bullets: {dict((k, sum(1 for v in bullet_classifications.values() if v == k)) for k in ['all_known', 'all_new', 'mixed', 'exempt'])} | "
-             f"Paragraphs: {dict((k, sum(1 for v in paragraph_classifications.values() if v == k)) for k in ['all_known', 'all_new', 'mixed', 'exempt'])}")
+    # Apply classifications to bullets
+    kept_count = 0
+    removed_count = 0
 
-    # Step 3: Rewrite mixed items (Sonnet primary with 1 retry, Gemini Pro fallback)
-    rewrite_time_ms = 0
-    rewrite_models_used = set()  # Track which models were used (initialized here for all paths)
-
-    if total_mixed > 0 and (anthropic_api_key or gemini_api_key):
-        LOG.info(f"[{ticker}] Phase 1.5 Step 3: {total_mixed} items need rewrite")
-
-        # Build lists of mixed items with their indices
-        bullet_items = [(idx, bullets[idx], 'bullet') for idx in range(len(bullets))
-                        if bullet_classifications.get(idx) == 'mixed']
-        para_items = [(idx, paragraphs[idx], 'paragraph') for idx in range(len(paragraphs))
-                      if paragraph_classifications.get(idx) == 'mixed']
-
-        # Rewrite bullets (with retry + fallback)
-        if bullet_items:
-            start_time = time.time()
-            bullet_rewrite_results = _rewrite_mixed_content(
-                ticker, bullet_items, anthropic_api_key, gemini_api_key
-            )
-            rewrite_time_ms += int((time.time() - start_time) * 1000)
-
-            # Apply results to bullets
-            for idx, result_data in bullet_rewrite_results.items():
-                if result_data.get('model'):
-                    rewrite_models_used.add(result_data['model'])
-                if result_data['action'] == 'REWRITE':
-                    bullets[idx]['action'] = 'REWRITE'
-                    bullets[idx]['rewritten_content'] = result_data['content']
-                    bullets[idx]['filtered_content'] = ''
-                elif result_data['action'] == 'REMOVE':
-                    bullets[idx]['action'] = 'REMOVE'
-                    bullets[idx]['filtered_content'] = ''
-                elif result_data.get('rewrite_failed'):
-                    bullets[idx]['action'] = 'KEEP'
-                    # Keep existing filtered_content
-
-        # Rewrite paragraphs (with retry + fallback)
-        if para_items:
-            start_time = time.time()
-            para_rewrite_results = _rewrite_mixed_content(
-                ticker, para_items, anthropic_api_key, gemini_api_key
-            )
-            rewrite_time_ms += int((time.time() - start_time) * 1000)
-
-            # Apply results to paragraphs
-            for idx, result_data in para_rewrite_results.items():
-                if result_data.get('model'):
-                    rewrite_models_used.add(result_data['model'])
-                if result_data['action'] == 'REWRITE':
-                    paragraphs[idx]['action'] = 'REWRITE'
-                    paragraphs[idx]['rewritten_content'] = result_data['content']
-                    paragraphs[idx]['filtered_content'] = ''
-                elif result_data['action'] == 'REMOVE':
-                    paragraphs[idx]['action'] = 'REMOVE'
-                    paragraphs[idx]['filtered_content'] = ''
-                elif result_data.get('rewrite_failed'):
-                    paragraphs[idx]['action'] = 'KEEP'
-                    # Keep existing filtered_content
-
-        LOG.info(f"[{ticker}] Phase 1.5 Step 3: Rewrite completed in {rewrite_time_ms}ms (models: {', '.join(rewrite_models_used) or 'none'})")
-
-    elif total_mixed > 0:
-        LOG.warning(f"[{ticker}] Phase 1.5: {total_mixed} items need rewrite but no API keys available")
-        # Fall back to mechanical filtering (keep filtered_content as-is)
-
-    # Apply classifications for non-mixed items
     for idx, bullet in enumerate(bullets):
         classification = bullet_classifications.get(idx)
-        if classification == 'all_known':
+
+        if classification in ('all_known', 'mostly_known'):
             bullet['action'] = 'REMOVE'
-            bullet['filtered_content'] = ''
-        elif classification == 'all_new':
-            bullet['action'] = 'KEEP'
-            # Clear filtered_content since original is unchanged
             if 'filtered_content' in bullet:
                 del bullet['filtered_content']
+            removed_count += 1
         elif classification == 'exempt':
             bullet['action'] = 'KEEP'
             bullet['exempt'] = True
+            if 'filtered_content' in bullet:
+                del bullet['filtered_content']
+            kept_count += 1
+        else:  # all_new or mostly_new
+            bullet['action'] = 'KEEP'
+            if 'filtered_content' in bullet:
+                del bullet['filtered_content']
+            kept_count += 1
 
+    # Apply classifications to paragraphs
     for idx, para in enumerate(paragraphs):
         classification = paragraph_classifications.get(idx)
-        if classification == 'all_known':
+
+        if classification in ('all_known', 'mostly_known'):
             para['action'] = 'REMOVE'
-            para['filtered_content'] = ''
-        elif classification == 'all_new':
-            para['action'] = 'KEEP'
-            # Clear filtered_content since original is unchanged
             if 'filtered_content' in para:
                 del para['filtered_content']
+            removed_count += 1
         elif classification == 'exempt':
             para['action'] = 'KEEP'
             para['exempt'] = True
+            if 'filtered_content' in para:
+                del para['filtered_content']
+            kept_count += 1
+        else:  # all_new or mostly_new
+            para['action'] = 'KEEP'
+            if 'filtered_content' in para:
+                del para['filtered_content']
+            kept_count += 1
 
     # Update summary counts
     summary = json_output.get("summary", {})
-    rewrite_count = sum(1 for b in bullets if b.get('action') == 'REWRITE')
-    rewrite_count += sum(1 for p in paragraphs if p.get('action') == 'REWRITE')
-    summary['rewritten'] = rewrite_count
+    summary['kept'] = kept_count
+    summary['removed'] = removed_count
+
+    LOG.info(f"[{ticker}] Phase 1.5 Complete: {kept_count} kept, {removed_count} removed")
 
     return {
         "ticker": ticker,
@@ -2581,9 +2039,7 @@ def filter_known_information(
         "model_used": result.get("model_used", "unknown"),
         "prompt_tokens": result.get("prompt_tokens", 0),
         "completion_tokens": result.get("completion_tokens", 0),
-        "generation_time_ms": result.get("generation_time_ms", 0),
-        "rewrite_time_ms": rewrite_time_ms,
-        "rewrite_models": list(rewrite_models_used)
+        "generation_time_ms": result.get("generation_time_ms", 0)
     }
 
 
@@ -2755,8 +2211,6 @@ def generate_known_info_filter_email(ticker: str, filter_result: Dict) -> str:
     filing_lookup = filter_result.get("filing_lookup", {})  # For resolving identifiers
     model = filter_result.get("model_used", "unknown")
     gen_time = filter_result.get("generation_time_ms", 0)
-    rewrite_time = filter_result.get("rewrite_time_ms", 0)
-    rewrite_models = filter_result.get("rewrite_models", [])
 
     # Build filing list string (10-K and 10-Q intentionally excluded)
     filing_parts = []
@@ -2785,13 +2239,11 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
 .bullet-keep {{ border-left-color: #28a745; }}
 .bullet-remove {{ border-left-color: #dc3545; }}
 .bullet-exempt {{ border-left-color: #6c757d; }}
-.bullet-rewrite {{ border-left-color: #007bff; }}
 .bullet-header {{ font-weight: bold; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }}
 .action-badge {{ padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }}
 .badge-keep {{ background: #d4edda; color: #155724; }}
 .badge-remove {{ background: #f8d7da; color: #721c24; }}
 .badge-exempt {{ background: #e9ecef; color: #495057; }}
-.badge-rewrite {{ background: #cce5ff; color: #004085; }}
 .content-box {{ background: #f8f9fa; padding: 10px; border-radius: 4px; margin: 10px 0; font-size: 14px; }}
 .sentence {{ padding: 8px; margin: 5px 0; border-radius: 4px; font-size: 13px; }}
 .sentence-keep {{ background: #d4edda; border-left: 3px solid #28a745; }}
@@ -2801,8 +2253,6 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
 .claim {{ padding: 2px 0; font-size: 12px; }}
 .claim-known {{ color: #dc3545; }}
 .claim-new {{ color: #28a745; }}
-.filtered {{ background: #e8f5e9; padding: 10px; border-radius: 4px; margin-top: 10px; }}
-.rewritten {{ background: #e3f2fd; padding: 10px; border-radius: 4px; margin-top: 10px; border-left: 3px solid #007bff; }}
 .section-header {{ background: #e9ecef; padding: 10px 15px; margin: 20px 0 10px 0; border-radius: 6px; font-weight: bold; }}
 </style>
 </head>
@@ -2810,7 +2260,7 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
 
 <div class="header">
 <h2>Phase 1.5: Staleness Filter - {ticker}</h2>
-<p><strong>Tagging:</strong> {model} ({gen_time}ms){f' | <strong>Rewrite:</strong> {", ".join(rewrite_models)} ({rewrite_time}ms)' if rewrite_models else ''}</p>
+<p><strong>Tagging:</strong> {model} ({gen_time}ms)</p>
 <p><strong>Knowledge Base:</strong> {filing_str}</p>
 <p style="font-size: 12px; opacity: 0.7;">{filter_result.get('timestamp', '')[:19]}</p>
 </div>
@@ -2819,35 +2269,31 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
 <strong>Sentence-Level Filter Summary</strong>
 <table style="width: 100%; margin-top: 15px; border-collapse: collapse;">
 <tr>
-<td style="text-align: center; padding: 12px; background: #f5f5f5; border-radius: 6px; width: 12.5%;">
+<td style="text-align: center; padding: 12px; background: #f5f5f5; border-radius: 6px; width: 14%;">
 <div style="font-size: 24px; font-weight: bold; color: #1a1a2e;">{summary.get('total_bullets', 0) + summary.get('total_paragraphs', 0)}</div>
 <div style="font-size: 11px; color: #666; margin-top: 5px;">Bullets/Paras</div>
 </td>
-<td style="text-align: center; padding: 12px; background: #f5f5f5; border-radius: 6px; width: 12.5%;">
+<td style="text-align: center; padding: 12px; background: #f5f5f5; border-radius: 6px; width: 14%;">
 <div style="font-size: 24px; font-weight: bold; color: #28a745;">{summary.get('kept', 0)}</div>
 <div style="font-size: 11px; color: #666; margin-top: 5px;">Kept</div>
 </td>
-<td style="text-align: center; padding: 12px; background: #f5f5f5; border-radius: 6px; width: 12.5%;">
-<div style="font-size: 24px; font-weight: bold; color: #007bff;">{summary.get('rewritten', 0)}</div>
-<div style="font-size: 11px; color: #666; margin-top: 5px;">Rewritten</div>
-</td>
-<td style="text-align: center; padding: 12px; background: #f5f5f5; border-radius: 6px; width: 12.5%;">
+<td style="text-align: center; padding: 12px; background: #f5f5f5; border-radius: 6px; width: 14%;">
 <div style="font-size: 24px; font-weight: bold; color: #dc3545;">{summary.get('removed', 0)}</div>
 <div style="font-size: 11px; color: #666; margin-top: 5px;">Removed</div>
 </td>
-<td style="text-align: center; padding: 12px; background: #f5f5f5; border-radius: 6px; width: 12.5%;">
+<td style="text-align: center; padding: 12px; background: #f5f5f5; border-radius: 6px; width: 14%;">
 <div style="font-size: 24px; font-weight: bold; color: #1a1a2e;">{summary.get('total_sentences', 0)}</div>
 <div style="font-size: 11px; color: #666; margin-top: 5px;">Sentences</div>
 </td>
-<td style="text-align: center; padding: 12px; background: #f5f5f5; border-radius: 6px; width: 12.5%;">
+<td style="text-align: center; padding: 12px; background: #f5f5f5; border-radius: 6px; width: 14%;">
 <div style="font-size: 24px; font-weight: bold; color: #dc3545;">{summary.get('removed_sentences', 0)}</div>
 <div style="font-size: 11px; color: #666; margin-top: 5px;">Removed Sent.</div>
 </td>
-<td style="text-align: center; padding: 12px; background: #f5f5f5; border-radius: 6px; width: 12.5%;">
+<td style="text-align: center; padding: 12px; background: #f5f5f5; border-radius: 6px; width: 14%;">
 <div style="font-size: 24px; font-weight: bold; color: #dc3545;">{summary.get('known_claims', 0)}</div>
 <div style="font-size: 11px; color: #666; margin-top: 5px;">Known Claims</div>
 </td>
-<td style="text-align: center; padding: 12px; background: #f5f5f5; border-radius: 6px; width: 12.5%;">
+<td style="text-align: center; padding: 12px; background: #f5f5f5; border-radius: 6px; width: 14%;">
 <div style="font-size: 24px; font-weight: bold; color: #28a745;">{summary.get('new_claims', 0)}</div>
 <div style="font-size: 11px; color: #666; margin-top: 5px;">New Claims</div>
 </td>
@@ -2917,21 +2363,6 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
                         html += '</div>\n'
                     html += '</div>\n'
 
-            # Rewritten/Filtered content display logic:
-            # - EXEMPT: No output shown (use original)
-            # - KEEP (all_new): No output shown (use original unchanged)
-            # - KEEP (mixed, fallback): Show filtered_content if present
-            # - REWRITE: Show rewritten_content
-            # - REMOVE: No output shown
-            if not exempt and action == 'REWRITE':
-                rewritten = p.get('rewritten_content', '')
-                if rewritten:
-                    html += f'<div class="rewritten"><strong>Rewritten Content:</strong><br>{_escape_html(rewritten)}</div>\n'
-            elif not exempt and action == 'KEEP':
-                filtered = p.get('filtered_content', '')
-                if filtered:
-                    html += f'<div class="filtered"><strong>Filtered Content:</strong><br>{_escape_html(filtered)}</div>\n'
-
             html += '</div>\n'
 
     # Add bullets section
@@ -2991,21 +2422,6 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
                             html += '</div>\n'
                         html += '</div>\n'
                     html += '</div>\n'
-
-            # Rewritten/Filtered content display logic:
-            # - EXEMPT: No output shown (use original)
-            # - KEEP (all_new): No output shown (use original unchanged)
-            # - KEEP (mixed, fallback): Show filtered_content if present
-            # - REWRITE: Show rewritten_content
-            # - REMOVE: No output shown
-            if not exempt and action == 'REWRITE':
-                rewritten = b.get('rewritten_content', '')
-                if rewritten:
-                    html += f'<div class="rewritten"><strong>Rewritten Content:</strong><br>{_escape_html(rewritten)}</div>\n'
-            elif not exempt and action == 'KEEP':
-                filtered = b.get('filtered_content', '')
-                if filtered:
-                    html += f'<div class="filtered"><strong>Filtered Content:</strong><br>{_escape_html(filtered)}</div>\n'
 
             html += '</div>\n'
 

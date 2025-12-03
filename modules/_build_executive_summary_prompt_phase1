@@ -1923,25 +1923,9 @@ WALL STREET SENTIMENT
 
 SECTION SCOPE: Analyst ratings, price targets, and commentary ABOUT the target company.
 
-CRITICAL DISTINCTION - SUBJECT vs SOURCE:
-
-This section captures what analysts say ABOUT {ticker} - NOT what {ticker}'s analysts say about the market.
-
-✅ INCLUDE ({ticker} is the SUBJECT being analyzed):
-- Analyst ratings ON {ticker} stock (upgrade, downgrade, initiate)
-- Price targets FOR {ticker} stock
-- Commentary about {ticker}'s prospects, catalysts, risks
-- "JPM upgraded to Buy" when JPM stock is being rated
-
-❌ EXCLUDE ({ticker} is the SOURCE/producer of research):
-- {ticker}'s research team publishing market forecasts
-- {ticker}'s strategists commenting on S&P 500, economy, sectors
-- {ticker}'s analysts' views on other companies or asset classes
-- "JPM forecasts S&P 7,500" when analyzing JPM (JPM is the research producer, not subject)
-
-TEST: Is {ticker} the SUBJECT of the analyst action, or the SOURCE?
-- Subject → Wall Street Sentiment
-- Source → Major Developments (if material to business) or EXCLUDE
+SUBJECT vs SOURCE: This section captures what analysts say ABOUT {ticker} - NOT what
+{ticker}'s analysts say about the market. If {ticker} is producing the research
+(e.g., "JPM forecasts S&P 7,500"), exclude from Wall Street Sentiment.
 
 LENGTH LIMIT: No explicit limit (use judgment - typically 3-6 bullets)
 
@@ -1950,6 +1934,7 @@ SOURCE REQUIREMENT: INSTITUTIONAL SELL-SIDE analysts ONLY
 ✓ INCLUDE: Named sell-side firms (Goldman Sachs, Morgan Stanley, JP Morgan, Barclays, Wedbush, UBS, Jefferies, etc.)
 ✗ EXCLUDE: Retail investment analysis (Zacks, Motley Fool, TipRanks, Seeking Alpha contributors)
 ✗ EXCLUDE: Proprietary model scores, screener results, aggregated retail sentiment
+✗ EXCLUDE: Social media sentiment (Stocktwits, Reddit, Twitter/X, retail trader polls)
 ✗ EXCLUDE: Generic "analysts say" without named firm
 ✗ EXCLUDE: Rating/target changes where article doesn't name the firm or analyst
 ✗ EXCLUDE: Consensus ratings from aggregators (Meyka, Benzinga, The Fly) without specific firm actions

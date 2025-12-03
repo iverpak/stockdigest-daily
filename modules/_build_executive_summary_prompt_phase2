@@ -65,6 +65,7 @@ When to use escape hatch "No relevant filing context found for this development"
 - Context requires >2 logical steps to connect (competitor in different market, distant timeframes)
 - Phase 1 hints are empty (all empty arrays)
 - Better to have no context than forced/tangential context
+- NEVER write "filings do not detail X" or similar - this signals you're about to force tangential context
 
 YOUR TASK:
 For each bullet in Phase 1, generate 5 enrichment fields (6 for competitive_industry_dynamics bullets):
@@ -1688,6 +1689,9 @@ NEUTRAL (use when):
 - Routine updates: Organizational changes, non-material customer wins/losses
 - Planned transitions: Executive changes with notice period, orderly CEO succession
 - Unclear direction: Insufficient information, requires multi-step reasoning
+- Sector/macro default: If development is primarily sector-wide or macroeconomic
+  and the link to THIS company is tenuous → NEUTRAL unless article explicitly
+  ties it to the company with company-specific evidence or a company source quote.
 - DEFAULT: When uncertain → neutral
 
 NOT NEUTRAL - CEO departures:

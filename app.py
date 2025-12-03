@@ -13264,45 +13264,6 @@ def send_beta_signup_notification(name: str, email: str, ticker1: str, ticker2: 
         return False
 
 
-def export_beta_users_to_csv() -> int:
-    """
-    DEPRECATED: Legacy function. Use export_users_csv() instead.
-    Export active users to CSV for daily processing.
-
-    Uses: users + user_tickers tables (Dec 2025 schema)
-    Returns: Number of users exported
-    """
-    output_path = "data/user_tickers.csv"
-
-    try:
-        with db() as conn, conn.cursor() as cur:
-            # Get active users with their tickers
-            cur.execute("""
-                SELECT u.name, u.email, STRING_AGG(ut.ticker, ',' ORDER BY ut.ticker) as tickers
-                FROM users u
-                LEFT JOIN user_tickers ut ON u.id = ut.user_id
-                WHERE u.status = 'active'
-                GROUP BY u.id, u.name, u.email
-                ORDER BY u.email
-            """)
-            users = cur.fetchall()
-
-        # Write CSV with header (new format: comma-separated tickers)
-        with open(output_path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(['name', 'email', 'tickers'])
-            for user in users:
-                writer.writerow([user['name'], user['email'], user['tickers'] or ''])
-
-        LOG.info(f"✅ Exported {len(users)} active users to {output_path}")
-        return len(users)
-
-    except Exception as e:
-        LOG.error(f"❌ CSV export failed: {e}")
-        LOG.error(traceback.format_exc())
-        raise
-
-
 def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], triage_results: Dict[str, Dict[str, List[Dict]]], time_window_minutes: int = 1440, mode: str = 'daily', report_type: str = 'daily') -> bool:
     """Email #1: Article Selection QA - Shows which articles were flagged by AI triage (NEW Nov 2025: report_type for subject labels)"""
     try:
@@ -21159,35 +21120,6 @@ def generate_unsubscribe_token_for_user(user_id: int, email: str) -> str:
         raise
 
 
-# Backward compatibility aliases
-def generate_unsubscribe_token_for_account(account_id: int, email: str) -> str:
-    """DEPRECATED: Use generate_unsubscribe_token_for_user() instead."""
-    return generate_unsubscribe_token_for_user(account_id, email)
-
-
-def generate_unsubscribe_token(email: str) -> str:
-    """
-    DEPRECATED: Use generate_unsubscribe_token_for_user() with user_id instead.
-    Legacy function maintained for backward compatibility only.
-    """
-    LOG.warning(f"DEPRECATED: generate_unsubscribe_token() called for {email}. Use user_id version instead.")
-
-    try:
-        with db() as conn, conn.cursor() as cur:
-            # Get user for this email
-            cur.execute("SELECT id FROM users WHERE email = %s", (email,))
-            user = cur.fetchone()
-
-            if user:
-                return generate_unsubscribe_token_for_user(user['id'], email)
-            else:
-                LOG.error(f"No user found for email {email}")
-                return ""
-    except Exception as e:
-        LOG.error(f"Error generating unsubscribe token: {e}")
-        raise
-
-
 def get_user_id_from_email(email: str) -> Optional[int]:
     """
     Get user_id from email.
@@ -21203,12 +21135,6 @@ def get_user_id_from_email(email: str) -> Optional[int]:
     except Exception as e:
         LOG.error(f"Error getting user_id for {email}: {e}")
         return None
-
-
-# Backward compatibility alias
-def get_account_id_from_email(email: str, ticker1: str = None, ticker2: str = None, ticker3: str = None) -> Optional[int]:
-    """DEPRECATED: Use get_user_id_from_email() instead."""
-    return get_user_id_from_email(email)
 
 
 def get_or_create_unsubscribe_token(user_id_or_email, ticker1: str = None, ticker2: str = None, ticker3: str = None) -> str:
@@ -22917,10 +22843,10 @@ async def admin_export_user_csv(request: Request):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     try:
-        count = export_beta_users_to_csv()
+        count = export_users_csv()
         return {
             "status": "success",
-            "message": f"Exported {count} active beta users to CSV",
+            "message": f"Exported {count} active users to CSV",
             "file_path": "data/user_tickers.csv",
             "exported_at": datetime.now().isoformat()
         }
@@ -25672,7 +25598,7 @@ async def approve_user(request: Request):
     """Approve a pending user by user_id"""
     body = await request.json()
     token = body.get('token')
-    user_id = body.get('user_id') or body.get('account_id')  # Support both names
+    user_id = body.get('user_id')
 
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
@@ -25704,7 +25630,7 @@ async def reject_user(request: Request):
     """Reject a pending user by user_id"""
     body = await request.json()
     token = body.get('token')
-    user_id = body.get('user_id') or body.get('account_id')
+    user_id = body.get('user_id')
 
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
@@ -25736,7 +25662,7 @@ async def pause_user(request: Request):
     """Pause an active user by user_id"""
     body = await request.json()
     token = body.get('token')
-    user_id = body.get('user_id') or body.get('account_id')
+    user_id = body.get('user_id')
 
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
@@ -25768,7 +25694,7 @@ async def cancel_user(request: Request):
     """Cancel a user by user_id"""
     body = await request.json()
     token = body.get('token')
-    user_id = body.get('user_id') or body.get('account_id')
+    user_id = body.get('user_id')
 
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
@@ -25800,7 +25726,7 @@ async def reactivate_user(request: Request):
     """Reactivate a paused or cancelled user by user_id"""
     body = await request.json()
     token = body.get('token')
-    user_id = body.get('user_id') or body.get('account_id')
+    user_id = body.get('user_id')
 
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
@@ -25832,7 +25758,7 @@ async def delete_user(request: Request):
     """Permanently delete a user by user_id (CASCADE deletes tickers and tokens)"""
     body = await request.json()
     token = body.get('token')
-    user_id = body.get('user_id') or body.get('account_id')
+    user_id = body.get('user_id')
 
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
@@ -30733,13 +30659,13 @@ async def generate_all_reports_api(request: Request):
         except Exception as e:
             LOG.error(f"❌ CSV sync failed: {e} - continuing anyway")
 
-        # Load all active beta users (same as process_daily_workflow)
-        ticker_recipients = load_active_beta_users()
+        # Load all active users (same as process_daily_workflow)
+        ticker_recipients = load_active_users()
 
         if not ticker_recipients:
             return {
                 "status": "error",
-                "message": "No active beta users found"
+                "message": "No active users found"
             }
 
         # Submit to existing job queue system
@@ -32011,13 +31937,6 @@ def load_active_users() -> Dict[str, List[str]]:
         return {}
 
 
-# Backward compatibility alias
-def load_active_beta_users() -> Dict[str, List[str]]:
-    """DEPRECATED: Use load_active_users() instead."""
-    return load_active_users()
-
-
-
 def send_admin_notification(results: Dict):
     """Send admin notification after processing completes"""
     LOG.info("Sending admin notification...")
@@ -32390,7 +32309,7 @@ def run_scheduler():
     if is_within_time_window(current_time, backup_time, window_minutes=15):
         LOG.info(f"✅ Running NIGHTLY BACKUP (scheduled: {backup_time}, current: {current_time})")
         try:
-            export_beta_users_csv()
+            export_users_csv()
             tasks_run.append('backup')
         except Exception as e:
             LOG.error(f"❌ Nightly backup failed: {e}")
@@ -32470,11 +32389,11 @@ def process_daily_workflow(force_report_type: str = None):
         except Exception as e:
             LOG.error(f"❌ CSV sync failed: {e} - continuing anyway")
 
-        # Load beta users
-        ticker_recipients = load_active_beta_users()
+        # Load active users
+        ticker_recipients = load_active_users()
 
         if not ticker_recipients:
-            LOG.warning("No active beta users found")
+            LOG.warning("No active users found")
             return
 
         # Determine report type - use override if provided, else day-of-week detection
@@ -32723,12 +32642,6 @@ def export_users_csv():
     except Exception as e:
         LOG.error(f"❌ CSV export failed: {e}")
         raise
-
-
-# Backward compatibility alias
-def export_beta_users_csv():
-    """DEPRECATED: Use export_users_csv() instead."""
-    return export_users_csv()
 
 
 # ------------------------------------------------------------------------------
@@ -33203,7 +33116,7 @@ if __name__ == "__main__":
         elif func_name == "send":
             auto_send_cron_job()
         elif func_name == "export":
-            export_beta_users_csv()
+            export_users_csv()
         # DISABLED (Nov 30, 2025): CSV is source of truth - never write DB back to ticker_reference.csv
         # elif func_name == "commit":
         #     # Daily GitHub commit (triggers deployment)

@@ -2139,6 +2139,7 @@ Include if articles mentioned:
 Exclude if:
 ❌ No timing mentioned: Article discusses event but gives no timeframe
 ❌ Vague/speculative: "may", "could", "might", "possible"
+❌ Past events: Any catalyst with a date BEFORE the CURRENT DATE has already occurred - exclude it
 
 ═══════════════════════════════════════════════════════════════════════════════
 FILING HINTS - STRATEGIC SECTION SELECTION

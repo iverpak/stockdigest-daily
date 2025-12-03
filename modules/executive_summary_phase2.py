@@ -1081,6 +1081,30 @@ def generate_executive_summary_phase2(
             generation_time_ms: int
         Or None if both providers failed
     """
+    # Early exit: Check if there are any bullets to enrich
+    # Phase 2 only processes these 5 sections (wall_street_sentiment, bottom_line,
+    # upside_scenario, downside_scenario, key_variables are skipped per prompt)
+    ENRICHABLE_SECTIONS = [
+        'major_developments', 'financial_performance', 'risk_factors',
+        'competitive_industry_dynamics', 'upcoming_catalysts'
+    ]
+
+    bullet_count = sum(
+        len(phase1_json.get('sections', {}).get(s, []))
+        for s in ENRICHABLE_SECTIONS
+    )
+
+    if bullet_count == 0:
+        LOG.info(f"[{ticker}] ℹ️ Phase 2: No bullets to enrich (0 across 5 sections) - skipping API calls")
+        return {
+            "enrichments": {},
+            "scenario_contexts": {},
+            "model": "skipped",
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "generation_time_ms": 0
+        }
+
     # Try Gemini 2.5 Pro first (primary)
     if gemini_api_key:
         LOG.info(f"[{ticker}] Phase 2: Attempting Gemini 2.5 Pro (primary)")

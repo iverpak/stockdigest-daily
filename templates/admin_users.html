@@ -602,6 +602,7 @@
                             <div class="user-meta">
                                 <span>Signed up: ${formatDate(user.created_at)}</span>
                                 ${user.terms_accepted_at ? `<span>Terms: ${formatDate(user.terms_accepted_at)}</span>` : ''}
+                                ${user.cancelled_at ? `<span style="color: #9b2c2c;">Cancelled: ${formatDate(user.cancelled_at)}</span>` : ''}
                             </div>
 
                             <div class="actions">

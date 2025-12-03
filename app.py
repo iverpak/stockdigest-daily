@@ -2243,6 +2243,7 @@ def ensure_schema():
                     terms_accepted_at TIMESTAMPTZ,
                     privacy_version VARCHAR(10) DEFAULT '1.0',
                     privacy_accepted_at TIMESTAMPTZ,
+                    cancelled_at TIMESTAMPTZ,                        -- When user unsubscribed (NULL = never)
                     created_at TIMESTAMPTZ DEFAULT NOW(),
                     updated_at TIMESTAMPTZ DEFAULT NOW()
                 );
@@ -2296,6 +2297,17 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_token ON unsubscribe_tokens(token);
                 CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_user_id ON unsubscribe_tokens(user_id);
                 CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_used ON unsubscribe_tokens(used_at) WHERE used_at IS NULL;
+
+                -- ============================================================
+                -- MIGRATION: Add cancelled_at column to users if missing
+                -- ============================================================
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                                 WHERE table_name='users' AND column_name='cancelled_at') THEN
+                        ALTER TABLE users ADD COLUMN cancelled_at TIMESTAMPTZ;
+                    END IF;
+                END $$;
 
                 -- ============================================================
                 -- MIGRATION: Drop old beta_users table if it exists
@@ -20417,13 +20429,13 @@ async def unsubscribe_page(request: Request, token: str = Query(...)):
             user_agent = request.headers.get('user-agent', '')
 
             if not already_cancelled:
-                # Mark user as unsubscribed
+                # Mark user as unsubscribed with timestamp
                 cur.execute("""
                     UPDATE users
-                    SET status = 'cancelled', updated_at = NOW()
+                    SET status = 'cancelled', cancelled_at = NOW(), updated_at = NOW()
                     WHERE id = %s
                 """, (user_id,))
-                LOG.info(f"Unsubscribed user {user_id} ({email})")
+                LOG.info(f"Unsubscribed user {user_id} ({email}) at {datetime.now()}")
 
             if not already_used:
                 # Mark token as used
@@ -25473,7 +25485,7 @@ def get_all_users(token: str = Query(...)):
             # Get all users
             cur.execute("""
                 SELECT id, name, email, user_type, ticker_limit, status,
-                       created_at, terms_accepted_at, privacy_accepted_at
+                       created_at, terms_accepted_at, privacy_accepted_at, cancelled_at
                 FROM users
                 ORDER BY
                     CASE status
@@ -32440,7 +32452,7 @@ def export_users_csv():
             # Get all users
             cur.execute("""
                 SELECT id, name, email, user_type, ticker_limit, status,
-                       created_at, terms_accepted_at, privacy_accepted_at
+                       created_at, terms_accepted_at, privacy_accepted_at, cancelled_at
                 FROM users
                 ORDER BY created_at DESC
             """)
@@ -32481,7 +32493,7 @@ def export_users_csv():
             writer = csv.writer(f)
             writer.writerow([
                 'name', 'email', 'tickers', 'user_type', 'ticker_limit',
-                'status', 'created_at', 'terms_accepted_at', 'privacy_accepted_at'
+                'status', 'created_at', 'terms_accepted_at', 'privacy_accepted_at', 'cancelled_at'
             ])
 
             for user in all_users:
@@ -32495,7 +32507,8 @@ def export_users_csv():
                     user['status'],
                     user['created_at'],
                     user['terms_accepted_at'],
-                    user['privacy_accepted_at']
+                    user['privacy_accepted_at'],
+                    user['cancelled_at']
                 ])
 
         LOG.info(f"✅ Backup CSV: {len(all_users)} users → {backup_path}")

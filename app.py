@@ -918,6 +918,8 @@ SPAM_DOMAINS = {
     "meyka.com", "www.meyka.com",  # Unknown/suspicious finance domain
     "ad-hoc-news.de", "www.ad-hoc-news.de",  # German aggregator, republishes content
     "setenews.com", "www.setenews.com",  # Low-quality aggregator
+    # Mining/resource stock promoters (Dec 2025)
+    "nai500.com", "www.nai500.com",  # Mining stock promoter site
 }
 
 QUALITY_DOMAINS = {

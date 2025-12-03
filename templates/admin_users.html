@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Beta User Management - Weavara Admin</title>
+    <title>User Management - StockDigest Admin</title>
     <style>
         * {
             margin: 0;
@@ -32,6 +32,9 @@
 
         .header-nav {
             margin-top: 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
 
         .header-nav a {
@@ -109,6 +112,12 @@
             color: #6b7280;
         }
 
+        .badge-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
         .status-badge {
             display: inline-block;
             padding: 4px 12px;
@@ -119,31 +128,31 @@
             letter-spacing: 0.5px;
         }
 
-        .status-pending {
-            background: #fef3c7;
-            color: #92400e;
+        .status-pending { background: #fef3c7; color: #92400e; }
+        .status-active { background: #d1fae5; color: #065f46; }
+        .status-paused { background: #fee2e2; color: #991b1b; }
+        .status-cancelled { background: #f3f4f6; color: #4b5563; }
+
+        .type-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
 
-        .status-active {
-            background: #d1fae5;
-            color: #065f46;
-        }
-
-        .status-paused {
-            background: #fee2e2;
-            color: #991b1b;
-        }
-
-        .status-cancelled {
-            background: #f3f4f6;
-            color: #4b5563;
-        }
+        .type-admin { background: #7c3aed; color: #ffffff; }
+        .type-beta { background: #3b82f6; color: #ffffff; }
+        .type-paid { background: #10b981; color: #ffffff; }
 
         .ticker-list {
             display: flex;
             gap: 8px;
             margin-bottom: 16px;
             flex-wrap: wrap;
+            align-items: center;
         }
 
         .ticker-badge {
@@ -154,6 +163,43 @@
             font-size: 13px;
             font-weight: 600;
             font-family: 'Monaco', 'Courier New', monospace;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .ticker-badge .remove-ticker {
+            cursor: pointer;
+            color: #ef4444;
+            font-weight: bold;
+            opacity: 0.6;
+            transition: opacity 0.2s;
+        }
+
+        .ticker-badge .remove-ticker:hover {
+            opacity: 1;
+        }
+
+        .ticker-count {
+            font-size: 12px;
+            color: #6b7280;
+            margin-left: 8px;
+        }
+
+        .add-ticker-btn {
+            background: #e0e7ff;
+            color: #3730a3;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            border: none;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .add-ticker-btn:hover {
+            background: #c7d2fe;
         }
 
         .user-meta {
@@ -186,41 +232,17 @@
             transition: all 0.2s;
         }
 
-        .btn-success {
-            background: #10b981;
-            color: #ffffff;
-        }
-
-        .btn-success:hover {
-            background: #059669;
-        }
-
-        .btn-danger {
-            background: #ef4444;
-            color: #ffffff;
-        }
-
-        .btn-danger:hover {
-            background: #dc2626;
-        }
-
-        .btn-warning {
-            background: #f59e0b;
-            color: #ffffff;
-        }
-
-        .btn-warning:hover {
-            background: #d97706;
-        }
-
-        .btn-secondary {
-            background: #6b7280;
-            color: #ffffff;
-        }
-
-        .btn-secondary:hover {
-            background: #4b5563;
-        }
+        .btn-success { background: #10b981; color: #ffffff; }
+        .btn-success:hover { background: #059669; }
+        .btn-danger { background: #ef4444; color: #ffffff; }
+        .btn-danger:hover { background: #dc2626; }
+        .btn-warning { background: #f59e0b; color: #ffffff; }
+        .btn-warning:hover { background: #d97706; }
+        .btn-secondary { background: #6b7280; color: #ffffff; }
+        .btn-secondary:hover { background: #4b5563; }
+        .btn-primary { background: #1e40af; color: #ffffff; }
+        .btn-primary:hover { background: #1e3a8a; }
+        .btn-primary:disabled { background: #9ca3af; cursor: not-allowed; }
 
         .empty-state {
             padding: 60px 24px;
@@ -228,16 +250,9 @@
             color: #6b7280;
         }
 
-        .empty-state svg {
-            width: 48px;
-            height: 48px;
-            margin-bottom: 16px;
-            opacity: 0.5;
-        }
-
         .stats-row {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
             gap: 16px;
             margin-bottom: 32px;
         }
@@ -303,32 +318,113 @@
             font-weight: 600;
         }
 
-        .btn-primary {
-            background: #1e40af;
-            color: #ffffff;
+        /* Modal Styles */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
         }
 
-        .btn-primary:hover {
-            background: #1e3a8a;
+        .modal-overlay.active {
+            display: flex;
         }
 
-        .btn-primary:disabled {
-            background: #9ca3af;
-            cursor: not-allowed;
+        .modal {
+            background: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 500px;
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            padding: 20px 24px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .modal-header h3 {
+            font-size: 18px;
+            color: #111827;
+        }
+
+        .modal-body {
+            padding: 24px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 14px;
+            font-weight: 600;
+            color: #374151;
+            margin-bottom: 8px;
+        }
+
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        .form-group input:focus, .form-group select:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
+        }
+
+        .modal-footer {
+            padding: 16px 24px;
+            border-top: 1px solid #e5e7eb;
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+        }
+
+        .ticker-input-row {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .ticker-input-row input {
+            flex: 1;
+        }
+
+        #modal-tickers-list {
+            margin-top: 8px;
         }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>👥 Beta User Management</h1>
+        <h1>User Management</h1>
         <div class="header-nav">
-            <a href="/admin?token={{ token }}">← Back to Dashboard</a>
+            <a href="/admin?token={{ token }}">Back to Dashboard</a>
+            <button class="btn btn-primary" onclick="openCreateUserModal()">+ Create User</button>
         </div>
     </div>
 
     <div class="container">
         <!-- Stats -->
         <div class="stats-row">
+            <div class="stat-box">
+                <div class="value" id="stat-total">-</div>
+                <div class="label">Total Users</div>
+            </div>
             <div class="stat-box">
                 <div class="value" id="stat-pending">-</div>
                 <div class="label">Pending</div>
@@ -338,51 +434,41 @@
                 <div class="label">Active</div>
             </div>
             <div class="stat-box">
-                <div class="value" id="stat-paused">-</div>
-                <div class="label">Paused</div>
-            </div>
-            <div class="stat-box">
-                <div class="value" id="stat-cancelled">-</div>
-                <div class="label">Cancelled</div>
+                <div class="value" id="stat-tickers">-</div>
+                <div class="label">Total Tickers</div>
             </div>
         </div>
 
         <!-- Pending Approvals -->
         <div class="section">
             <div class="section-header">
-                <h2>⏳ Pending Approvals</h2>
-                <p>Review new beta signups and approve or reject them</p>
+                <h2>Pending Approvals</h2>
+                <p>Review new signups and approve or reject them</p>
             </div>
             <div id="pending-users">
-                <div class="empty-state">
-                    <p>Loading...</p>
-                </div>
+                <div class="empty-state"><p>Loading...</p></div>
             </div>
         </div>
 
         <!-- Active Users -->
         <div class="section">
             <div class="section-header">
-                <h2>✅ Active Users</h2>
+                <h2>Active Users</h2>
                 <p>Currently receiving daily emails</p>
             </div>
             <div id="active-users">
-                <div class="empty-state">
-                    <p>Loading...</p>
-                </div>
+                <div class="empty-state"><p>Loading...</p></div>
             </div>
         </div>
 
-        <!-- Paused/Cancelled Users -->
+        <!-- Inactive Users -->
         <div class="section">
             <div class="section-header">
-                <h2>⏸️ Inactive Users</h2>
+                <h2>Inactive Users</h2>
                 <p>Paused and cancelled subscriptions</p>
             </div>
             <div id="inactive-users">
-                <div class="empty-state">
-                    <p>Loading...</p>
-                </div>
+                <div class="empty-state"><p>Loading...</p></div>
             </div>
         </div>
 
@@ -393,15 +479,78 @@
                 <span id="ticker-count" style="margin-left: 16px; color: #6b7280;"></span>
             </div>
             <button class="btn btn-primary" id="generate-reports-btn" onclick="generateUserReports()" disabled>
-                📊 Generate Reports
+                Generate Reports
             </button>
+        </div>
+    </div>
+
+    <!-- Create User Modal -->
+    <div class="modal-overlay" id="create-user-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Create New User</h3>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Email *</label>
+                    <input type="email" id="modal-email" placeholder="user@example.com">
+                </div>
+                <div class="form-group">
+                    <label>Name *</label>
+                    <input type="text" id="modal-name" placeholder="John Doe">
+                </div>
+                <div class="form-group">
+                    <label>User Type</label>
+                    <select id="modal-user-type" onchange="updateTickerLimit()">
+                        <option value="admin">Admin (unlimited tickers)</option>
+                        <option value="beta" selected>Beta (3 tickers)</option>
+                        <option value="paid">Paid (10 tickers)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Initial Tickers</label>
+                    <div class="ticker-input-row">
+                        <input type="text" id="modal-ticker-input" placeholder="AAPL" onkeypress="handleTickerKeypress(event)">
+                        <button class="btn btn-secondary" onclick="addTickerToModal()">Add</button>
+                    </div>
+                    <div id="modal-tickers-list" class="ticker-list"></div>
+                    <small style="color: #6b7280;" id="ticker-limit-hint">Beta users can have up to 3 tickers</small>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeCreateUserModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="createUser()">Create User</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Ticker Modal -->
+    <div class="modal-overlay" id="add-ticker-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Add Ticker</h3>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Ticker Symbol</label>
+                    <input type="text" id="add-ticker-input" placeholder="AAPL" onkeypress="handleAddTickerKeypress(event)">
+                </div>
+                <p id="add-ticker-user-info" style="font-size: 13px; color: #6b7280;"></p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeAddTickerModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="confirmAddTicker()">Add Ticker</button>
+            </div>
         </div>
     </div>
 
     <script>
         const token = '{{ token }}';
+        let modalTickers = [];
+        let addTickerUserId = null;
 
         function formatDate(dateString) {
+            if (!dateString) return 'N/A';
             const date = new Date(dateString);
             return date.toLocaleDateString('en-US', {
                 year: 'numeric',
@@ -414,51 +563,66 @@
 
         function createUserCard(user) {
             const statusClass = `status-${user.status}`;
-            const canSelect = user.status === 'active'; // Only active users can be selected
+            const typeClass = `type-${user.user_type}`;
+            const canSelect = user.status === 'active';
+            const tickers = user.tickers || [];
+            const tickerLimit = user.ticker_limit;
+            const tickerCountText = tickerLimit ? `${tickers.length}/${tickerLimit}` : `${tickers.length}/∞`;
+            const canAddTicker = !tickerLimit || tickers.length < tickerLimit;
+
+            const tickerBadges = tickers.map(t => `
+                <span class="ticker-badge">
+                    ${t}
+                    <span class="remove-ticker" onclick="removeTicker(${user.id}, '${t}')" title="Remove ticker">×</span>
+                </span>
+            `).join('');
 
             return `
                 <div class="user-card" data-user-id="${user.id}" data-email="${user.email}">
                     <div class="user-select-wrapper">
-                        ${canSelect ? `<input type="checkbox" class="user-checkbox" data-user-id="${user.id}" data-tickers="${user.ticker1},${user.ticker2},${user.ticker3}" onchange="updateBulkActions()">` : '<div style="width: 30px;"></div>'}
+                        ${canSelect ? `<input type="checkbox" class="user-checkbox" data-user-id="${user.id}" data-tickers="${tickers.join(',')}" onchange="updateBulkActions()">` : '<div style="width: 30px;"></div>'}
                         <div class="user-card-content">
                             <div class="user-header">
                                 <div class="user-info">
                                     <h3>${user.name}</h3>
                                     <p>${user.email}</p>
                                 </div>
-                                <span class="status-badge ${statusClass}">${user.status}</span>
+                                <div class="badge-row">
+                                    <span class="type-badge ${typeClass}">${user.user_type}</span>
+                                    <span class="status-badge ${statusClass}">${user.status}</span>
+                                </div>
                             </div>
 
                             <div class="ticker-list">
-                                <span class="ticker-badge">${user.ticker1}</span>
-                                <span class="ticker-badge">${user.ticker2}</span>
-                                <span class="ticker-badge">${user.ticker3}</span>
+                                ${tickerBadges}
+                                ${canAddTicker ? `<button class="add-ticker-btn" onclick="openAddTickerModal(${user.id}, '${user.email}', ${tickerLimit || 'null'}, ${tickers.length})">+ Add</button>` : ''}
+                                <span class="ticker-count">${tickerCountText}</span>
                             </div>
 
                             <div class="user-meta">
-                                <span>📅 Signed up: ${formatDate(user.created_at)}</span>
-                                ${user.terms_accepted_at ? `<span>✅ Terms: ${formatDate(user.terms_accepted_at)}</span>` : ''}
+                                <span>Signed up: ${formatDate(user.created_at)}</span>
+                                ${user.terms_accepted_at ? `<span>Terms: ${formatDate(user.terms_accepted_at)}</span>` : ''}
                             </div>
 
                             <div class="actions">
                         ${user.status === 'pending' ? `
-                            <button class="btn btn-success" onclick="approveUser(${user.id})">✅ Approve</button>
-                            <button class="btn btn-danger" onclick="rejectUser('${user.email}')">❌ Reject</button>
-                            <button class="btn btn-danger" onclick="deleteUser('${user.email}')" style="opacity: 0.7;">🗑️ Delete Forever</button>
+                            <button class="btn btn-success" onclick="approveUser(${user.id})">Approve</button>
+                            <button class="btn btn-danger" onclick="rejectUser(${user.id})">Reject</button>
+                            <button class="btn btn-danger" onclick="deleteUser(${user.id}, '${user.email}')" style="opacity: 0.7;">Delete</button>
                         ` : ''}
                         ${user.status === 'active' ? `
-                            <button class="btn btn-warning" onclick="pauseUser(${user.id})">⏸️ Pause</button>
-                            <button class="btn btn-danger" onclick="cancelUser(${user.id})">🗑️ Cancel</button>
-                            <button class="btn btn-danger" onclick="deleteUser('${user.email}')" style="opacity: 0.7;">🗑️ Delete Forever</button>
+                            <button class="btn btn-warning" onclick="pauseUser(${user.id})">Pause</button>
+                            <button class="btn btn-danger" onclick="cancelUser(${user.id})">Cancel</button>
+                            <button class="btn btn-danger" onclick="deleteUser(${user.id}, '${user.email}')" style="opacity: 0.7;">Delete</button>
                         ` : ''}
                         ${user.status === 'paused' ? `
-                            <button class="btn btn-success" onclick="reactivateUser(${user.id})">▶️ Reactivate</button>
-                            <button class="btn btn-danger" onclick="cancelUser(${user.id})">🗑️ Cancel</button>
-                            <button class="btn btn-danger" onclick="deleteUser('${user.email}')" style="opacity: 0.7;">🗑️ Delete Forever</button>
+                            <button class="btn btn-success" onclick="reactivateUser(${user.id})">Reactivate</button>
+                            <button class="btn btn-danger" onclick="cancelUser(${user.id})">Cancel</button>
+                            <button class="btn btn-danger" onclick="deleteUser(${user.id}, '${user.email}')" style="opacity: 0.7;">Delete</button>
                         ` : ''}
                         ${user.status === 'cancelled' ? `
-                            <button class="btn btn-secondary" onclick="reactivateUser(${user.id})">🔄 Reactivate</button>
-                            <button class="btn btn-danger" onclick="deleteUser('${user.email}')" style="opacity: 0.7;">🗑️ Delete Forever</button>
+                            <button class="btn btn-secondary" onclick="reactivateUser(${user.id})">Reactivate</button>
+                            <button class="btn btn-danger" onclick="deleteUser(${user.id}, '${user.email}')" style="opacity: 0.7;">Delete</button>
                         ` : ''}
                             </div>
                         </div>
@@ -472,18 +636,24 @@
                 const response = await fetch(`/api/admin/users?token=${token}`);
                 const data = await response.json();
 
-                // Update stats
+                if (data.status !== 'success') {
+                    console.error('Failed to fetch users:', data.message);
+                    return;
+                }
+
+                // Calculate stats
+                const totalTickers = data.users.reduce((sum, u) => sum + (u.tickers?.length || 0), 0);
                 const stats = {
+                    total: data.users.length,
                     pending: data.users.filter(u => u.status === 'pending').length,
                     active: data.users.filter(u => u.status === 'active').length,
-                    paused: data.users.filter(u => u.status === 'paused').length,
-                    cancelled: data.users.filter(u => u.status === 'cancelled').length
+                    tickers: totalTickers
                 };
 
+                document.getElementById('stat-total').textContent = stats.total;
                 document.getElementById('stat-pending').textContent = stats.pending;
                 document.getElementById('stat-active').textContent = stats.active;
-                document.getElementById('stat-paused').textContent = stats.paused;
-                document.getElementById('stat-cancelled').textContent = stats.cancelled;
+                document.getElementById('stat-tickers').textContent = stats.tickers;
 
                 // Render user lists
                 const pending = data.users.filter(u => u.status === 'pending');
@@ -507,152 +677,234 @@
             }
         }
 
-        async function approveUser(account_id) {
-            if (!confirm(`Approve this account?`)) return;
-
-            try {
-                const response = await fetch('/api/admin/approve-user', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({token, account_id})
-                });
-
-                const result = await response.json();
-                if (result.status === 'success') {
-                    fetchUsers();
-                } else {
-                    alert('Error: ' + result.message);
-                }
-            } catch (error) {
-                alert('Failed to approve user');
-            }
+        // User Actions
+        async function approveUser(user_id) {
+            if (!confirm('Approve this user?')) return;
+            await userAction('/api/admin/approve-user', {token, user_id});
         }
 
-        async function rejectUser(email) {
-            if (!confirm(`Reject user ${email}? This will set their status to 'cancelled'.`)) return;
-
-            try {
-                const response = await fetch('/api/admin/reject-user', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({token, email})
-                });
-
-                const result = await response.json();
-                if (result.status === 'success') {
-                    fetchUsers();
-                } else {
-                    alert('Error: ' + result.message);
-                }
-            } catch (error) {
-                alert('Failed to reject user');
-            }
+        async function rejectUser(user_id) {
+            if (!confirm('Reject this user?')) return;
+            await userAction('/api/admin/reject-user', {token, user_id});
         }
 
-        async function pauseUser(account_id) {
-            if (!confirm(`Pause this account? They will stop receiving emails for these tickers.`)) return;
-
-            try {
-                const response = await fetch('/api/admin/pause-user', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({token, account_id})
-                });
-
-                const result = await response.json();
-                if (result.status === 'success') {
-                    fetchUsers();
-                } else {
-                    alert('Error: ' + result.message);
-                }
-            } catch (error) {
-                alert('Failed to pause user');
-            }
+        async function pauseUser(user_id) {
+            if (!confirm('Pause this user? They will stop receiving emails.')) return;
+            await userAction('/api/admin/pause-user', {token, user_id});
         }
 
-        async function cancelUser(account_id) {
-            if (!confirm(`Cancel this account? This is the same as unsubscribing.`)) return;
-
-            try {
-                const response = await fetch('/api/admin/cancel-user', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({token, account_id})
-                });
-
-                const result = await response.json();
-                if (result.status === 'success') {
-                    fetchUsers();
-                } else {
-                    alert('Error: ' + result.message);
-                }
-            } catch (error) {
-                alert('Failed to cancel user');
-            }
+        async function cancelUser(user_id) {
+            if (!confirm('Cancel this user? This is the same as unsubscribing.')) return;
+            await userAction('/api/admin/cancel-user', {token, user_id});
         }
 
-        async function reactivateUser(account_id) {
-            if (!confirm(`Reactivate this account? They will start receiving emails again for these tickers.`)) return;
-
-            try {
-                const response = await fetch('/api/admin/reactivate-user', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({token, account_id})
-                });
-
-                const result = await response.json();
-                if (result.status === 'success') {
-                    fetchUsers();
-                } else {
-                    alert('Error: ' + result.message);
-                }
-            } catch (error) {
-                alert('Failed to reactivate user');
-            }
+        async function reactivateUser(user_id) {
+            if (!confirm('Reactivate this user?')) return;
+            await userAction('/api/admin/reactivate-user', {token, user_id});
         }
 
-        async function deleteUser(email) {
-            if (!confirm(`⚠️ PERMANENTLY DELETE user ${email}?\n\nThis action CANNOT be undone.\n\nThis will:\n• Delete the user from the database\n• Delete their unsubscribe tokens\n• Allow them to re-sign up with different tickers\n\nType "DELETE" in the next prompt to confirm.`)) return;
-
-            const confirmText = prompt('Type "DELETE" to confirm permanent deletion:');
+        async function deleteUser(user_id, email) {
+            if (!confirm(`PERMANENTLY DELETE user ${email}?\n\nThis action CANNOT be undone.`)) return;
+            const confirmText = prompt('Type "DELETE" to confirm:');
             if (confirmText !== 'DELETE') {
-                alert('Deletion cancelled - you must type DELETE exactly');
+                alert('Deletion cancelled');
+                return;
+            }
+            await userAction('/api/admin/delete-user', {token, user_id});
+        }
+
+        async function userAction(url, body) {
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body)
+                });
+                const result = await response.json();
+                if (result.status === 'success') {
+                    fetchUsers();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Action failed: ' + error);
+            }
+        }
+
+        // Ticker Management
+        async function removeTicker(user_id, ticker) {
+            if (!confirm(`Remove ticker ${ticker} from this user?`)) return;
+
+            try {
+                const response = await fetch('/api/admin/remove-ticker', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token, user_id, ticker})
+                });
+                const result = await response.json();
+                if (result.status === 'success') {
+                    fetchUsers();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to remove ticker');
+            }
+        }
+
+        function openAddTickerModal(user_id, email, tickerLimit, currentCount) {
+            addTickerUserId = user_id;
+            document.getElementById('add-ticker-input').value = '';
+            document.getElementById('add-ticker-user-info').textContent =
+                `Adding ticker to: ${email} (${currentCount}/${tickerLimit || '∞'} tickers)`;
+            document.getElementById('add-ticker-modal').classList.add('active');
+            document.getElementById('add-ticker-input').focus();
+        }
+
+        function closeAddTickerModal() {
+            document.getElementById('add-ticker-modal').classList.remove('active');
+            addTickerUserId = null;
+        }
+
+        function handleAddTickerKeypress(event) {
+            if (event.key === 'Enter') {
+                confirmAddTicker();
+            }
+        }
+
+        async function confirmAddTicker() {
+            const ticker = document.getElementById('add-ticker-input').value.trim().toUpperCase();
+            if (!ticker) {
+                alert('Please enter a ticker');
                 return;
             }
 
             try {
-                const response = await fetch('/api/admin/delete-user', {
+                const response = await fetch('/api/admin/add-ticker', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({token, email})
+                    body: JSON.stringify({token, user_id: addTickerUserId, ticker})
                 });
-
                 const result = await response.json();
                 if (result.status === 'success') {
-                    alert(`✅ User ${email} permanently deleted`);
+                    closeAddTickerModal();
                     fetchUsers();
                 } else {
                     alert('Error: ' + result.message);
                 }
             } catch (error) {
-                alert('Failed to delete user');
+                alert('Failed to add ticker');
             }
         }
 
-        // Bulk selection tracking
+        // Create User Modal
+        function openCreateUserModal() {
+            modalTickers = [];
+            document.getElementById('modal-email').value = '';
+            document.getElementById('modal-name').value = '';
+            document.getElementById('modal-user-type').value = 'beta';
+            document.getElementById('modal-ticker-input').value = '';
+            renderModalTickers();
+            updateTickerLimit();
+            document.getElementById('create-user-modal').classList.add('active');
+            document.getElementById('modal-email').focus();
+        }
+
+        function closeCreateUserModal() {
+            document.getElementById('create-user-modal').classList.remove('active');
+        }
+
+        function updateTickerLimit() {
+            const userType = document.getElementById('modal-user-type').value;
+            const limits = {admin: 'Admin users have no ticker limit', beta: 'Beta users can have up to 3 tickers', paid: 'Paid users can have up to 10 tickers'};
+            document.getElementById('ticker-limit-hint').textContent = limits[userType];
+        }
+
+        function handleTickerKeypress(event) {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                addTickerToModal();
+            }
+        }
+
+        function addTickerToModal() {
+            const ticker = document.getElementById('modal-ticker-input').value.trim().toUpperCase();
+            if (!ticker) return;
+
+            const userType = document.getElementById('modal-user-type').value;
+            const limits = {admin: Infinity, beta: 3, paid: 10};
+            const limit = limits[userType];
+
+            if (modalTickers.length >= limit) {
+                alert(`${userType} users can have at most ${limit} tickers`);
+                return;
+            }
+
+            if (modalTickers.includes(ticker)) {
+                alert('Ticker already added');
+                return;
+            }
+
+            modalTickers.push(ticker);
+            document.getElementById('modal-ticker-input').value = '';
+            renderModalTickers();
+        }
+
+        function removeModalTicker(ticker) {
+            modalTickers = modalTickers.filter(t => t !== ticker);
+            renderModalTickers();
+        }
+
+        function renderModalTickers() {
+            const container = document.getElementById('modal-tickers-list');
+            container.innerHTML = modalTickers.map(t => `
+                <span class="ticker-badge">
+                    ${t}
+                    <span class="remove-ticker" onclick="removeModalTicker('${t}')">×</span>
+                </span>
+            `).join('');
+        }
+
+        async function createUser() {
+            const email = document.getElementById('modal-email').value.trim();
+            const name = document.getElementById('modal-name').value.trim();
+            const user_type = document.getElementById('modal-user-type').value;
+
+            if (!email || !name) {
+                alert('Email and name are required');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/admin/create-user', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token, email, name, user_type, tickers: modalTickers})
+                });
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert(`Created ${user_type} user: ${email}`);
+                    closeCreateUserModal();
+                    fetchUsers();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to create user: ' + error);
+            }
+        }
+
+        // Bulk Actions
         function updateBulkActions() {
             const checkboxes = document.querySelectorAll('.user-checkbox:checked');
             const count = checkboxes.length;
 
-            // Collect unique tickers from selected users
             const uniqueTickers = new Set();
             checkboxes.forEach(cb => {
                 const tickers = cb.dataset.tickers.split(',').filter(t => t.trim());
                 tickers.forEach(t => uniqueTickers.add(t.trim()));
             });
 
-            // Update UI
             const bulkActionsBar = document.getElementById('bulk-actions-bar');
             const selectionCount = document.getElementById('selection-count');
             const tickerCount = document.getElementById('ticker-count');
@@ -678,17 +930,14 @@
                 return;
             }
 
-            // Collect ticker info for confirmation
             const uniqueTickers = new Set();
             checkboxes.forEach(cb => {
                 const tickers = cb.dataset.tickers.split(',').filter(t => t.trim());
                 tickers.forEach(t => uniqueTickers.add(t.trim()));
             });
 
-            const confirmMsg = `Generate Reports for ${selectedUserIds.length} Account${selectedUserIds.length > 1 ? 's' : ''}?\n\n` +
-                `This will process ${uniqueTickers.size} unique ticker${uniqueTickers.size > 1 ? 's' : ''}.\n` +
-                `Tickers: ${Array.from(uniqueTickers).join(', ')}\n\n` +
-                `Processing takes ~${Math.ceil(uniqueTickers.size / 3 * 10)}-${Math.ceil(uniqueTickers.size / 3 * 15)} minutes.\n\n` +
+            const confirmMsg = `Generate reports for ${selectedUserIds.length} user(s)?\n\n` +
+                `This will process ${uniqueTickers.size} unique ticker(s).\n\n` +
                 `Continue?`;
 
             if (!confirm(confirmMsg)) return;
@@ -703,9 +952,7 @@
                 const result = await response.json();
 
                 if (result.status === 'success') {
-                    alert(`✅ ${result.message}\n\nProcessing ${result.ticker_count} unique tickers from ${result.user_count} account(s).\n\nCheck /admin/queue in 10-20 minutes.`);
-
-                    // Clear selections
+                    alert(`${result.message}\n\nCheck /admin/queue for progress.`);
                     checkboxes.forEach(cb => cb.checked = false);
                     updateBulkActions();
                 } else {
@@ -713,9 +960,18 @@
                 }
             } catch (error) {
                 console.error('Failed to generate reports:', error);
-                alert('Failed to generate reports. Check console for details.');
+                alert('Failed to generate reports');
             }
         }
+
+        // Close modals on overlay click
+        document.querySelectorAll('.modal-overlay').forEach(overlay => {
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) {
+                    overlay.classList.remove('active');
+                }
+            });
+        });
 
         // Initial load
         fetchUsers();

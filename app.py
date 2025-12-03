@@ -2228,87 +2228,79 @@ def ensure_schema():
                 CREATE INDEX IF NOT EXISTS idx_parsed_pr_source ON parsed_press_releases(source_type, source_id);
                 CREATE INDEX IF NOT EXISTS idx_parsed_pr_fed ON parsed_press_releases(fed_to_phase1) WHERE fed_to_phase1 = FALSE;
 
-                -- Beta users table for landing page signups
-                CREATE TABLE IF NOT EXISTS beta_users (
+                -- ============================================================
+                -- USERS TABLE (Dec 2025 - replaces beta_users)
+                -- One row per user, email is UNIQUE
+                -- ============================================================
+                CREATE TABLE IF NOT EXISTS users (
                     id SERIAL PRIMARY KEY,
+                    email VARCHAR(255) UNIQUE NOT NULL,
                     name VARCHAR(255) NOT NULL,
-                    email VARCHAR(255) NOT NULL,
-                    ticker1 VARCHAR(10) NOT NULL,
-                    ticker2 VARCHAR(10) NOT NULL,
-                    ticker3 VARCHAR(10) NOT NULL,
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    status VARCHAR(50) DEFAULT 'pending',
+                    user_type VARCHAR(20) NOT NULL DEFAULT 'beta',  -- 'admin', 'beta', 'paid'
+                    ticker_limit INTEGER DEFAULT 3,                  -- NULL = unlimited (for admin)
+                    status VARCHAR(50) NOT NULL DEFAULT 'pending',   -- 'pending', 'active', 'paused', 'cancelled'
                     terms_version VARCHAR(10) DEFAULT '1.0',
                     terms_accepted_at TIMESTAMPTZ,
                     privacy_version VARCHAR(10) DEFAULT '1.0',
-                    privacy_accepted_at TIMESTAMPTZ
+                    privacy_accepted_at TIMESTAMPTZ,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
                 );
 
-                CREATE INDEX IF NOT EXISTS idx_beta_users_status ON beta_users(status);
-                CREATE INDEX IF NOT EXISTS idx_beta_users_created_at ON beta_users(created_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_beta_users_email ON beta_users(email);
+                CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
+                CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+                CREATE INDEX IF NOT EXISTS idx_users_user_type ON users(user_type);
 
-                -- Safeguard 1: Prevent duplicate person (same name + email)
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_beta_users_name_email
-                    ON beta_users(LOWER(name), LOWER(email));
+                -- ============================================================
+                -- USER TICKERS TABLE (many-to-many: user can have multiple tickers)
+                -- ============================================================
+                CREATE TABLE IF NOT EXISTS user_tickers (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    ticker VARCHAR(10) NOT NULL,
+                    added_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(user_id, ticker)  -- No duplicate tickers per user
+                );
 
-                -- Safeguard 2: Prevent duplicate ticker sets per email
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_beta_users_email_tickers
-                    ON beta_users(LOWER(email), ticker1, ticker2, ticker3);
+                CREATE INDEX IF NOT EXISTS idx_user_tickers_user_id ON user_tickers(user_id);
+                CREATE INDEX IF NOT EXISTS idx_user_tickers_ticker ON user_tickers(ticker);
 
-                -- Add terms versioning columns to existing beta_users table (safe migration)
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                                 WHERE table_name='beta_users' AND column_name='terms_version') THEN
-                        ALTER TABLE beta_users
-                        ADD COLUMN terms_version VARCHAR(10) DEFAULT '1.0',
-                        ADD COLUMN terms_accepted_at TIMESTAMPTZ,
-                        ADD COLUMN privacy_version VARCHAR(10) DEFAULT '1.0',
-                        ADD COLUMN privacy_accepted_at TIMESTAMPTZ;
-                    END IF;
-                END $$;
-
-                -- Create index AFTER adding columns
-                CREATE INDEX IF NOT EXISTS idx_beta_users_terms_version ON beta_users(terms_version);
-
-                -- Unsubscribe tokens table (create first, before constraint migrations)
+                -- ============================================================
+                -- UNSUBSCRIBE TOKENS TABLE (linked to user_id, not email)
+                -- ============================================================
                 CREATE TABLE IF NOT EXISTS unsubscribe_tokens (
                     id SERIAL PRIMARY KEY,
-                    user_email VARCHAR(255) NOT NULL,
+                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    user_email VARCHAR(255),  -- Kept for backward compat during migration
                     token VARCHAR(64) UNIQUE NOT NULL,
                     created_at TIMESTAMPTZ DEFAULT NOW(),
                     used_at TIMESTAMPTZ,
                     ip_address VARCHAR(45),
                     user_agent TEXT
-                    -- NOTE: No foreign key constraint. Email can appear multiple times in beta_users,
-                    -- and unsubscribing one email should unsubscribe ALL accounts with that email.
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_token ON unsubscribe_tokens(token);
-                CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_email ON unsubscribe_tokens(user_email);
+                CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_user_id ON unsubscribe_tokens(user_id);
                 CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_used ON unsubscribe_tokens(used_at) WHERE used_at IS NULL;
 
-                -- Drop foreign key constraint on unsubscribe_tokens (if exists) BEFORE dropping email UNIQUE
-                -- This migration handles existing databases that have the FK constraint
+                -- ============================================================
+                -- MIGRATION: Add user_id column to unsubscribe_tokens if missing
+                -- ============================================================
                 DO $$
                 BEGIN
-                    IF EXISTS (SELECT 1 FROM information_schema.table_constraints
-                              WHERE constraint_name = 'unsubscribe_tokens_user_email_fkey'
-                              AND table_name = 'unsubscribe_tokens') THEN
-                        ALTER TABLE unsubscribe_tokens DROP CONSTRAINT unsubscribe_tokens_user_email_fkey;
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                                 WHERE table_name='unsubscribe_tokens' AND column_name='user_id') THEN
+                        ALTER TABLE unsubscribe_tokens ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
+                        CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_user_id ON unsubscribe_tokens(user_id);
                     END IF;
                 END $$;
 
-                -- Drop old UNIQUE constraint on email (migration for duplicate email support)
-                DO $$
-                BEGIN
-                    -- Check if the old constraint exists
-                    IF EXISTS (SELECT 1 FROM pg_constraint
-                              WHERE conname = 'beta_users_email_key') THEN
-                        ALTER TABLE beta_users DROP CONSTRAINT beta_users_email_key;
-                    END IF;
-                END $$;
+                -- ============================================================
+                -- MIGRATION: Drop old beta_users table if it exists
+                -- (Only after data has been migrated - safe because user cleared all test accounts)
+                -- ============================================================
+                DROP TABLE IF EXISTS beta_users CASCADE;
 
                 -- Daily Email Queue: Workflow for beta user emails
                 CREATE TABLE IF NOT EXISTS email_queue (
@@ -20424,30 +20416,32 @@ async def unsubscribe_page(request: Request, token: str = Query(...)):
     """
     Handle unsubscribe requests via token link.
     Idempotent: Can be called multiple times safely.
+
+    Uses: users table (Dec 2025 schema)
     """
     LOG.info(f"Unsubscribe request with token: {token[:10]}...")
 
     try:
         with db() as conn, conn.cursor() as cur:
             # Validate token and get user info
-            # NEW: Use account_id for per-account unsubscribe
             cur.execute("""
-                SELECT ut.account_id, ut.user_email, ut.used_at, bu.name, bu.status, bu.ticker1, bu.ticker2, bu.ticker3
+                SELECT ut.user_id, ut.user_email, ut.used_at, u.name, u.status
                 FROM unsubscribe_tokens ut
-                JOIN beta_users bu ON ut.account_id = bu.account_id
+                JOIN users u ON ut.user_id = u.id
                 WHERE ut.token = %s
             """, (token,))
             result = cur.fetchone()
 
             if not result:
                 LOG.warning(f"Invalid unsubscribe token: {token[:10]}...")
-                return HTMLResponse("""
+                admin_email = os.getenv('ADMIN_EMAIL', 'support@weavara.io')
+                return HTMLResponse(f"""
                     <!DOCTYPE html>
                     <html>
                     <head>
                         <title>Invalid Link - Weavara</title>
                         <style>
-                            body {
+                            body {{
                                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                                 background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
                                 min-height: 100vh;
@@ -20456,37 +20450,34 @@ async def unsubscribe_page(request: Request, token: str = Query(...)):
                                 justify-content: center;
                                 margin: 0;
                                 padding: 20px;
-                            }
-                            .container {
+                            }}
+                            .container {{
                                 background: white;
                                 padding: 40px;
                                 border-radius: 12px;
                                 box-shadow: 0 20px 60px rgba(0,0,0,0.3);
                                 max-width: 500px;
                                 text-align: center;
-                            }
-                            h1 { color: #dc2626; margin-bottom: 16px; }
-                            p { color: #374151; line-height: 1.6; }
-                            a { color: #1e40af; text-decoration: none; }
+                            }}
+                            h1 {{ color: #dc2626; margin-bottom: 16px; }}
+                            p {{ color: #374151; line-height: 1.6; }}
+                            a {{ color: #1e40af; text-decoration: none; }}
                         </style>
                     </head>
                     <body>
                         <div class="container">
-                            <h1>❌ Invalid Unsubscribe Link</h1>
+                            <h1>Invalid Unsubscribe Link</h1>
                             <p>This unsubscribe link is invalid or has expired.</p>
-                            <p>If you need assistance, please contact us at <a href="mailto:{os.getenv('ADMIN_EMAIL', 'support@weavara.io')}">{os.getenv('ADMIN_EMAIL', 'support@weavara.io')}</a></p>
-                            <p style="margin-top: 24px;"><a href="/">← Return to Home</a></p>
+                            <p>If you need assistance, please contact us at <a href="mailto:{admin_email}">{admin_email}</a></p>
+                            <p style="margin-top: 24px;"><a href="/">Return to Home</a></p>
                         </div>
                     </body>
                     </html>
                 """, status_code=404)
 
-            account_id = result['account_id']
+            user_id = result['user_id']
             email = result['user_email']
             name = result['name']
-            ticker1 = result['ticker1']
-            ticker2 = result['ticker2']
-            ticker3 = result['ticker3']
             already_cancelled = result['status'] == 'cancelled'
             already_used = result['used_at'] is not None
 
@@ -20495,13 +20486,13 @@ async def unsubscribe_page(request: Request, token: str = Query(...)):
             user_agent = request.headers.get('user-agent', '')
 
             if not already_cancelled:
-                # Mark THIS ACCOUNT as unsubscribed (not all accounts with this email)
+                # Mark user as unsubscribed
                 cur.execute("""
-                    UPDATE beta_users
-                    SET status = 'cancelled'
-                    WHERE account_id = %s
-                """, (account_id,))
-                LOG.info(f"Unsubscribed account {account_id} ({email}) for tickers [{ticker1}, {ticker2}, {ticker3}]")
+                    UPDATE users
+                    SET status = 'cancelled', updated_at = NOW()
+                    WHERE id = %s
+                """, (user_id,))
+                LOG.info(f"Unsubscribed user {user_id} ({email})")
 
             if not already_used:
                 # Mark token as used
@@ -21132,147 +21123,138 @@ class BetaSignupRequest(BaseModel):
     ticker3: str
 
 
-def generate_unsubscribe_token_for_account(account_id: int, email: str) -> str:
+def generate_unsubscribe_token_for_user(user_id: int, email: str) -> str:
     """
-    Generate cryptographically secure unsubscribe token for a specific account.
+    Generate cryptographically secure unsubscribe token for a user.
     Returns: 43-character URL-safe token
 
-    NEW: Uses account_id for per-account unsubscribe.
+    Uses: users table (Dec 2025 schema)
     """
     token = secrets.token_urlsafe(32)  # 32 bytes = 43 chars base64
 
     try:
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO unsubscribe_tokens (account_id, user_email, token)
+                INSERT INTO unsubscribe_tokens (user_id, user_email, token)
                 VALUES (%s, %s, %s)
                 ON CONFLICT (token) DO NOTHING
                 RETURNING token
-            """, (account_id, email, token))
+            """, (user_id, email, token))
             result = cur.fetchone()
 
             if not result:
                 # Token collision (astronomically rare), retry
-                LOG.warning(f"Token collision for account {account_id}, regenerating")
-                return generate_unsubscribe_token_for_account(account_id, email)
+                LOG.warning(f"Token collision for user {user_id}, regenerating")
+                return generate_unsubscribe_token_for_user(user_id, email)
 
             conn.commit()
-            LOG.info(f"Generated unsubscribe token for account {account_id} ({email})")
+            LOG.info(f"Generated unsubscribe token for user {user_id} ({email})")
             return token
     except Exception as e:
-        LOG.error(f"Error generating unsubscribe token for account {account_id}: {e}")
+        LOG.error(f"Error generating unsubscribe token for user {user_id}: {e}")
         raise
+
+
+# Backward compatibility aliases
+def generate_unsubscribe_token_for_account(account_id: int, email: str) -> str:
+    """DEPRECATED: Use generate_unsubscribe_token_for_user() instead."""
+    return generate_unsubscribe_token_for_user(account_id, email)
 
 
 def generate_unsubscribe_token(email: str) -> str:
     """
-    DEPRECATED: Use generate_unsubscribe_token_for_account() instead.
+    DEPRECATED: Use generate_unsubscribe_token_for_user() with user_id instead.
     Legacy function maintained for backward compatibility only.
     """
-    # This is kept for backward compatibility but should not be used for new code
-    LOG.warning(f"DEPRECATED: generate_unsubscribe_token() called for {email}. Use account_id version instead.")
-    token = secrets.token_urlsafe(32)
+    LOG.warning(f"DEPRECATED: generate_unsubscribe_token() called for {email}. Use user_id version instead.")
 
     try:
         with db() as conn, conn.cursor() as cur:
-            # Get first account for this email (legacy behavior)
-            cur.execute("""
-                SELECT id FROM beta_users WHERE email = %s LIMIT 1
-            """, (email,))
-            account = cur.fetchone()
+            # Get user for this email
+            cur.execute("SELECT id FROM users WHERE email = %s", (email,))
+            user = cur.fetchone()
 
-            if account:
-                return generate_unsubscribe_token_for_account(account['id'], email)
+            if user:
+                return generate_unsubscribe_token_for_user(user['id'], email)
             else:
-                LOG.error(f"No account found for email {email}")
+                LOG.error(f"No user found for email {email}")
                 return ""
     except Exception as e:
         LOG.error(f"Error generating unsubscribe token: {e}")
         raise
 
 
-def get_account_id_from_email(email: str, ticker1: str = None, ticker2: str = None, ticker3: str = None) -> Optional[int]:
+def get_user_id_from_email(email: str) -> Optional[int]:
     """
-    Helper function to get account_id from email.
-    If tickers provided, finds exact match.
-    Otherwise returns first account for that email.
+    Get user_id from email.
+    Returns None if no user found.
 
-    Returns None if no account found.
+    Uses: users table (Dec 2025 schema)
     """
     try:
         with db() as conn, conn.cursor() as cur:
-            if ticker1 and ticker2 and ticker3:
-                # Find exact account with these tickers
-                cur.execute("""
-                    SELECT id FROM beta_users
-                    WHERE email = %s AND ticker1 = %s AND ticker2 = %s AND ticker3 = %s
-                    LIMIT 1
-                """, (email, ticker1, ticker2, ticker3))
-            else:
-                # Get first account for this email
-                cur.execute("""
-                    SELECT id FROM beta_users
-                    WHERE email = %s
-                    LIMIT 1
-                """, (email,))
-
+            cur.execute("SELECT id FROM users WHERE email = %s", (email,))
             result = cur.fetchone()
             return result['id'] if result else None
     except Exception as e:
-        LOG.error(f"Error getting account_id for {email}: {e}")
+        LOG.error(f"Error getting user_id for {email}: {e}")
         return None
 
 
-def get_or_create_unsubscribe_token(account_id_or_email, ticker1: str = None, ticker2: str = None, ticker3: str = None) -> str:
+# Backward compatibility alias
+def get_account_id_from_email(email: str, ticker1: str = None, ticker2: str = None, ticker3: str = None) -> Optional[int]:
+    """DEPRECATED: Use get_user_id_from_email() instead."""
+    return get_user_id_from_email(email)
+
+
+def get_or_create_unsubscribe_token(user_id_or_email, ticker1: str = None, ticker2: str = None, ticker3: str = None) -> str:
     """
-    Get existing unsubscribe token or create new one for a specific account.
-    Reuses token if account hasn't unsubscribed yet.
-    Returns empty string if account not found.
+    Get existing unsubscribe token or create new one for a user.
+    Reuses token if user hasn't unsubscribed yet.
+    Returns empty string if user not found.
 
     Parameters:
-        account_id_or_email: Can be either int (account_id) or str (email for backward compatibility)
-        ticker1, ticker2, ticker3: Optional tickers to find specific account (only used with email)
+        user_id_or_email: Can be either int (user_id) or str (email for backward compatibility)
+        ticker1, ticker2, ticker3: DEPRECATED - ignored (kept for backward compat)
 
-    NEW: Supports both account_id (preferred) and email (legacy) for backward compatibility.
+    Uses: users table (Dec 2025 schema)
     """
     try:
-        # Determine if we received account_id or email
-        if isinstance(account_id_or_email, int):
-            account_id = account_id_or_email
+        # Determine if we received user_id or email
+        if isinstance(user_id_or_email, int):
+            user_id = user_id_or_email
         else:
-            # Legacy: email provided, lookup account_id
-            email = account_id_or_email
-            account_id = get_account_id_from_email(email, ticker1, ticker2, ticker3)
-            if not account_id:
-                LOG.warning(f"No account found for email {email}")
+            # Legacy: email provided, lookup user_id
+            email = user_id_or_email
+            user_id = get_user_id_from_email(email)
+            if not user_id:
+                LOG.warning(f"No user found for email {email}")
                 return ""
 
         with db() as conn, conn.cursor() as cur:
-            # Get account info
-            cur.execute("""
-                SELECT id, email FROM beta_users WHERE id = %s
-            """, (account_id,))
-            account = cur.fetchone()
+            # Get user info
+            cur.execute("SELECT id, email FROM users WHERE id = %s", (user_id,))
+            user = cur.fetchone()
 
-            if not account:
-                LOG.warning(f"Account ID {account_id} not found, skipping unsubscribe token generation")
+            if not user:
+                LOG.warning(f"User ID {user_id} not found, skipping unsubscribe token generation")
                 return ""
 
-            email = account['email']
+            email = user['email']
 
-            # Check if unused token exists for this account
+            # Check if unused token exists for this user
             cur.execute("""
                 SELECT token FROM unsubscribe_tokens
-                WHERE account_id = %s AND used_at IS NULL
+                WHERE user_id = %s AND used_at IS NULL
                 ORDER BY created_at DESC LIMIT 1
-            """, (account_id,))
+            """, (user_id,))
             result = cur.fetchone()
 
             if result:
                 return result['token']
 
             # No unused token found, generate new one
-            return generate_unsubscribe_token_for_account(account_id, email)
+            return generate_unsubscribe_token_for_user(user_id, email)
     except Exception as e:
         LOG.error(f"Error getting unsubscribe token: {e}")
         # Fallback: return empty string (email will have generic unsubscribe link)
@@ -21284,6 +21266,8 @@ async def beta_signup_endpoint(signup: BetaSignupRequest):
     """
     Handle beta sign-up form submissions with strict ticker validation.
     Public endpoint (no auth required).
+
+    Uses: users + user_tickers tables (Dec 2025 schema)
     """
     try:
         # Validate and clean input
@@ -21325,45 +21309,41 @@ async def beta_signup_endpoint(signup: BetaSignupRequest):
                 "company": config.get("company_name", "Unknown")
             })
 
-        # Check for duplicate combinations (allow same email with different name/tickers)
+        # Check if email already exists (strict uniqueness)
         with db() as conn, conn.cursor() as cur:
-            # Check 1: Same name + email (duplicate person)
-            cur.execute(
-                "SELECT id FROM beta_users WHERE LOWER(name) = LOWER(%s) AND LOWER(email) = LOWER(%s)",
-                (name, email)
-            )
+            cur.execute("SELECT id FROM users WHERE email = %s", (email,))
             if cur.fetchone():
                 return JSONResponse(
                     status_code=400,
-                    content={"status": "error", "message": "An account with this name and email already exists. Please use a different name."}
+                    content={"status": "error", "message": "An account with this email already exists."}
                 )
 
-            # Check 2: Same email + ticker combination
-            cur.execute(
-                "SELECT id FROM beta_users WHERE LOWER(email) = LOWER(%s) AND ticker1 = %s AND ticker2 = %s AND ticker3 = %s",
-                (email, tickers[0], tickers[1], tickers[2])
-            )
-            if cur.fetchone():
-                return JSONResponse(
-                    status_code=400,
-                    content={"status": "error", "message": "An account with this email and ticker combination already exists."}
-                )
-
-        # Save to database with terms tracking
+        # Create user and tickers in transaction
         with db() as conn, conn.cursor() as cur:
+            # Insert user
             cur.execute("""
-                INSERT INTO beta_users (
-                    name, email, ticker1, ticker2, ticker3, created_at, status,
+                INSERT INTO users (
+                    name, email, user_type, ticker_limit, status,
                     terms_version, terms_accepted_at, privacy_version, privacy_accepted_at
                 )
-                VALUES (%s, %s, %s, %s, %s, NOW(), 'active', %s, NOW(), %s, NOW())
-            """, (name, email, tickers[0], tickers[1], tickers[2], TERMS_VERSION, PRIVACY_VERSION))
+                VALUES (%s, %s, 'beta', 3, 'active', %s, NOW(), %s, NOW())
+                RETURNING id
+            """, (name, email, TERMS_VERSION, PRIVACY_VERSION))
+            user_id = cur.fetchone()['id']
+
+            # Insert tickers
+            for ticker in tickers:
+                cur.execute("""
+                    INSERT INTO user_tickers (user_id, ticker)
+                    VALUES (%s, %s)
+                """, (user_id, ticker))
+
             conn.commit()
 
         # Generate unsubscribe token
         try:
-            unsubscribe_token = generate_unsubscribe_token(email)
-            LOG.info(f"Created unsubscribe token for {email}")
+            unsubscribe_token = generate_unsubscribe_token_for_user(user_id, email)
+            LOG.info(f"Created unsubscribe token for user {user_id} ({email})")
         except Exception as e:
             LOG.error(f"Failed to create unsubscribe token for {email}: {e}")
             # Don't block signup if token generation fails
@@ -21371,7 +21351,7 @@ async def beta_signup_endpoint(signup: BetaSignupRequest):
         # Send admin notification email
         send_beta_signup_notification(name, email, tickers[0], tickers[1], tickers[2])
 
-        LOG.info(f"✅ New beta user: {email} tracking {tickers[0]}, {tickers[1]}, {tickers[2]}")
+        LOG.info(f"✅ New beta user {user_id}: {email} tracking {', '.join(tickers)}")
 
         return {
             "status": "success",
@@ -25637,16 +25617,17 @@ def get_admin_stats(token: str = Query(...)):
 
 @APP.get("/api/admin/users")
 def get_all_users(token: str = Query(...)):
-    """Get all beta users"""
+    """Get all users with their tickers from normalized schema"""
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
     try:
         with db() as conn, conn.cursor() as cur:
+            # Get all users
             cur.execute("""
-                SELECT id, name, email, ticker1, ticker2, ticker3, status,
+                SELECT id, name, email, user_type, ticker_limit, status,
                        created_at, terms_accepted_at, privacy_accepted_at
-                FROM beta_users
+                FROM users
                 ORDER BY
                     CASE status
                         WHEN 'pending' THEN 1
@@ -25658,9 +25639,25 @@ def get_all_users(token: str = Query(...)):
             """)
             users = cur.fetchall()
 
+            # Get all tickers grouped by user
+            cur.execute("""
+                SELECT user_id, ARRAY_AGG(ticker ORDER BY ticker) as tickers
+                FROM user_tickers
+                GROUP BY user_id
+            """)
+            ticker_rows = cur.fetchall()
+            user_tickers_map = {row['user_id']: row['tickers'] for row in ticker_rows}
+
+            # Combine users with their tickers
+            result = []
+            for user in users:
+                user_dict = dict(user)
+                user_dict['tickers'] = user_tickers_map.get(user['id'], [])
+                result.append(user_dict)
+
             return {
                 "status": "success",
-                "users": users
+                "users": result
             }
     except Exception as e:
         LOG.error(f"Failed to get users: {e}")
@@ -25668,225 +25665,367 @@ def get_all_users(token: str = Query(...)):
 
 @APP.post("/api/admin/approve-user")
 async def approve_user(request: Request):
-    """Approve a pending user by account_id (supports multi-account per email)"""
+    """Approve a pending user by user_id"""
     body = await request.json()
     token = body.get('token')
-    account_id = body.get('account_id')  # NEW: Use account_id instead of email
-    email = body.get('email')  # Keep for backward compatibility
+    user_id = body.get('user_id') or body.get('account_id')  # Support both names
 
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
+    if not user_id:
+        return {"status": "error", "message": "user_id is required"}
+
     try:
         with db() as conn, conn.cursor() as cur:
-            if account_id:
-                # NEW: Update specific account only
-                cur.execute("""
-                    UPDATE beta_users
-                    SET status = 'active'
-                    WHERE id = %s
-                    RETURNING email, ticker1, ticker2, ticker3
-                """, (account_id,))
-                result = cur.fetchone()
-                if result:
-                    conn.commit()
-                    LOG.info(f"✅ Approved account {account_id}: {result['email']} ({result['ticker1']}, {result['ticker2']}, {result['ticker3']})")
-                    return {"status": "success", "message": f"Approved account {account_id}"}
-                else:
-                    return {"status": "error", "message": f"Account {account_id} not found"}
-            else:
-                # OLD: Backward compatibility - update all accounts with this email
-                cur.execute("""
-                    UPDATE beta_users
-                    SET status = 'active'
-                    WHERE email = %s
-                """, (email,))
+            cur.execute("""
+                UPDATE users
+                SET status = 'active', updated_at = NOW()
+                WHERE id = %s
+                RETURNING email, name
+            """, (user_id,))
+            result = cur.fetchone()
+            if result:
                 conn.commit()
-                LOG.warning(f"✅ Approved ALL accounts for: {email} (deprecated - use account_id)")
-                return {"status": "success", "message": f"Approved {email}"}
+                LOG.info(f"✅ Approved user {user_id}: {result['email']}")
+                return {"status": "success", "message": f"Approved {result['email']}"}
+            else:
+                return {"status": "error", "message": f"User {user_id} not found"}
     except Exception as e:
         LOG.error(f"Failed to approve user: {e}")
         return {"status": "error", "message": str(e)}
 
 @APP.post("/api/admin/reject-user")
 async def reject_user(request: Request):
-    """Reject a pending user"""
+    """Reject a pending user by user_id"""
     body = await request.json()
     token = body.get('token')
-    email = body.get('email')
+    user_id = body.get('user_id') or body.get('account_id')
 
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
+    if not user_id:
+        return {"status": "error", "message": "user_id is required"}
+
     try:
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                UPDATE beta_users
-                SET status = 'cancelled'
-                WHERE email = %s
-            """, (email,))
-            conn.commit()
-
-            LOG.info(f"❌ Rejected user: {email}")
-            return {"status": "success", "message": f"Rejected {email}"}
+                UPDATE users
+                SET status = 'cancelled', updated_at = NOW()
+                WHERE id = %s
+                RETURNING email
+            """, (user_id,))
+            result = cur.fetchone()
+            if result:
+                conn.commit()
+                LOG.info(f"❌ Rejected user {user_id}: {result['email']}")
+                return {"status": "success", "message": f"Rejected {result['email']}"}
+            else:
+                return {"status": "error", "message": f"User {user_id} not found"}
     except Exception as e:
         LOG.error(f"Failed to reject user: {e}")
         return {"status": "error", "message": str(e)}
 
 @APP.post("/api/admin/pause-user")
 async def pause_user(request: Request):
-    """Pause an active user by account_id (supports multi-account per email)"""
+    """Pause an active user by user_id"""
     body = await request.json()
     token = body.get('token')
-    account_id = body.get('account_id')  # NEW: Use account_id instead of email
-    email = body.get('email')  # Keep for backward compatibility
+    user_id = body.get('user_id') or body.get('account_id')
 
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
+    if not user_id:
+        return {"status": "error", "message": "user_id is required"}
+
     try:
         with db() as conn, conn.cursor() as cur:
-            if account_id:
-                # NEW: Update specific account only
-                cur.execute("""
-                    UPDATE beta_users
-                    SET status = 'paused'
-                    WHERE id = %s
-                    RETURNING email, ticker1, ticker2, ticker3
-                """, (account_id,))
-                result = cur.fetchone()
-                if result:
-                    conn.commit()
-                    LOG.info(f"⏸️ Paused account {account_id}: {result['email']} ({result['ticker1']}, {result['ticker2']}, {result['ticker3']})")
-                    return {"status": "success", "message": f"Paused account {account_id}"}
-                else:
-                    return {"status": "error", "message": f"Account {account_id} not found"}
-            else:
-                # OLD: Backward compatibility - update all accounts with this email
-                cur.execute("""
-                    UPDATE beta_users
-                    SET status = 'paused'
-                    WHERE email = %s
-                """, (email,))
+            cur.execute("""
+                UPDATE users
+                SET status = 'paused', updated_at = NOW()
+                WHERE id = %s
+                RETURNING email, name
+            """, (user_id,))
+            result = cur.fetchone()
+            if result:
                 conn.commit()
-                LOG.warning(f"⏸️ Paused ALL accounts for: {email} (deprecated - use account_id)")
-                return {"status": "success", "message": f"Paused {email}"}
+                LOG.info(f"⏸️ Paused user {user_id}: {result['email']}")
+                return {"status": "success", "message": f"Paused {result['email']}"}
+            else:
+                return {"status": "error", "message": f"User {user_id} not found"}
     except Exception as e:
         LOG.error(f"Failed to pause user: {e}")
         return {"status": "error", "message": str(e)}
 
 @APP.post("/api/admin/cancel-user")
 async def cancel_user(request: Request):
-    """Cancel a user by account_id (supports multi-account per email)"""
+    """Cancel a user by user_id"""
     body = await request.json()
     token = body.get('token')
-    account_id = body.get('account_id')  # NEW: Use account_id instead of email
-    email = body.get('email')  # Keep for backward compatibility
+    user_id = body.get('user_id') or body.get('account_id')
 
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
+    if not user_id:
+        return {"status": "error", "message": "user_id is required"}
+
     try:
         with db() as conn, conn.cursor() as cur:
-            if account_id:
-                # NEW: Update specific account only
-                cur.execute("""
-                    UPDATE beta_users
-                    SET status = 'cancelled'
-                    WHERE id = %s
-                    RETURNING email, ticker1, ticker2, ticker3
-                """, (account_id,))
-                result = cur.fetchone()
-                if result:
-                    conn.commit()
-                    LOG.info(f"🗑️ Cancelled account {account_id}: {result['email']} ({result['ticker1']}, {result['ticker2']}, {result['ticker3']})")
-                    return {"status": "success", "message": f"Cancelled account {account_id}"}
-                else:
-                    return {"status": "error", "message": f"Account {account_id} not found"}
-            else:
-                # OLD: Backward compatibility - update all accounts with this email
-                cur.execute("""
-                    UPDATE beta_users
-                    SET status = 'cancelled'
-                    WHERE email = %s
-                """, (email,))
+            cur.execute("""
+                UPDATE users
+                SET status = 'cancelled', updated_at = NOW()
+                WHERE id = %s
+                RETURNING email, name
+            """, (user_id,))
+            result = cur.fetchone()
+            if result:
                 conn.commit()
-                LOG.warning(f"🗑️ Cancelled ALL accounts for: {email} (deprecated - use account_id)")
-                return {"status": "success", "message": f"Cancelled {email}"}
+                LOG.info(f"🗑️ Cancelled user {user_id}: {result['email']}")
+                return {"status": "success", "message": f"Cancelled {result['email']}"}
+            else:
+                return {"status": "error", "message": f"User {user_id} not found"}
     except Exception as e:
         LOG.error(f"Failed to cancel user: {e}")
         return {"status": "error", "message": str(e)}
 
 @APP.post("/api/admin/reactivate-user")
 async def reactivate_user(request: Request):
-    """Reactivate a paused or cancelled user by account_id (supports multi-account per email)"""
+    """Reactivate a paused or cancelled user by user_id"""
     body = await request.json()
     token = body.get('token')
-    account_id = body.get('account_id')  # NEW: Use account_id instead of email
-    email = body.get('email')  # Keep for backward compatibility
+    user_id = body.get('user_id') or body.get('account_id')
 
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
+    if not user_id:
+        return {"status": "error", "message": "user_id is required"}
+
     try:
         with db() as conn, conn.cursor() as cur:
-            if account_id:
-                # NEW: Update specific account only
-                cur.execute("""
-                    UPDATE beta_users
-                    SET status = 'active'
-                    WHERE id = %s
-                    RETURNING email, ticker1, ticker2, ticker3
-                """, (account_id,))
-                result = cur.fetchone()
-                if result:
-                    conn.commit()
-                    LOG.info(f"▶️ Reactivated account {account_id}: {result['email']} ({result['ticker1']}, {result['ticker2']}, {result['ticker3']})")
-                    return {"status": "success", "message": f"Reactivated account {account_id}"}
-                else:
-                    return {"status": "error", "message": f"Account {account_id} not found"}
-            else:
-                # OLD: Backward compatibility - update all accounts with this email
-                cur.execute("""
-                    UPDATE beta_users
-                    SET status = 'active'
-                    WHERE email = %s
-                """, (email,))
+            cur.execute("""
+                UPDATE users
+                SET status = 'active', updated_at = NOW()
+                WHERE id = %s
+                RETURNING email, name
+            """, (user_id,))
+            result = cur.fetchone()
+            if result:
                 conn.commit()
-                LOG.warning(f"▶️ Reactivated ALL accounts for: {email} (deprecated - use account_id)")
-                return {"status": "success", "message": f"Reactivated {email}"}
+                LOG.info(f"▶️ Reactivated user {user_id}: {result['email']}")
+                return {"status": "success", "message": f"Reactivated {result['email']}"}
+            else:
+                return {"status": "error", "message": f"User {user_id} not found"}
     except Exception as e:
         LOG.error(f"Failed to reactivate user: {e}")
         return {"status": "error", "message": str(e)}
 
 @APP.post("/api/admin/delete-user")
 async def delete_user(request: Request):
-    """Permanently delete a user from the database (also deletes unsubscribe tokens via CASCADE)"""
+    """Permanently delete a user by user_id (CASCADE deletes tickers and tokens)"""
     body = await request.json()
     token = body.get('token')
-    email = body.get('email')
+    user_id = body.get('user_id') or body.get('account_id')
 
     if not check_admin_token(token):
         return {"status": "error", "message": "Unauthorized"}
 
+    if not user_id:
+        return {"status": "error", "message": "user_id is required"}
+
     try:
         with db() as conn, conn.cursor() as cur:
-            # Delete user (unsubscribe_tokens will be auto-deleted via ON DELETE CASCADE)
-            cur.execute("""
-                DELETE FROM beta_users
-                WHERE email = %s
-            """, (email,))
+            # Get user info before deletion
+            cur.execute("SELECT email, name FROM users WHERE id = %s", (user_id,))
+            user = cur.fetchone()
 
-            deleted_count = cur.rowcount
+            if not user:
+                return {"status": "error", "message": f"User {user_id} not found"}
+
+            # Delete user (CASCADE deletes user_tickers and unsubscribe_tokens)
+            cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
             conn.commit()
 
-            if deleted_count == 0:
-                return {"status": "error", "message": f"User {email} not found"}
-
-            LOG.info(f"🗑️ Permanently deleted user: {email}")
-            return {"status": "success", "message": f"Deleted {email}"}
+            LOG.info(f"🗑️ Permanently deleted user {user_id}: {user['email']}")
+            return {"status": "success", "message": f"Deleted {user['email']}"}
     except Exception as e:
         LOG.error(f"Failed to delete user: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/admin/create-user")
+async def create_user_admin(request: Request):
+    """Create a new user from admin panel (supports admin/beta/paid types)"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    email = body.get('email', '').strip().lower()
+    name = body.get('name', '').strip()
+    user_type = body.get('user_type', 'beta')
+    tickers = body.get('tickers', [])
+    status = body.get('status', 'active')
+
+    # Validation
+    if not email or '@' not in email:
+        return {"status": "error", "message": "Valid email is required"}
+    if not name:
+        return {"status": "error", "message": "Name is required"}
+    if user_type not in ['admin', 'beta', 'paid']:
+        return {"status": "error", "message": "Invalid user_type. Must be: admin, beta, or paid"}
+    if not isinstance(tickers, list):
+        return {"status": "error", "message": "tickers must be an array"}
+
+    # Set ticker limit based on user type
+    ticker_limits = {'admin': None, 'beta': 3, 'paid': 10}
+    ticker_limit = ticker_limits.get(user_type, 3)
+
+    # Validate ticker count (unless admin)
+    if ticker_limit and len(tickers) > ticker_limit:
+        return {"status": "error", "message": f"{user_type} users can have at most {ticker_limit} tickers"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Check if email already exists
+            cur.execute("SELECT id FROM users WHERE email = %s", (email,))
+            if cur.fetchone():
+                return {"status": "error", "message": f"User with email {email} already exists"}
+
+            # Create user
+            cur.execute("""
+                INSERT INTO users (email, name, user_type, ticker_limit, status,
+                                   terms_version, terms_accepted_at, privacy_version, privacy_accepted_at)
+                VALUES (%s, %s, %s, %s, %s, '1.0', NOW(), '1.0', NOW())
+                RETURNING id
+            """, (email, name, user_type, ticker_limit, status))
+            user_id = cur.fetchone()['id']
+
+            # Add tickers
+            for ticker in tickers:
+                ticker = ticker.upper().strip()
+                if ticker:
+                    cur.execute("""
+                        INSERT INTO user_tickers (user_id, ticker)
+                        VALUES (%s, %s)
+                        ON CONFLICT (user_id, ticker) DO NOTHING
+                    """, (user_id, ticker))
+
+            conn.commit()
+
+            LOG.info(f"✅ Created {user_type} user {user_id}: {email} with {len(tickers)} tickers")
+            return {
+                "status": "success",
+                "message": f"Created {user_type} user {email}",
+                "user_id": user_id
+            }
+    except Exception as e:
+        LOG.error(f"Failed to create user: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/admin/add-ticker")
+async def add_user_ticker(request: Request):
+    """Add a ticker to a user"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    user_id = body.get('user_id')
+    ticker = body.get('ticker', '').upper().strip()
+
+    if not user_id:
+        return {"status": "error", "message": "user_id is required"}
+    if not ticker:
+        return {"status": "error", "message": "ticker is required"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Get user info and current ticker count
+            cur.execute("""
+                SELECT u.email, u.user_type, u.ticker_limit, COUNT(ut.id) as ticker_count
+                FROM users u
+                LEFT JOIN user_tickers ut ON u.id = ut.user_id
+                WHERE u.id = %s
+                GROUP BY u.id, u.email, u.user_type, u.ticker_limit
+            """, (user_id,))
+            user = cur.fetchone()
+
+            if not user:
+                return {"status": "error", "message": f"User {user_id} not found"}
+
+            # Check ticker limit (unless admin/unlimited)
+            if user['ticker_limit'] and user['ticker_count'] >= user['ticker_limit']:
+                return {
+                    "status": "error",
+                    "message": f"User has reached ticker limit ({user['ticker_limit']})"
+                }
+
+            # Add ticker
+            cur.execute("""
+                INSERT INTO user_tickers (user_id, ticker)
+                VALUES (%s, %s)
+                ON CONFLICT (user_id, ticker) DO NOTHING
+                RETURNING id
+            """, (user_id, ticker))
+            result = cur.fetchone()
+
+            if result:
+                conn.commit()
+                LOG.info(f"➕ Added ticker {ticker} to user {user_id} ({user['email']})")
+                return {"status": "success", "message": f"Added {ticker}"}
+            else:
+                return {"status": "error", "message": f"Ticker {ticker} already exists for this user"}
+    except Exception as e:
+        LOG.error(f"Failed to add ticker: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/admin/remove-ticker")
+async def remove_user_ticker(request: Request):
+    """Remove a ticker from a user"""
+    body = await request.json()
+    token = body.get('token')
+
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    user_id = body.get('user_id')
+    ticker = body.get('ticker', '').upper().strip()
+
+    if not user_id:
+        return {"status": "error", "message": "user_id is required"}
+    if not ticker:
+        return {"status": "error", "message": "ticker is required"}
+
+    try:
+        with db() as conn, conn.cursor() as cur:
+            # Get user email for logging
+            cur.execute("SELECT email FROM users WHERE id = %s", (user_id,))
+            user = cur.fetchone()
+
+            if not user:
+                return {"status": "error", "message": f"User {user_id} not found"}
+
+            # Remove ticker
+            cur.execute("""
+                DELETE FROM user_tickers
+                WHERE user_id = %s AND ticker = %s
+                RETURNING id
+            """, (user_id, ticker))
+            result = cur.fetchone()
+
+            if result:
+                conn.commit()
+                LOG.info(f"➖ Removed ticker {ticker} from user {user_id} ({user['email']})")
+                return {"status": "success", "message": f"Removed {ticker}"}
+            else:
+                return {"status": "error", "message": f"Ticker {ticker} not found for this user"}
+    except Exception as e:
+        LOG.error(f"Failed to remove ticker: {e}")
         return {"status": "error", "message": str(e)}
 
 @APP.post("/api/admin/generate-transcript-summary")
@@ -29300,26 +29439,18 @@ def check_all_filings_cron():
     LOG.info("="*80)
 
     try:
-        # Get active user tickers
+        # Get active user tickers from normalized schema
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                SELECT DISTINCT ticker1, ticker2, ticker3
-                FROM beta_users
-                WHERE status = 'active'
+                SELECT DISTINCT ut.ticker
+                FROM users u
+                JOIN user_tickers ut ON u.id = ut.user_id
+                WHERE u.status = 'active'
             """)
             rows = cur.fetchall()
 
         # Collect unique tickers
-        tickers = set()
-        for row in rows:
-            if row['ticker1']:
-                tickers.add(row['ticker1'])
-            if row['ticker2']:
-                tickers.add(row['ticker2'])
-            if row['ticker3']:
-                tickers.add(row['ticker3'])
-
-        tickers = sorted(list(tickers))
+        tickers = sorted([row['ticker'].upper() for row in rows if row['ticker']])
         LOG.info(f"📊 Checking {len(tickers)} tickers: {', '.join(tickers)}")
 
         # Check each ticker
@@ -31827,40 +31958,42 @@ async def view_email_2_api(ticker: str, token: str = Query(...)):
 # DAILY WORKFLOW PROCESSING FUNCTIONS
 # ------------------------------------------------------------------------------
 
-def load_active_beta_users() -> Dict[str, List[str]]:
+def load_active_users() -> Dict[str, List[str]]:
     """
-    Load active beta users and deduplicate tickers.
+    Load active users and their tickers from the normalized schema.
     Returns: {ticker: [list of recipient emails]}
+
+    Uses: users + user_tickers tables (Dec 2025 schema)
     """
-    LOG.info("Loading active beta users...")
+    LOG.info("Loading active users...")
 
     ticker_recipients = {}
 
     try:
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                SELECT name, email, ticker1, ticker2, ticker3
-                FROM beta_users
-                WHERE status = 'active'
-                ORDER BY created_at
+                SELECT u.email, ut.ticker
+                FROM users u
+                JOIN user_tickers ut ON u.id = ut.user_id
+                WHERE u.status = 'active'
+                ORDER BY u.created_at, ut.ticker
             """)
-            users = cur.fetchall()
+            rows = cur.fetchall()
 
-            LOG.info(f"Found {len(users)} active beta users")
+            # Count unique users
+            unique_emails = set(row['email'] for row in rows)
+            LOG.info(f"Found {len(unique_emails)} active users with {len(rows)} ticker subscriptions")
 
-            for user in users:
-                email = user['email']
-                tickers = [user['ticker1'], user['ticker2'], user['ticker3']]
+            for row in rows:
+                email = row['email']
+                ticker = row['ticker'].upper().strip()
 
-                for ticker in tickers:
-                    if ticker:
-                        ticker = ticker.upper().strip()
-                        if ticker not in ticker_recipients:
-                            ticker_recipients[ticker] = []
+                if ticker not in ticker_recipients:
+                    ticker_recipients[ticker] = []
 
-                        # Deduplicate emails
-                        if email not in ticker_recipients[ticker]:
-                            ticker_recipients[ticker].append(email)
+                # Deduplicate emails (shouldn't happen with UNIQUE constraint, but safety first)
+                if email not in ticker_recipients[ticker]:
+                    ticker_recipients[ticker].append(email)
 
             LOG.info(f"Dedup complete: {len(ticker_recipients)} unique tickers")
             for ticker, emails in ticker_recipients.items():
@@ -31869,8 +32002,14 @@ def load_active_beta_users() -> Dict[str, List[str]]:
             return ticker_recipients
 
     except Exception as e:
-        LOG.error(f"Failed to load beta users: {e}")
+        LOG.error(f"Failed to load users: {e}")
         return {}
+
+
+# Backward compatibility alias
+def load_active_beta_users() -> Dict[str, List[str]]:
+    """DEPRECATED: Use load_active_users() instead."""
+    return load_active_users()
 
 
 
@@ -32429,16 +32568,17 @@ def auto_send_cron_job():
         raise
 
 
-def export_beta_users_csv():
+def export_users_csv():
     """
-    11:59 PM: Export beta users to CSV for backup.
+    11:59 PM: Export users to CSV for backup.
     Creates two files:
-    1. data/users/user_tickers.csv - ACTIVE users only (5 fields) for daily processing
-    2. data/users/beta_users_YYYYMMDD.csv - ALL users (9 fields) for legal audit trail
+    1. data/users/user_tickers.csv - ACTIVE users only with comma-separated tickers
+    2. data/users/users_YYYYMMDD.csv - ALL users for legal audit trail
 
+    Uses normalized schema: users + user_tickers tables (Dec 2025)
     Both files are committed to GitHub for legal compliance (CASL/PIPEDA).
     """
-    LOG.info("📄 Exporting beta users to CSV...")
+    LOG.info("📄 Exporting users to CSV...")
 
     try:
         import csv
@@ -32452,54 +32592,65 @@ def export_beta_users_csv():
 
         # File paths
         active_users_path = os.path.join(users_dir, 'user_tickers.csv')
-        backup_path = os.path.join(users_dir, f'beta_users_{timestamp}.csv')
+        backup_path = os.path.join(users_dir, f'users_{timestamp}.csv')
 
-        # Fetch ALL users from database
+        # Fetch ALL users with their tickers from normalized schema
         with db() as conn, conn.cursor() as cur:
+            # Get all users
             cur.execute("""
-                SELECT name, email, ticker1, ticker2, ticker3, status,
+                SELECT id, name, email, user_type, ticker_limit, status,
                        created_at, terms_accepted_at, privacy_accepted_at
-                FROM beta_users
+                FROM users
                 ORDER BY created_at DESC
             """)
             all_users = cur.fetchall()
 
+            # Get all tickers grouped by user
+            cur.execute("""
+                SELECT user_id, STRING_AGG(ticker, ',' ORDER BY ticker) as tickers
+                FROM user_tickers
+                GROUP BY user_id
+            """)
+            ticker_rows = cur.fetchall()
+            user_tickers = {row['user_id']: row['tickers'] for row in ticker_rows}
+
         # Filter ACTIVE users for processing file
         active_users = [u for u in all_users if u['status'] == 'active']
 
-        # File 1: user_tickers.csv (ACTIVE only, 5 fields)
+        # File 1: user_tickers.csv (ACTIVE only)
         LOG.info(f"📝 Writing active users file: {active_users_path}")
         with open(active_users_path, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow(['name', 'email', 'ticker1', 'ticker2', 'ticker3'])
+            writer.writerow(['name', 'email', 'tickers', 'user_type'])
 
             for user in active_users:
+                tickers = user_tickers.get(user['id'], '')
                 writer.writerow([
                     user['name'],
                     user['email'],
-                    user['ticker1'],
-                    user['ticker2'],
-                    user['ticker3']
+                    tickers,
+                    user['user_type']
                 ])
 
         LOG.info(f"✅ Active users CSV: {len(active_users)} users → {active_users_path}")
 
-        # File 2: beta_users_YYYYMMDD.csv (ALL users, 9 fields)
+        # File 2: users_YYYYMMDD.csv (ALL users, full audit trail)
         LOG.info(f"📝 Writing backup file: {backup_path}")
         with open(backup_path, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow([
-                'name', 'email', 'ticker1', 'ticker2', 'ticker3',
+                'name', 'email', 'tickers', 'user_type', 'ticker_limit',
                 'status', 'created_at', 'terms_accepted_at', 'privacy_accepted_at'
             ])
 
             for user in all_users:
+                tickers = user_tickers.get(user['id'], '')
                 writer.writerow([
                     user['name'],
                     user['email'],
-                    user['ticker1'],
-                    user['ticker2'],
-                    user['ticker3'],
+                    tickers,
+                    user['user_type'],
+                    user['ticker_limit'],
                     user['status'],
                     user['created_at'],
                     user['terms_accepted_at'],
@@ -32531,16 +32682,16 @@ def export_beta_users_csv():
             else:
                 LOG.warning(f"⚠️ Failed to commit user_tickers.csv: {result1['message']}")
 
-            # Commit file 2: beta_users_YYYYMMDD.csv (all users, legal audit trail)
-            LOG.info(f"📤 Committing file 2/2: beta_users_{timestamp}.csv")
+            # Commit file 2: users_YYYYMMDD.csv (all users, legal audit trail)
+            LOG.info(f"📤 Committing file 2/2: users_{timestamp}.csv")
             result2 = commit_csv_to_github(
                 csv_content=backup_csv_content,
-                commit_message=f"Daily user export - {timestamp}\n\nTotal users: {len(all_users)}\nBackup file: beta_users_{timestamp}.csv\n\nLegal audit trail for CASL/PIPEDA compliance.",
-                file_path=f"data/users/beta_users_{timestamp}.csv"
+                commit_message=f"Daily user export - {timestamp}\n\nTotal users: {len(all_users)}\nBackup file: users_{timestamp}.csv\n\nLegal audit trail for CASL/PIPEDA compliance.",
+                file_path=f"data/users/users_{timestamp}.csv"
             )
 
             if result2['status'] == 'success':
-                LOG.info(f"✅ Committed beta_users_{timestamp}.csv to GitHub (SHA: {result2['commit_sha'][:8]})")
+                LOG.info(f"✅ Committed users_{timestamp}.csv to GitHub (SHA: {result2['commit_sha'][:8]})")
                 LOG.info(f"📦 Legal audit trail complete: {backup_path}")
             else:
                 LOG.warning(f"⚠️ Failed to commit backup file: {result2['message']}")
@@ -32567,6 +32718,12 @@ def export_beta_users_csv():
     except Exception as e:
         LOG.error(f"❌ CSV export failed: {e}")
         raise
+
+
+# Backward compatibility alias
+def export_beta_users_csv():
+    """DEPRECATED: Use export_users_csv() instead."""
+    return export_users_csv()
 
 
 # ------------------------------------------------------------------------------
@@ -32745,30 +32902,35 @@ def process_hourly_alerts():
     LOG.info(f"📰 Starting hourly alerts processing at {now_est.strftime('%I:%M %p')} EST")
 
     try:
-        # Step 1: Load active beta users
+        # Step 1: Load active users and their tickers from normalized schema
         with db() as conn, conn.cursor() as cur:
+            # Get unique users
             cur.execute("""
-                SELECT name, email, ticker1, ticker2, ticker3
-                FROM beta_users
-                WHERE status = 'active'
-                ORDER BY created_at
+                SELECT DISTINCT u.id, u.name, u.email
+                FROM users u
+                JOIN user_tickers ut ON u.id = ut.user_id
+                WHERE u.status = 'active'
+                ORDER BY u.created_at
             """)
             users = cur.fetchall()
 
+            # Get unique tickers
+            cur.execute("""
+                SELECT DISTINCT ut.ticker
+                FROM users u
+                JOIN user_tickers ut ON u.id = ut.user_id
+                WHERE u.status = 'active'
+            """)
+            ticker_rows = cur.fetchall()
+
         if not users:
-            LOG.info("No active beta users found for hourly alerts")
+            LOG.info("No active users found for hourly alerts")
             return
 
-        LOG.info(f"Found {len(users)} active beta users")
+        LOG.info(f"Found {len(users)} active users")
 
-        # Step 2: Deduplicate tickers across all users (admin-only consolidated email)
-        unique_tickers = set()
-        for user in users:
-            tickers = [user['ticker1'], user['ticker2'], user['ticker3']]
-            tickers = [t for t in tickers if t]  # Remove None values
-            unique_tickers.update(tickers)
-
-        unique_tickers = list(unique_tickers)
+        # Step 2: Get unique tickers
+        unique_tickers = [row['ticker'].upper() for row in ticker_rows if row['ticker']]
         LOG.info(f"Processing {len(unique_tickers)} unique tickers: {', '.join(unique_tickers)}")
 
         # Step 3: Process RSS feeds for unique tickers CONCURRENTLY

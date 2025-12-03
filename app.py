@@ -20386,6 +20386,7 @@ async def unsubscribe_page(request: Request, token: str = Query(...)):
     Uses: users table (Dec 2025 schema)
     """
     LOG.info(f"Unsubscribe request with token: {token[:10]}...")
+    admin_email = os.getenv('ADMIN_EMAIL', 'support@weavara.io')
 
     try:
         with db() as conn, conn.cursor() as cur:
@@ -20400,46 +20401,11 @@ async def unsubscribe_page(request: Request, token: str = Query(...)):
 
             if not result:
                 LOG.warning(f"Invalid unsubscribe token: {token[:10]}...")
-                admin_email = os.getenv('ADMIN_EMAIL', 'support@weavara.io')
-                return HTMLResponse(f"""
-                    <!DOCTYPE html>
-                    <html>
-                    <head>
-                        <title>Invalid Link - Weavara</title>
-                        <style>
-                            body {{
-                                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                                background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
-                                min-height: 100vh;
-                                display: flex;
-                                align-items: center;
-                                justify-content: center;
-                                margin: 0;
-                                padding: 20px;
-                            }}
-                            .container {{
-                                background: white;
-                                padding: 40px;
-                                border-radius: 12px;
-                                box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-                                max-width: 500px;
-                                text-align: center;
-                            }}
-                            h1 {{ color: #dc2626; margin-bottom: 16px; }}
-                            p {{ color: #374151; line-height: 1.6; }}
-                            a {{ color: #1e40af; text-decoration: none; }}
-                        </style>
-                    </head>
-                    <body>
-                        <div class="container">
-                            <h1>Invalid Unsubscribe Link</h1>
-                            <p>This unsubscribe link is invalid or has expired.</p>
-                            <p>If you need assistance, please contact us at <a href="mailto:{admin_email}">{admin_email}</a></p>
-                            <p style="margin-top: 24px;"><a href="/">Return to Home</a></p>
-                        </div>
-                    </body>
-                    </html>
-                """, status_code=404)
+                return templates.TemplateResponse(
+                    "unsubscribe.html",
+                    {"request": request, "status": "invalid", "admin_email": admin_email},
+                    status_code=404
+                )
 
             user_id = result['user_id']
             email = result['user_email']
@@ -20472,69 +20438,20 @@ async def unsubscribe_page(request: Request, token: str = Query(...)):
             conn.commit()
 
             # Return success page
-            return HTMLResponse(f"""
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <title>Unsubscribed - Weavara</title>
-                    <style>
-                        body {{
-                            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                            background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
-                            min-height: 100vh;
-                            display: flex;
-                            align-items: center;
-                            justify-content: center;
-                            margin: 0;
-                            padding: 20px;
-                        }}
-                        .container {{
-                            background: white;
-                            padding: 40px;
-                            border-radius: 12px;
-                            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-                            max-width: 500px;
-                            text-align: center;
-                        }}
-                        h1 {{ color: #059669; margin-bottom: 16px; }}
-                        p {{ color: #374151; line-height: 1.6; margin-bottom: 12px; }}
-                        .email {{ background: #f3f4f6; padding: 8px 12px; border-radius: 4px; font-family: monospace; }}
-                        a {{ color: #1e40af; text-decoration: none; }}
-                    </style>
-                </head>
-                <body>
-                    <div class="container">
-                        <h1>✅ Successfully Unsubscribed</h1>
-                        <p><strong>{name}</strong>, you've been unsubscribed from Weavara.</p>
-                        <p class="email">{email}</p>
-                        <p style="margin-top: 24px;">You will no longer receive daily stock intelligence reports.</p>
-                        <p style="margin-top: 16px; font-size: 14px; color: #6b7280;">
-                            Changed your mind? <a href="/">Re-subscribe here</a>
-                        </p>
-                        <p style="margin-top: 24px; font-size: 14px; color: #6b7280;">
-                            Questions? <a href="mailto:{os.getenv('ADMIN_EMAIL', 'support@weavara.io')}">Contact us</a>
-                        </p>
-                    </div>
-                </body>
-                </html>
-            """)
+            return templates.TemplateResponse(
+                "unsubscribe.html",
+                {"request": request, "status": "success", "name": name, "email": email, "admin_email": admin_email}
+            )
 
     except Exception as e:
         LOG.error(f"Error processing unsubscribe: {e}")
         LOG.error(traceback.format_exc())
 
-        admin_email = os.getenv('ADMIN_EMAIL', 'support@weavara.io')
-        return HTMLResponse(f"""
-            <!DOCTYPE html>
-            <html>
-            <head><title>Error - Weavara</title></head>
-            <body>
-                <h1>Something went wrong</h1>
-                <p>We couldn't process your unsubscribe request. Please try again or contact support.</p>
-                <p><a href="mailto:{admin_email}">{admin_email}</a></p>
-            </body>
-            </html>
-        """, status_code=500)
+        return templates.TemplateResponse(
+            "unsubscribe.html",
+            {"request": request, "status": "error", "admin_email": admin_email},
+            status_code=500
+        )
 
 
 # ------------------------------------------------------------------------------

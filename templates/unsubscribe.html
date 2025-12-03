@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% if status == 'success' %}Unsubscribed{% elif status == 'invalid' %}Invalid Link{% else %}Error{% endif %} - Weavara</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --ink: #0a0f1c;
+            --ink-light: #3d3d3d;
+            --ink-muted: #6b6b6b;
+            --paper: #faf9f7;
+            --paper-warm: #f5f3ef;
+            --accent: #1e40af;
+            --accent-light: #3b82f6;
+            --success: #1e6b4a;
+            --success-light: #e8f5ef;
+            --danger: #9b2c2c;
+            --danger-light: #fdf2f2;
+            --border: #e0ddd8;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--paper);
+            color: var(--ink);
+            line-height: 1.6;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Navigation */
+        nav {
+            background: rgba(250, 249, 247, 0.92);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border);
+            padding: 0 24px;
+        }
+
+        .nav-inner {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 64px;
+        }
+
+        .logo {
+            font-family: 'DM Serif Display', serif;
+            font-size: 24px;
+            color: var(--ink);
+            text-decoration: none;
+            letter-spacing: -0.5px;
+        }
+
+        .nav-cta {
+            background: var(--ink);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 6px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        .nav-cta:hover {
+            background: var(--ink-light);
+            transform: translateY(-1px);
+        }
+
+        /* Main Content */
+        main {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 60px 24px;
+        }
+
+        .content-card {
+            max-width: 520px;
+            width: 100%;
+            text-align: center;
+        }
+
+        .status-icon {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 24px;
+        }
+
+        .status-icon.success {
+            background: var(--success-light);
+        }
+
+        .status-icon.error {
+            background: var(--danger-light);
+        }
+
+        .status-icon svg {
+            width: 32px;
+            height: 32px;
+        }
+
+        .status-icon.success svg {
+            stroke: var(--success);
+        }
+
+        .status-icon.error svg {
+            stroke: var(--danger);
+        }
+
+        h1 {
+            font-family: 'DM Serif Display', serif;
+            font-size: 32px;
+            color: var(--ink);
+            margin-bottom: 16px;
+            letter-spacing: -0.5px;
+        }
+
+        .subtitle {
+            font-size: 17px;
+            color: var(--ink-muted);
+            margin-bottom: 24px;
+        }
+
+        .email-badge {
+            display: inline-block;
+            background: var(--paper-warm);
+            border: 1px solid var(--border);
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-family: 'DM Sans', monospace;
+            font-size: 15px;
+            color: var(--ink);
+            margin-bottom: 32px;
+        }
+
+        .info-text {
+            font-size: 15px;
+            color: var(--ink-muted);
+            margin-bottom: 16px;
+        }
+
+        .action-link {
+            display: inline-block;
+            color: var(--accent);
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 15px;
+            transition: color 0.2s;
+        }
+
+        .action-link:hover {
+            color: var(--accent-light);
+        }
+
+        .help-text {
+            margin-top: 32px;
+            padding-top: 24px;
+            border-top: 1px solid var(--border);
+            font-size: 14px;
+            color: var(--ink-muted);
+        }
+
+        .help-text a {
+            color: var(--ink-muted);
+            text-decoration: underline;
+        }
+
+        .help-text a:hover {
+            color: var(--ink);
+        }
+
+        /* Footer */
+        footer {
+            background: var(--paper-warm);
+            padding: 40px 24px;
+            border-top: 1px solid var(--border);
+        }
+
+        .footer-inner {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .footer-logo {
+            font-family: 'DM Serif Display', serif;
+            font-size: 20px;
+            color: var(--ink);
+        }
+
+        .footer-links {
+            display: flex;
+            gap: 24px;
+        }
+
+        .footer-links a {
+            color: var(--ink-muted);
+            text-decoration: none;
+            font-size: 14px;
+        }
+
+        .footer-links a:hover {
+            color: var(--ink);
+        }
+
+        .footer-disclaimer {
+            max-width: 1200px;
+            margin: 20px auto 0;
+            font-size: 12px;
+            color: var(--ink-muted);
+            text-align: center;
+        }
+
+        @media (max-width: 600px) {
+            .footer-inner {
+                flex-direction: column;
+                gap: 20px;
+            }
+
+            .footer-links {
+                flex-wrap: wrap;
+                justify-content: center;
+            }
+
+            h1 {
+                font-size: 28px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav>
+        <div class="nav-inner">
+            <a href="/" class="logo">Weavara</a>
+            <a href="/" class="nav-cta">Sign Up</a>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main>
+        <div class="content-card">
+            {% if status == 'success' %}
+            <!-- Success State -->
+            <div class="status-icon success">
+                <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20 6L9 17l-5-5"/>
+                </svg>
+            </div>
+            <h1>You've been unsubscribed</h1>
+            <p class="subtitle">{{ name }}, you will no longer receive daily stock intelligence reports.</p>
+            <div class="email-badge">{{ email }}</div>
+            <p class="info-text">Changed your mind?</p>
+            <a href="/" class="action-link">Re-subscribe here</a>
+            <div class="help-text">
+                Questions? <a href="mailto:{{ admin_email }}">Contact us</a>
+            </div>
+
+            {% elif status == 'invalid' %}
+            <!-- Invalid Token State -->
+            <div class="status-icon error">
+                <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="15" y1="9" x2="9" y2="15"/>
+                    <line x1="9" y1="9" x2="15" y2="15"/>
+                </svg>
+            </div>
+            <h1>Invalid unsubscribe link</h1>
+            <p class="subtitle">This link is invalid or has expired.</p>
+            <p class="info-text">If you need assistance, please contact us.</p>
+            <a href="mailto:{{ admin_email }}" class="action-link">{{ admin_email }}</a>
+            <div class="help-text">
+                <a href="/">Return to home</a>
+            </div>
+
+            {% else %}
+            <!-- Error State -->
+            <div class="status-icon error">
+                <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="8" x2="12" y2="12"/>
+                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+            </div>
+            <h1>Something went wrong</h1>
+            <p class="subtitle">We couldn't process your unsubscribe request. Please try again.</p>
+            <p class="info-text">If the problem persists, please contact us.</p>
+            <a href="mailto:{{ admin_email }}" class="action-link">{{ admin_email }}</a>
+            <div class="help-text">
+                <a href="/">Return to home</a>
+            </div>
+            {% endif %}
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer>
+        <div class="footer-inner">
+            <div class="footer-logo">Weavara</div>
+            <div class="footer-links">
+                <a href="/terms-of-service">Terms of Service</a>
+                <a href="/privacy-policy">Privacy Policy</a>
+                <a href="mailto:{{ admin_email }}">Contact</a>
+            </div>
+        </div>
+        <div class="footer-disclaimer">
+            Reports are for informational purposes only and do not constitute investment advice. © 2025 Weavara. All rights reserved.
+        </div>
+    </footer>
+</body>
+</html>

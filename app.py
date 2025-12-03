@@ -21324,13 +21324,13 @@ async def beta_signup_endpoint(signup: BetaSignupRequest):
 
         # Create user and tickers in transaction
         with db() as conn, conn.cursor() as cur:
-            # Insert user
+            # Insert user with 'pending' status (requires admin approval)
             cur.execute("""
                 INSERT INTO users (
                     name, email, user_type, ticker_limit, status,
                     terms_version, terms_accepted_at, privacy_version, privacy_accepted_at
                 )
-                VALUES (%s, %s, 'beta', 3, 'active', %s, NOW(), %s, NOW())
+                VALUES (%s, %s, 'beta', 3, 'pending', %s, NOW(), %s, NOW())
                 RETURNING id
             """, (name, email, TERMS_VERSION, PRIVACY_VERSION))
             user_id = cur.fetchone()['id']
@@ -21355,11 +21355,11 @@ async def beta_signup_endpoint(signup: BetaSignupRequest):
         # Send admin notification email
         send_beta_signup_notification(name, email, tickers[0], tickers[1], tickers[2])
 
-        LOG.info(f"✅ New beta user {user_id}: {email} tracking {', '.join(tickers)}")
+        LOG.info(f"✅ New beta signup {user_id}: {email} tracking {', '.join(tickers)} (pending approval)")
 
         return {
             "status": "success",
-            "message": "Welcome to Weavara beta!",
+            "message": "Thank you for signing up! Your account is pending approval. You'll receive an email when activated.",
             "tickers": ticker_data
         }
 

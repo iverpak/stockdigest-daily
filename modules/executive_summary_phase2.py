@@ -544,8 +544,13 @@ Downstream Customers: {entity_refs['downstream']}
         filing_sources = list(filings.keys())
         LOG.info(f"[{ticker}] 📄 Phase 2 input: {len(filing_sources)} filing source(s): {filing_sources}")
         for filing_type, filing_data in filings.items():
-            text_len = len(filing_data.get('text', ''))
-            LOG.info(f"[{ticker}]   - {filing_type}: {text_len:,} chars")
+            if filing_type == '8k':
+                # 8k is a list of filings, each with 'summary_markdown'
+                total_chars = sum(len(f.get('summary_markdown', '')) for f in filing_data)
+                LOG.info(f"[{ticker}]   - {filing_type}: {len(filing_data)} filings, {total_chars:,} chars total")
+            else:
+                text_len = len(filing_data.get('text', ''))
+                LOG.info(f"[{ticker}]   - {filing_type}: {text_len:,} chars")
 
         # Estimate token counts for logging
         system_tokens_est = len(system_prompt) // 4

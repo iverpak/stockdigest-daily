@@ -20386,7 +20386,6 @@ async def unsubscribe_page(request: Request, token: str = Query(...)):
     Uses: users table (Dec 2025 schema)
     """
     LOG.info(f"Unsubscribe request with token: {token[:10]}...")
-    admin_email = os.getenv('ADMIN_EMAIL', 'support@weavara.io')
 
     try:
         with db() as conn, conn.cursor() as cur:
@@ -20403,7 +20402,7 @@ async def unsubscribe_page(request: Request, token: str = Query(...)):
                 LOG.warning(f"Invalid unsubscribe token: {token[:10]}...")
                 return templates.TemplateResponse(
                     "unsubscribe.html",
-                    {"request": request, "status": "invalid", "admin_email": admin_email},
+                    {"request": request, "status": "invalid"},
                     status_code=404
                 )
 
@@ -20440,7 +20439,7 @@ async def unsubscribe_page(request: Request, token: str = Query(...)):
             # Return success page
             return templates.TemplateResponse(
                 "unsubscribe.html",
-                {"request": request, "status": "success", "name": name, "email": email, "admin_email": admin_email}
+                {"request": request, "status": "success", "name": name, "email": email}
             )
 
     except Exception as e:
@@ -20449,7 +20448,7 @@ async def unsubscribe_page(request: Request, token: str = Query(...)):
 
         return templates.TemplateResponse(
             "unsubscribe.html",
-            {"request": request, "status": "error", "admin_email": admin_email},
+            {"request": request, "status": "error"},
             status_code=500
         )
 

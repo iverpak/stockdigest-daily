@@ -920,6 +920,9 @@ SPAM_DOMAINS = {
     "setenews.com", "www.setenews.com",  # Low-quality aggregator
     # Mining/resource stock promoters (Dec 2025)
     "nai500.com", "www.nai500.com",  # Mining stock promoter site
+    # User-generated content platforms (Dec 2025)
+    "vocal.media", "www.vocal.media",  # UGC platform, unvetted articles
+    "seekingalpha.com", "www.seekingalpha.com",  # Contributor-driven, unvetted retail analysis
 }
 
 QUALITY_DOMAINS = {
@@ -12302,6 +12305,7 @@ def replace_domains_with_formal_names(text: str) -> str:
         "per carboncredits.com (Nov 3)" → "per Carbon Credits (Nov 3)"
         "reported by reuters.com" → "reported by Reuters"
         "finance.yahoo.com article" → "Yahoo Finance article"
+        "per newstrail.com" → "per newstrail" (fallback: strip TLD if no formal name)
 
     Args:
         text: Text containing domain URLs
@@ -12318,9 +12322,18 @@ def replace_domains_with_formal_names(text: str) -> str:
     # Common TLDs: .com, .org, .net, .io, .edu, .gov, .in, .ca, .au, .co.uk
     pattern = r'\b([a-z0-9]+(?:[-\.][a-z0-9]+)*\.(?:com|org|net|io|edu|gov|in|ca|au|co\.uk))\b'
 
+    # TLD pattern for fallback stripping
+    tld_pattern = r'\.(com|org|net|io|edu|gov|in|ca|au|co\.uk)$'
+
     def replace_match(match):
         domain_url = match.group(1).lower()  # Normalize to lowercase
         formal_name = get_or_create_formal_domain_name(domain_url)
+
+        # Fallback: If lookup still returned a domain-like string, strip the TLD
+        # This handles unmapped domains like "newstrail.com" → "newstrail"
+        if re.search(tld_pattern, formal_name, re.IGNORECASE):
+            formal_name = re.sub(tld_pattern, '', formal_name, flags=re.IGNORECASE)
+
         return formal_name
 
     # Case-insensitive replacement

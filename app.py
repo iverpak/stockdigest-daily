@@ -2280,21 +2280,22 @@ def ensure_schema():
                     user_agent TEXT
                 );
 
-                CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_token ON unsubscribe_tokens(token);
-                CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_user_id ON unsubscribe_tokens(user_id);
-                CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_used ON unsubscribe_tokens(used_at) WHERE used_at IS NULL;
-
                 -- ============================================================
                 -- MIGRATION: Add user_id column to unsubscribe_tokens if missing
+                -- MUST RUN BEFORE INDEX CREATION (existing tables may lack this column)
                 -- ============================================================
                 DO $$
                 BEGIN
                     IF NOT EXISTS (SELECT 1 FROM information_schema.columns
                                  WHERE table_name='unsubscribe_tokens' AND column_name='user_id') THEN
                         ALTER TABLE unsubscribe_tokens ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
-                        CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_user_id ON unsubscribe_tokens(user_id);
                     END IF;
                 END $$;
+
+                -- Indexes for unsubscribe_tokens (user_id column now guaranteed to exist)
+                CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_token ON unsubscribe_tokens(token);
+                CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_user_id ON unsubscribe_tokens(user_id);
+                CREATE INDEX IF NOT EXISTS idx_unsubscribe_tokens_used ON unsubscribe_tokens(used_at) WHERE used_at IS NULL;
 
                 -- ============================================================
                 -- MIGRATION: Drop old beta_users table if it exists

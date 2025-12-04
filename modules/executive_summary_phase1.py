@@ -1143,7 +1143,7 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
             if proposed_content:
                 result += f"<br>  Proposed Content: {proposed_content}"
                 if proposed_context:
-                    result += f" Context: {proposed_context}"
+                    result += f" Proposed Context: {proposed_context}"
         elif status == 'duplicate':
             absorbed_by = dedup.get('absorbed_by', '')
             result += f"Deduplication: <span style='color: #dc3545;'>❌ DUPLICATE</span>"

@@ -111,6 +111,24 @@ Remove context that:
 ❌ Is unrelated or connection is unclear (reader shouldn't have to guess why it's there)
 ❌ Is lower priority than other available context points
 
+BOILERPLATE TO REMOVE:
+
+Generic risk language without specific numbers is noise:
+❌ "intense competition" → unless quantified with market share loss
+❌ "material dependency on [suppliers/partners]" → unless naming specific entities or percentages
+❌ "single or limited sources" → unless naming the source
+❌ "faces similar regulatory pressures" → undercuts competitive framing
+❌ "operates in a competitive industry" → adds nothing
+
+Keep only context that answers: How much? Who specifically? What changed?
+
+Example:
+❌ REMOVE: "FY2024 10-K discloses material dependency on outsourcing partners"
+✅ KEEP: "TSMC manufactures 100% of A-series chips per 10-K"
+
+❌ REMOVE: "The company faces intense competition per 10-K"
+✅ KEEP: "Market share declined to 23% from 28% YoY per 10-Q"
+
 Rule 3: CROSS-REPORT DEDUPLICATION
 
 If the same filing stat appears in multiple bullets' Context across the report, 
@@ -136,10 +154,29 @@ You may make minor flow improvements:
 ✅ Add brief transitions ("By comparison," "However,")
 ✅ Reorder sentences for logical progression (scenarios only)
 
+PRESERVE CAUSAL CONNECTIONS:
+
+Remove editorial judgment (opinion about importance):
+❌ "This is important because..."
+❌ "This trend directly supports the company's strategy"
+❌ "making this a direct tailwind"
+❌ "providing a stable underpinning"
+
+Keep causal connections (explains HOW or WHY):
+✅ "driven by higher approved rates"
+✅ "capturing the benefit of strong pricing environment"
+✅ "highlighting the volatility of this income source"
+✅ "which reflects competitive pressure"
+✅ "partly due to lower pricing"
+
+Test: Does the phrase explain HOW or WHY something matters? Keep it.
+Does the phrase just assert that it's important? Remove it.
+
 GUARDRAILS:
 ❌ DO NOT remove any facts
 ❌ DO NOT remove any attribution
 ❌ DO NOT merge Context into Content
+❌ DO NOT remove causal explanations
 
 ═══════════════════════════════════════════════════════════════════════════
 QUANTIFICATION STANDARDS (CRITICAL)
@@ -320,9 +357,39 @@ Step 3: SELECT TOP 1-2 CONTEXT POINTS
 If multiple context points pass filtering, keep only the 1-2 most important.
 Remove the rest.
 
-Step 4: DEDUPLICATE ACROSS BULLETS
-Scan ALL bullets' Context fields for repeated filing facts.
-If the same filing excerpt appears in multiple bullets (e.g., "$3.8B FSD deferred revenue per Q3 10-Q"), keep it in the MOST RELEVANT bullet and REMOVE from others.
+Step 4: DEDUPLICATE ACROSS BODY BULLETS
+
+Before outputting, systematically scan ALL body bullet Context fields for repeated filing facts.
+
+Process:
+1. List every quantified fact in Context across all body bullets:
+   - Percentages (21.4% of revenue, 32% capacity)
+   - Dollar amounts ($132B run-rate, $6.72B warranty reserve)
+   - Quotes ("good progress on Siri", "biggest product of all time")
+   - Specific metrics (17.0% margin, 150% QoQ growth)
+
+2. Check if any fact appears in multiple body bullets
+
+3. If duplicate found:
+   - Identify which bullet's Content most directly relates to the filing stat
+   - KEEP the context in that bullet
+   - REMOVE from all other bullets
+
+Most relevant = bullet whose Content is the primary story for that filing stat.
+
+Example:
+- "Good progress on Siri" appears in AI Leadership Context + Enhanced Siri Context
+- AI Leadership Content is about executive appointment
+- Enhanced Siri Content is about the Siri launch catalyst
+→ Siri quote is most relevant to Enhanced Siri → Keep there, remove from AI Leadership
+
+Example:
+- "$132B run-rate, $200B backlog" appears in Supabase Context + Microsoft AI Context
+- Supabase Content is about a partnership announcement
+- Microsoft AI Content is about AWS competitive positioning vs Azure
+→ AWS scale metrics are most relevant to Microsoft AI → Keep there, remove from Supabase
+
+This applies to body bullets ONLY. Scenarios may repeat context from body bullets.
 
 Step 5: OUTPUT
 - content: Phase 1 news with light flow edits (preserve all facts and attribution)
@@ -421,13 +488,15 @@ Duplicate (absorbed by another):
 }
 
 ═══════════════════════════════════════════════════════════════════════════
-LENGTH ENFORCEMENT (Scenarios ONLY: Bottom Line/Upside/Downside)
+LENGTH GUIDANCE (Scenarios ONLY: Bottom Line/Upside/Downside)
 ═══════════════════════════════════════════════════════════════════════════
 
-Length limits apply to Content + Context combined:
-- Bottom Line: 150 words target, 170 words absolute max
-- Upside Scenario: 80-160 words
-- Downside Scenario: 80-160 words
+Length guidance for Content + Context combined:
+- Bottom Line: Aim for 150-180 words
+- Upside Scenario: Aim for 100-180 words
+- Downside Scenario: Aim for 100-180 words
+
+These are guidelines, not hard limits. Substance > word count.
 
 PROCESS:
 
@@ -452,11 +521,18 @@ TIER 3 - Remove lower-priority facts:
 - Background that's implied by remaining facts
 - Context points beyond the top 1-2 most important
 
-NEVER REMOVE (even if over length):
+NEVER REMOVE TO SAVE WORDS:
 ✅ Quantified metrics (competitor $X, company Y%, region Z GW)
 ✅ Cross-bullet synthesis you added (Company $X vs. Competitor $Y)
 ✅ Geographic/competitive positioning facts
 ✅ Management quotes with attribution
+✅ Factual qualifiers (potential, exploratory, preliminary)
+✅ Reasoning behind conclusions (why someone said something)
+✅ Specific named examples (robo taxis, product liability claims)
+✅ Causal connections (driven by, reflecting, due to)
+
+If content requires more words, output at natural length.
+Institutional substance > arbitrary word count.
 
 If you cannot hit 170 words without removing protected facts:
 → Output at 171-180 words
@@ -475,6 +551,19 @@ WHAT NOT TO DO
 ❌ Don't change topic_label or bullet_id
 ❌ Don't remove facts or attribution from Content
 ❌ Don't keep more than 1-2 Context points per bullet
+
+READABILITY OVER WORD COUNT:
+
+❌ Don't strip articles (the, a, an) to save words
+❌ Don't strip pronouns (its, the company's) to save words
+❌ Don't remove factual qualifiers (potential, exploratory, preliminary, reportedly)
+
+Natural prose > telegram style. If Phase 1 wrote readable sentences, preserve them.
+
+Examples of what NOT to do:
+❌ "Company exploring ending partnership" → ✅ "The company is exploring ending its partnership"
+❌ "This logistics overhaul" (when not final) → ✅ "This potential logistics overhaul"
+❌ "Development is part of strategy" → ✅ "This development is part of a broader strategy"
 
 ✅ PRESERVE all filing attribution in Context (per Oct 15 call, per Q3 10-Q, per 10-K)
 ✅ PRESERVE all source attribution in Content (per Reuters, per Yahoo Finance, per management)

@@ -15740,7 +15740,7 @@ def generate_email_html_core(
     try:
         json_output = json.loads(executive_summary_text)
 
-        # NEW (Nov 2025): Apply deduplication - removes duplicate bullets and uses proposed_edit for primaries
+        # Apply deduplication - removes duplicate bullets and uses proposed_content/context for primaries
         json_output = apply_deduplication(json_output)
 
         sections = convert_phase1_to_sections_dict(json_output)

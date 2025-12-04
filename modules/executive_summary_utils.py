@@ -108,15 +108,18 @@ def add_dates_to_email_sections(
     """
     Add (date) at end of each bullet/paragraph using bullet_id matching.
 
+    For Email #3, also appends context_suffix after date with em dash:
+    <content> (Dec 04) — <em><context></em>
+
     Works for Email #2, #3, #4 sections dict format where each item is:
-    {'bullet_id': '...', 'formatted': '...'}
+    {'bullet_id': '...', 'formatted': '...', 'context_suffix': '...' (optional)}
 
     Args:
-        sections: Dict like {"major_developments": [{'bullet_id': '...', 'formatted': '...'}, ...]}
+        sections: Dict like {"major_developments": [{'bullet_id': '...', 'formatted': '...', 'context_suffix': '...'}, ...]}
         merged_json: Phase 1+2 (or Phase 2+3) JSON with date_range fields
 
     Returns:
-        sections dict with dates appended to 'formatted' field
+        sections dict with dates and context_suffix appended to 'formatted' field
     """
     # Map section keys (sections dict uses different names than JSON)
     section_mapping = {
@@ -151,6 +154,12 @@ def add_dates_to_email_sections(
                     date
                 )
 
+            # Append context_suffix after date (Email #3 format)
+            # Format: <content> (date) — <em><context></em>
+            context_suffix = formatted_item.pop('context_suffix', '')
+            if context_suffix:
+                formatted_item['formatted'] += f" — <em>{context_suffix}</em>"
+
     # Handle Bottom Line, Upside, Downside (paragraphs, not bullets - no bullet_id)
     for section_key, json_key in [
         ("bottom_line", "bottom_line"),
@@ -158,10 +167,22 @@ def add_dates_to_email_sections(
         ("downside_scenario", "downside_scenario")
     ]:
         if section_key in sections and sections[section_key]:
+            item = sections[section_key][0]
             date_range = merged_json['sections'].get(json_key, {}).get('date_range', '')
-            if date_range:
-                # These are simple lists, not dicts with bullet_id
-                sections[section_key][0] = f"{sections[section_key][0]} ({date_range})"
+
+            # Handle new dict format with context_suffix
+            if isinstance(item, dict):
+                formatted = item['formatted']
+                if date_range:
+                    formatted += f" ({date_range})"
+                context_suffix = item.get('context_suffix', '')
+                if context_suffix:
+                    formatted += f" — <em>{context_suffix}</em>"
+                sections[section_key][0] = formatted  # Flatten to string
+            else:
+                # Fallback for old string format (Email #2 or legacy)
+                if date_range:
+                    sections[section_key][0] = f"{item} ({date_range})"
 
     return sections
 

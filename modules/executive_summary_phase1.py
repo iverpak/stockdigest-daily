@@ -813,17 +813,20 @@ def get_used_article_indices(phase_json: Dict) -> set:
 
 def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[Dict]]:
     """
-    Convert Phase 1+2 JSON to Email #3 user-facing format with bullet_id matching.
+    Convert Phase 1+2+3 JSON to Email #3 user-facing format with bullet_id matching.
 
-    NEW FORMAT (same as Email #4):
-    **[Entity] Topic • Sentiment (reason)**
-    Content paragraph (Nov 04)
+    FORMAT (Dec 2025):
+    **[Entity] Topic • Sentiment**
+    Content paragraph (Dec 04) — <em>Context paragraph in italics</em>
+
+    Context is stored separately as 'context_suffix' so add_dates_to_email_sections()
+    can insert the date between content and context.
 
     Args:
-        phase1_json: Phase 1+2 merged JSON (or Phase 2+3 merged JSON)
+        phase1_json: Phase 3 merged JSON (Phase 1+2 metadata + Phase 3 edited content/context)
 
     Returns:
-        sections dict: {section_name: [{'bullet_id': '...', 'formatted': '...'}, ...]}
+        sections dict: {section_name: [{'bullet_id': '...', 'formatted': '...', 'context_suffix': '...'}, ...]}
     """
     from modules.executive_summary_utils import format_bullet_header, add_dates_to_email_sections
 
@@ -843,39 +846,49 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[Dict]]:
     json_sections = phase1_json.get("sections", {})
 
     # Bottom Line (simple list, no bullet_id)
+    # Returns dict with 'formatted' (content) and 'context_suffix' (for appending after date)
     if "bottom_line" in json_sections:
-        # Use integrated content if available (Phase 3), fall back to Phase 1 + Phase 2 separately
-        if json_sections["bottom_line"].get("content_integrated"):
-            content = json_sections["bottom_line"]["content_integrated"]
+        bl = json_sections["bottom_line"]
+        # Use Phase 3 content/context if available, fall back to Phase 1+2
+        if bl.get("content_integrated"):
+            content = bl["content_integrated"]
+            context_suffix = bl.get("context_integrated", "")
         else:
-            # Phase 3 fallback: concatenate without "Context:" label for cleaner user-facing email
-            content = json_sections["bottom_line"].get("content", "")
-            context = json_sections["bottom_line"].get("context", "")
-            if context:
-                content += f" {context}"
-        sections["bottom_line"] = [content]
+            # Fallback: Phase 1 content + Phase 2 context (no italics in fallback)
+            content = bl.get("content", "")
+            context_suffix = bl.get("context", "")
+        sections["bottom_line"] = [{
+            'formatted': content,
+            'context_suffix': context_suffix
+        }]
 
     # Helper function to format bullets (simple, no metadata)
     def format_bullet_simple(bullet: Dict, section_name: str) -> Dict:
-        """Format bullet with header and content. Returns {'bullet_id': '...', 'formatted': '...'}"""
+        """Format bullet with header, content, and context_suffix.
+
+        Returns:
+            {'bullet_id': '...', 'formatted': '...', 'context_suffix': '...'}
+
+        Context is stored separately so add_dates_to_email_sections() can insert
+        the date between content and context: <content> (date) — <em><context></em>
+        """
         # Use shared utility for header (hide reason in Email #3 user-facing emails)
         # Pass section_name to control sentiment display (hidden for some sections)
         header = format_bullet_header(bullet, show_reason=False, section_name=section_name)
 
-        # Use integrated content if available (Phase 3), fall back to Phase 1 + Phase 2 separately
+        # Use Phase 3 content/context if available, fall back to Phase 1+2
         if bullet.get('content_integrated'):
-            # Phase 3 has run - use integrated content
             content = bullet['content_integrated']
+            context_suffix = bullet.get('context_integrated', '')
         else:
-            # Phase 3 fallback: concatenate without "Context:" label for cleaner user-facing email
+            # Fallback: Phase 1 content + Phase 2 context (no italics in fallback)
             content = bullet['content']
-            context = bullet.get('context', '')
-            if context:
-                content += f" {context}"
+            context_suffix = bullet.get('context', '')
 
         return {
             'bullet_id': bullet['bullet_id'],
-            'formatted': f"{header}\n{content}"
+            'formatted': f"{header}\n{content}",
+            'context_suffix': context_suffix
         }
 
     # All bullet sections
@@ -903,21 +916,25 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[Dict]]:
             ]
 
     # Scenarios (simple lists, no bullet_id)
+    # Returns dict with 'formatted' (content) and 'context_suffix' (for appending after date)
     for json_key, sections_key in [
         ("upside_scenario", "upside_scenario"),
         ("downside_scenario", "downside_scenario")
     ]:
         if json_key in json_sections:
-            # Use integrated content if available (Phase 3), fall back to Phase 1 + Phase 2 separately
-            if json_sections[json_key].get("content_integrated"):
-                content = json_sections[json_key]["content_integrated"]
+            scenario = json_sections[json_key]
+            # Use Phase 3 content/context if available, fall back to Phase 1+2
+            if scenario.get("content_integrated"):
+                content = scenario["content_integrated"]
+                context_suffix = scenario.get("context_integrated", "")
             else:
-                # Phase 3 fallback: concatenate without "Context:" label for cleaner user-facing email
-                content = json_sections[json_key].get("content", "")
-                context = json_sections[json_key].get("context", "")
-                if context:
-                    content += f" {context}"
-            sections[sections_key] = [content]
+                # Fallback: Phase 1 content + Phase 2 context (no italics in fallback)
+                content = scenario.get("content", "")
+                context_suffix = scenario.get("context", "")
+            sections[sections_key] = [{
+                'formatted': content,
+                'context_suffix': context_suffix
+            }]
 
     # Add dates to all sections using bullet_id matching
     sections = add_dates_to_email_sections(sections, phase1_json)
@@ -929,15 +946,15 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
     """
     Convert Phase 3 merged JSON to Email #2 QA format with deduplication display.
 
-    NEW FORMAT (Nov 2025):
+    FORMAT (Dec 2025):
     ────────────────────────────────────────────────────────────────────────────────
     [bullet_id] Topic Label • Sentiment (reason)
 
     Phase 1+2 (Original):
-    Content from Phase 1 articles with Phase 2 context appended.
+    <content> Context: <context>
 
-    Phase 3 (Integrated):
-    Content with Phase 2 context woven inline.
+    Phase 3 (Edited):
+    <content_p3> Context: <context_p3>
 
     Metadata: Impact: high | Sentiment: bullish | Relevance: direct | Reason: xxx
     Filing hints: 10-K (Section A, B); 10-Q (Section C)
@@ -945,13 +962,12 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
     Source Articles: [0, 3, 5]
 
     Deduplication: ✅ UNIQUE
-    (Nov 27)
 
     ID: bullet_id
     ────────────────────────────────────────────────────────────────────────────────
 
     Args:
-        phase3_json: Phase 3 merged JSON (Phase 1+2 metadata + Phase 3 integrated + deduplication)
+        phase3_json: Phase 3 merged JSON (Phase 1+2 metadata + Phase 3 edited + deduplication)
 
     Returns:
         sections dict: {section_name: [{'bullet_id': '...', 'formatted': '...'}, ...]}
@@ -977,16 +993,21 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
     if "bottom_line" in json_sections:
         bl = json_sections["bottom_line"]
         content_p12 = bl.get("content", "")
-        context = bl.get("context", "")
+        context_p12 = bl.get("context", "")
         content_p3 = bl.get("content_integrated", "")
+        context_p3 = bl.get("context_integrated", "")
 
         # Professional format with Phase 1+2 and Phase 3 labels
         result = "<strong>Phase 1+2 (Original):</strong><br>"
         result += content_p12
-        if context:
-            result += f" Context: {context}"
+        if context_p12:
+            result += f" Context: {context_p12}"
+
+        # Phase 3 edited output (same format: content + Context: context)
         if content_p3:
-            result += f"<br><br><strong>Phase 3 (Integrated):</strong><br>{content_p3}"
+            result += f"<br><br><strong>Phase 3 (Edited):</strong><br>{content_p3}"
+            if context_p3:
+                result += f" Context: {context_p3}"
 
         # Source articles (always show for QA visibility, even if empty)
         source_articles = bl.get('source_articles', [])
@@ -998,15 +1019,15 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
     def format_bullet_with_dedup(bullet: Dict) -> Dict:
         """Format bullet showing Phase 1+2, Phase 3, Metadata, and Deduplication.
 
-        Professional QA format (Nov 2025):
+        Professional QA format (Dec 2025):
         ────────────────────────────────────────────────────────────────────────────────
         [bullet_id] Topic Label • Sentiment (reason)
 
         Phase 1+2 (Original):
         <content> Context: <context>
 
-        Phase 3 (Integrated):
-        <integrated content>
+        Phase 3 (Edited):
+        <content_p3> Context: <context_p3>
 
         Metadata: Impact: high | Sentiment: bullish | Relevance: direct | Reason: xxx
         Filing hints: 10-K (Section A); 10-Q (Section B)
@@ -1042,20 +1063,23 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
 
         # Phase 1+2 content with clear label
         content_p12 = bullet.get('content', '')
-        context = bullet.get('context', '')
+        context_p12 = bullet.get('context', '')
 
         result += "<br><strong>Phase 1+2 (Original):</strong><br>"
         result += content_p12
-        if context:
-            result += f" Context: {context}"
+        if context_p12:
+            result += f" Context: {context_p12}"
 
-        # Phase 3 integrated content with clear label (always show if present)
+        # Phase 3 edited content with clear label (same format: content + Context: context)
         content_p3 = bullet.get('content_integrated', '')
+        context_p3 = bullet.get('context_integrated', '')
         if content_p3:
-            result += f"<br><br><strong>Phase 3 (Integrated):</strong><br>{content_p3}"
+            result += f"<br><br><strong>Phase 3 (Edited):</strong><br>{content_p3}"
+            if context_p3:
+                result += f" Context: {context_p3}"
         elif is_filtered:
             # Filtered bullets don't have Phase 3 content - show placeholder
-            result += f"<br><br><strong>Phase 3 (Integrated):</strong><br><em style='color: #888;'>[Not processed - bullet was filtered]</em>"
+            result += f"<br><br><strong>Phase 3 (Edited):</strong><br><em style='color: #888;'>[Not processed - bullet was filtered]</em>"
 
         # Metadata line - order: Impact | Sentiment | Relevance | Reason
         metadata_parts = []
@@ -1113,9 +1137,13 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
             result += f"<br>  Absorbs: {absorbs}"
             if shared_theme:
                 result += f"<br>  Theme: {shared_theme}"
-            proposed = dedup.get('proposed_edit', '')
-            if proposed:
-                result += f"<br>  Proposed Edit: {proposed}"
+            # Show proposed content/context for consolidated bullets
+            proposed_content = dedup.get('proposed_content', '')
+            proposed_context = dedup.get('proposed_context', '')
+            if proposed_content:
+                result += f"<br>  Proposed Content: {proposed_content}"
+                if proposed_context:
+                    result += f" Context: {proposed_context}"
         elif status == 'duplicate':
             absorbed_by = dedup.get('absorbed_by', '')
             result += f"Deduplication: <span style='color: #dc3545;'>❌ DUPLICATE</span>"
@@ -1166,16 +1194,21 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
         if json_key in json_sections:
             scenario = json_sections[json_key]
             content_p12 = scenario.get("content", "")
-            context = scenario.get("context", "")
+            context_p12 = scenario.get("context", "")
             content_p3 = scenario.get("content_integrated", "")
+            context_p3 = scenario.get("context_integrated", "")
 
             # Professional format with Phase 1+2 and Phase 3 labels
             result = "<strong>Phase 1+2 (Original):</strong><br>"
             result += content_p12
-            if context:
-                result += f" Context: {context}"
+            if context_p12:
+                result += f" Context: {context_p12}"
+
+            # Phase 3 edited output (same format: content + Context: context)
             if content_p3:
-                result += f"<br><br><strong>Phase 3 (Integrated):</strong><br>{content_p3}"
+                result += f"<br><br><strong>Phase 3 (Edited):</strong><br>{content_p3}"
+                if context_p3:
+                    result += f" Context: {context_p3}"
 
             # Source articles (always show for QA visibility, even if empty)
             source_articles = scenario.get('source_articles', [])

@@ -1484,26 +1484,26 @@ def merge_phase3_with_phase2(phase2_json: Dict, phase3_json: Dict) -> Dict:
             if bullet_id and bullet_id in phase3_map:
                 phase3_bullet = phase3_map[bullet_id]
 
-                # Add integrated content as new field (preserve Phase 1 content and Phase 2 context for Quality Review)
+                # Add Phase 3 edited content and context as new fields
+                # (preserve Phase 1 content and Phase 2 context for Quality Review comparison)
                 bullet['content_integrated'] = phase3_bullet.get('content', '')
+                bullet['context_integrated'] = phase3_bullet.get('context', '')
 
-                # Add deduplication field if present (new Nov 2025)
+                # Add deduplication field if present
                 if 'deduplication' in phase3_bullet:
                     bullet['deduplication'] = phase3_bullet['deduplication']
                 else:
-                    # Default to unique if no deduplication field (backward compatibility)
                     bullet['deduplication'] = {'status': 'unique'}
-
-                # Don't delete content or context - needed for Quality Review verification
 
     # Scenarios (bottom_line, upside_scenario, downside_scenario)
     for section_name in ["bottom_line", "upside_scenario", "downside_scenario"]:
         if section_name in merged.get("sections", {}):
             phase3_section = phase3_json.get("sections", {}).get(section_name, {})
             if phase3_section and phase3_section.get("content"):
-                # Add integrated content as new field (preserve Phase 1 content and Phase 2 context for Quality Review)
+                # Add Phase 3 edited content and context as new fields
+                # (preserve Phase 1 content and Phase 2 context for Quality Review comparison)
                 merged["sections"][section_name]["content_integrated"] = phase3_section["content"]
-                # Don't delete content or context - needed for Quality Review verification
+                merged["sections"][section_name]["context_integrated"] = phase3_section.get("context", "")
 
     return merged
 
@@ -1514,7 +1514,7 @@ def apply_deduplication(phase3_merged_json: Dict) -> Dict:
 
     This function:
     1. Removes bullets marked as 'duplicate' (absorbed elsewhere)
-    2. For 'primary' bullets, uses proposed_edit if available (otherwise content_integrated)
+    2. For 'primary' bullets, uses proposed_content/proposed_context if available
     3. Merges source_articles arrays from absorbed bullets into primary
     4. Returns clean JSON ready for Email #3 rendering
 
@@ -1577,11 +1577,13 @@ def apply_deduplication(phase3_merged_json: Dict) -> Dict:
             if status == 'primary':
                 primaries_consolidated += 1
 
-                # Use proposed_edit if available, otherwise fall back to content_integrated
-                proposed_edit = dedup.get('proposed_edit', '')
-                if proposed_edit:
-                    bullet['content_integrated'] = proposed_edit
-                    LOG.debug(f"Using proposed_edit for primary bullet: {bullet.get('bullet_id')}")
+                # Use proposed_content + proposed_context if available (consolidated from absorbed bullets)
+                proposed_content = dedup.get('proposed_content', '')
+                proposed_context = dedup.get('proposed_context', '')
+                if proposed_content:
+                    bullet['content_integrated'] = proposed_content
+                    bullet['context_integrated'] = proposed_context
+                    LOG.debug(f"Using proposed_content/context for primary bullet: {bullet.get('bullet_id')}")
 
                 # Merge source_articles from absorbed bullets
                 absorbed_ids = dedup.get('absorbs', [])

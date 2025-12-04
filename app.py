@@ -13277,6 +13277,81 @@ def send_beta_signup_notification(name: str, email: str, tickers: list) -> bool:
         return False
 
 
+def send_welcome_email(user_id: int, name: str, email: str) -> bool:
+    """
+    Send welcome email to newly approved user.
+    Called when admin approves a pending user (status: pending → active).
+
+    Args:
+        user_id: User ID for fetching tickers and unsubscribe token
+        name: User's full name (will extract first name)
+        email: User's email address
+
+    Returns:
+        True if email sent successfully, False otherwise.
+    """
+    try:
+        # Extract first name
+        first_name = name.split()[0] if name else "there"
+
+        # Fetch user's tickers with company names
+        tickers_display = []
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT ticker FROM user_tickers
+                WHERE user_id = %s
+                ORDER BY id
+            """, (user_id,))
+            rows = cur.fetchall()
+
+            for row in rows:
+                ticker = row['ticker']
+                config = get_ticker_config(ticker)
+                company_name = config.get('company_name', ticker) if config else ticker
+                tickers_display.append(f"{ticker} ({company_name})")
+
+        if not tickers_display:
+            LOG.warning(f"No tickers found for user {user_id}, skipping welcome email")
+            return False
+
+        tickers_str = ", ".join(tickers_display)
+
+        # Get or create unsubscribe token
+        unsubscribe_token = get_or_create_unsubscribe_token(email)
+        if unsubscribe_token:
+            unsubscribe_url = f"https://weavara.io/unsubscribe?token={unsubscribe_token}"
+        else:
+            unsubscribe_url = "https://weavara.io/unsubscribe"
+            LOG.warning(f"No unsubscribe token for {email}, using generic link")
+
+        # Render welcome email template
+        from jinja2 import Environment, FileSystemLoader
+        template_env = Environment(loader=FileSystemLoader('templates'))
+        template = template_env.get_template('email_welcome.html')
+
+        html_body = template.render(
+            user_name=first_name,
+            tickers=tickers_str,
+            unsubscribe_url=unsubscribe_url
+        )
+
+        subject = "Welcome to Weavara"
+
+        success = send_email(subject=subject, html_body=html_body, to=email)
+
+        if success:
+            LOG.info(f"📧 Welcome email sent to {email} (user {user_id})")
+        else:
+            LOG.error(f"Failed to send welcome email to {email}")
+
+        return success
+
+    except Exception as e:
+        LOG.error(f"Error sending welcome email to {email}: {e}")
+        LOG.error(traceback.format_exc())
+        return False
+
+
 def send_enhanced_quick_intelligence_email(articles_by_ticker: Dict[str, Dict[str, List[Dict]]], triage_results: Dict[str, Dict[str, List[Dict]]], time_window_minutes: int = 1440, mode: str = 'daily', report_type: str = 'daily') -> bool:
     """Email #1: Article Selection QA - Shows which articles were flagged by AI triage (NEW Nov 2025: report_type for subject labels)"""
     try:
@@ -15663,15 +15738,16 @@ def generate_email_html_core(
     else:
         LOG.info(f"[{ticker}] Weekly report: Showing all {len(sections)} sections")
 
-    # Extract preheader text from bottom_line (first ~120 chars for email preview)
+    # Extract preheader text from bottom_line (first sentence for email preview)
     preheader_text = ""
     if sections.get("bottom_line") and len(sections["bottom_line"]) > 0:
         raw_text = sections["bottom_line"][0]
-        # Truncate at ~120 chars at word boundary
-        if len(raw_text) > 120:
-            preheader_text = raw_text[:120].rsplit(' ', 1)[0] + "..."
+        # Find first period followed by space (end of sentence)
+        period_idx = raw_text.find('. ')
+        if period_idx > 0:
+            preheader_text = raw_text[:period_idx + 1]  # Include the period
         else:
-            preheader_text = raw_text
+            preheader_text = raw_text  # No period found, use full text
 
     # Fetch flagged articles (already sorted by SQL) - SAME AS EMAIL #3
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -25567,12 +25643,20 @@ async def approve_user(request: Request):
                 UPDATE users
                 SET status = 'active', updated_at = NOW()
                 WHERE id = %s
-                RETURNING email, name
+                RETURNING id, email, name
             """, (user_id,))
             result = cur.fetchone()
             if result:
                 conn.commit()
                 LOG.info(f"✅ Approved user {user_id}: {result['email']}")
+
+                # Send welcome email to newly approved user
+                send_welcome_email(
+                    user_id=result['id'],
+                    name=result['name'],
+                    email=result['email']
+                )
+
                 return {"status": "success", "message": f"Approved {result['email']}"}
             else:
                 return {"status": "error", "message": f"User {user_id} not found"}

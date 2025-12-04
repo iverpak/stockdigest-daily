@@ -1459,6 +1459,12 @@
                 const debouncedValidate = debounce(() => validateTicker(inputId, feedbackId), 500);
                 input.addEventListener('input', debouncedValidate);
             });
+
+            // Clear email error when user starts typing
+            document.getElementById('email').addEventListener('input', () => {
+                document.getElementById('email-feedback').innerHTML = '';
+                document.getElementById('email').style.borderColor = '#e0ddd8';
+            });
         });
 
         // Form submission
@@ -1469,8 +1475,7 @@
             const emailFeedback = document.getElementById('email-feedback');
 
             // Clear previous email error
-            emailFeedback.textContent = '';
-            emailFeedback.className = 'ticker-feedback';
+            emailFeedback.innerHTML = '';
 
             if (!termsCheckbox.checked) {
                 alert('Please agree to the Terms of Service and Privacy Policy.');
@@ -1533,8 +1538,8 @@
                 } else {
                     // Show email-specific errors inline
                     if (data.message && data.message.toLowerCase().includes('email')) {
-                        emailFeedback.textContent = data.message;
-                        emailFeedback.className = 'ticker-feedback error';
+                        emailFeedback.innerHTML = `<span style="color: #9b2c2c; font-weight: 600;">✗ ${data.message}</span>`;
+                        document.getElementById('email').style.borderColor = '#9b2c2c';
                     } else {
                         alert(data.message || 'Something went wrong. Please try again.');
                     }

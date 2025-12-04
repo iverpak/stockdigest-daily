@@ -316,6 +316,19 @@
             .enrichment-grid {
                 grid-template-columns: 1fr;
             }
+
+            /* Sample report mobile stacking */
+            .report-mobile-stack {
+                display: block !important;
+                width: 100% !important;
+            }
+            .report-mobile-center {
+                text-align: center !important;
+            }
+            .report-mobile-center table {
+                margin: 0 auto !important;
+                float: none !important;
+            }
         }
 
         /* ========== REPORT PREVIEW SECTION ========== */
@@ -758,7 +771,7 @@
                             <td style="padding: 32px 32px 28px; border-bottom: 1px solid #e0ddd8;">
                                 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
                                     <tr>
-                                        <td style="font-family: Arial, Helvetica, sans-serif; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: #6b6b6b;">Weavara Daily Brief</td>
+                                        <td style="font-family: Arial, Helvetica, sans-serif; font-size: 12px; letter-spacing: 1px; color: #6b6b6b;">WEAVARA DAILY MORNING BRIEF</td>
                                         <td align="right" style="font-family: Arial, Helvetica, sans-serif; font-size: 12px; color: #6b6b6b;">Nov 27, 2025 · Last Close</td>
                                     </tr>
                                 </table>
@@ -770,11 +783,11 @@
                                 <!-- Header Main Row -->
                                 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
                                     <tr>
-                                        <td valign="top" style="width: 60%;">
+                                        <td valign="top" style="width: 60%;" class="report-mobile-stack report-mobile-center">
                                             <h1 style="margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: 34px; font-weight: normal; line-height: 1.1; color: #1a1a1a;">Apple Inc.</h1>
                                             <p style="margin: 8px 0 0 0; font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #6b6b6b;"><span style="color: #8b2c24; font-weight: 600;">AAPL</span> · Information Technology</p>
                                         </td>
-                                        <td valign="top" align="right" style="width: 40%; text-align: right;">
+                                        <td valign="top" align="right" style="width: 40%; text-align: right;" class="report-mobile-stack report-mobile-center">
                                             <p style="margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: 34px; font-weight: normal; line-height: 1.1; color: #1a1a1a;">$277.55</p>
                                             <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top: 6px; display: inline-block;">
                                                 <tr>

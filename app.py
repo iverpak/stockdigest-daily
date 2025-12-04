@@ -15763,16 +15763,14 @@ def generate_email_html_core(
     else:
         LOG.info(f"[{ticker}] Weekly report: Showing all {len(sections)} sections")
 
-    # Extract preheader text from bottom_line (first sentence for email preview)
+    # Extract preheader text from bottom_line (full content for email preview)
+    # Bottom line is already curated to be 1-2 sentences - use it all
+    # Previously truncated at first ". " which broke on abbreviations like "U.S."
     preheader_text = ""
     if sections.get("bottom_line") and len(sections["bottom_line"]) > 0:
         raw_text = sections["bottom_line"][0]
-        # Find first period followed by space (end of sentence)
-        period_idx = raw_text.find('. ')
-        if period_idx > 0:
-            preheader_text = raw_text[:period_idx + 1]  # Include the period
-        else:
-            preheader_text = raw_text  # No period found, use full text
+        # Strip HTML tags (e.g., <em>context</em>) for plain text preheader
+        preheader_text = re.sub(r'<[^>]+>', '', raw_text)
 
     # Fetch flagged articles (already sorted by SQL) - SAME AS EMAIL #3
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)

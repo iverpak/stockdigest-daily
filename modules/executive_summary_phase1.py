@@ -876,13 +876,24 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[Dict]]:
         # Pass section_name to control sentiment display (hidden for some sections)
         header = format_bullet_header(bullet, show_reason=False, section_name=section_name)
 
-        # Use Phase 3 content/context if available, fall back to Phase 1+2
-        if bullet.get('content_integrated'):
-            content = bullet['content_integrated']
-            context_suffix = bullet.get('context_integrated', '')
+        # Check deduplication status to determine content source
+        dedup = bullet.get('deduplication', {})
+        dedup_status = dedup.get('status', 'unique')
+
+        if dedup_status == 'primary':
+            # PRIMARY bullets: Use consolidated proposed_content/context
+            # (apply_deduplication() sets content_integrated = proposed_content)
+            # Falls back to Phase 1+2 if no proposed_content was provided
+            if bullet.get('content_integrated'):
+                content = bullet['content_integrated']
+                context_suffix = bullet.get('context_integrated', '')
+            else:
+                content = bullet.get('content', '')
+                context_suffix = bullet.get('context', '')
         else:
-            # Fallback: Phase 1 content + Phase 2 context (no italics in fallback)
-            content = bullet['content']
+            # UNIQUE bullets: Passthrough Phase 1 content + Phase 2 context
+            # (ignore Phase 3's content_integrated edits for non-dedup bullets)
+            content = bullet.get('content', '')
             context_suffix = bullet.get('context', '')
 
         return {

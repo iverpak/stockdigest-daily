@@ -21,12 +21,19 @@ OUTPUT
 Return JSON with these fields per bullet:
 - bullet_id (unchanged from input)
 - topic_label (unchanged from input)
-- content (Phase 1 news, edited for flow — preserve all facts and attribution)
-- context (Phase 2 filing data, filtered to 1-2 most relevant points — may be empty string "" if all removed)
+- content (unchanged from input for body bullets)
+- context (unchanged from input for body bullets)
+- deduplication: object containing:
+  - status: "unique" | "primary" | "duplicate"
+  - For primary: absorbs, shared_theme, proposed_content, proposed_context
+  - For duplicate: absorbed_by, shared_theme
 
 For scenarios (bottom_line, upside_scenario, downside_scenario):
-- content (Phase 1 news synthesis, filtered references to removed bullets)
-- context (Phase 2 filing synthesis, filtered for relevance — may be empty string "")
+- content (edited: remove references to filtered bullets, cross-bullet synthesis allowed)
+- context (edited: remove references to filtered bullets only — may be empty string "")
+
+BODY BULLETS: Pass through content/context unchanged. Your job is deduplication tagging only.
+SCENARIOS: Edit per SCENARIO EDITING rules.
 
 Content and Context remain SEPARATE. Do not merge them.
 
@@ -37,274 +44,128 @@ Do NOT return: impact, sentiment, reason, entity, date_range, filing_hints
 AUDIENCE & PURPOSE
 ═══════════════════════════════════════════════════════════════════════════
 
-You are the editorial stage of an institutional-grade research pipeline. 
-Phase 1 summarized recent news. Phase 2 added filing context. Your job is 
-cleanup and quality control — not re-synthesis.
+You are the quality control stage of an institutional-grade research pipeline.
+Phase 1 summarized recent news. Phase 2 added filing context.
 
 Your readers are portfolio managers and analysts who will see:
 - Content (regular text): What happened
 - Context (italics, immediately below): Why it matters per filings
 
-THE TWO INPUTS YOU ARE EDITING:
+THE TWO FIELDS:
 
 Phase 1 content = RECENT DEVELOPMENTS
 - News from recent period: announcements, analyst actions, market events
 - This is what happened
-- Already summarized — your job is light editing, not rewriting
-- Preserve all facts and attribution
 
 Phase 2 context = FILING CONTEXT  
 - 10-K, 10-Q, 8-K, earnings transcripts (may be weeks or months old)
 - This is what we knew before the news
 - Quantifies exposure, validates trends, establishes baselines
-- Phase 2 may have provided multiple context points — select the 1-2 most important
 
-YOUR EDITORIAL MANDATE:
+YOUR JOB:
 
-Content and Context remain SEPARATE outputs. Do not merge them.
-The reader sees Content first, then Context immediately below.
-Edit both with this sequential reading experience in mind.
+1. DEDUPLICATION: Tag bullets as primary/duplicate/unique. For primary bullets absorbing duplicates, generate proposed_content and proposed_context by merging facts from absorbed bullets.
 
-Content should stand alone — reader gets the news without needing Context.
-Context should illuminate the news, not repeat it.
+2. SCENARIO EDITING: Clean up Bottom Line, Upside, Downside:
+   - Content: Remove references to filtered bullets, cross-bullet synthesis allowed
+   - Context: Remove references to filtered bullets only (no other edits)
 
-If a fact appears in both Content and Context, keep it in Content, remove from Context.
+BODY BULLETS: Pass through content/context unchanged. Only add deduplication tagging.
+SCENARIOS: Edit per SCENARIO EDITING rules below.
 
-═══════════════════════════════════════════════════════════════════════════
-CONTEXT EDITING RULES
-═══════════════════════════════════════════════════════════════════════════
-
-Rule 1: NO DUPLICATION WITH CONTENT
-
-If Content already states a fact, remove it from Context.
-Context should add NEW information, not echo what the reader just read.
-
-Example:
-Content: "Tesla received $240.3M IRS grant for battery manufacturing per Reuters."
-Context (before): "The $240.3M grant represents 2.7% of expected $9.0B 2025 capex per Q3 10-Q"
-Context (after): "Grant represents 2.7% of expected $9.0B 2025 capex per Q3 10-Q"
-
-Rule 2: SELECT 1-2 MOST IMPORTANT CONTEXT POINTS
-
-Phase 2 generated context by answering these questions using SEC filings:
-
-1. How big is this? (% of revenue, assets, capacity)
-2. Is this profitable? (margins, ROIC, unit economics)
-3. Do they rely on this? (concentration, dependencies, sole source)
-4. Better or worse than before? (QoQ, YoY, vs guidance)
-5. Did they warn about this? (disclosed risks now materializing)
-6. How do they compare to peers? (market share, capacity, cost position)
-7. Good use of money? (ROIC vs WACC, payback period)
-8. On schedule? (milestones, delays, approvals)
-9. Financially sustainable? (FCF, leverage, liquidity)
-10. How does this fit the business model? (strategic alignment)
-11. What's the cost/revenue exposure? (COGS breakdown, pricing)
-12. What is this entity? (define unfamiliar divisions, targets, products)
-
-Phase 2 may have provided context answering multiple questions.
-Keep only the 1-2 context points most relevant to the Content.
-
-Remove context that:
-❌ Restates the news event (already in Content)
-❌ Is generic boilerplate ("operates in competitive industry")
-❌ Is tangentially related (different segment, different geography)
-❌ Is unrelated or connection is unclear (reader shouldn't have to guess why it's there)
-❌ Is lower priority than other available context points
-
-BOILERPLATE TO REMOVE:
-
-Generic risk language without specific numbers is noise:
-❌ "intense competition" → unless quantified with market share loss
-❌ "material dependency on [suppliers/partners]" → unless naming specific entities or percentages
-❌ "single or limited sources" → unless naming the source
-❌ "faces similar regulatory pressures" → undercuts competitive framing
-❌ "operates in a competitive industry" → adds nothing
-
-Keep only context that answers: How much? Who specifically? What changed?
-
-Example:
-❌ REMOVE: "FY2024 10-K discloses material dependency on outsourcing partners"
-✅ KEEP: "TSMC manufactures 100% of A-series chips per 10-K"
-
-❌ REMOVE: "The company faces intense competition per 10-K"
-✅ KEEP: "Market share declined to 23% from 28% YoY per 10-Q"
-
-Rule 3: CROSS-REPORT DEDUPLICATION
-
-If the same filing stat appears in multiple bullets' Context across the report, 
-keep it in the MOST relevant bullet, remove from others.
-
-Example: "32% natural gas capacity per 10-K" appears in 3 bullets 
-→ Keep in the gas price bullet (most relevant), remove from others
-
-Rule 4: PRESERVE ATTRIBUTION
-
-Context must ALWAYS retain filing attribution (per 10-K, per Q3 10-Q, per Oct 15 call).
-This signals to readers which facts are standing filing data vs. recent news.
-
-❌ BAD: "China represented 21.4% of FY2024 revenue"
-✅ GOOD: "China represented 21.4% of FY2024 revenue per 10-K"
-
-═══════════════════════════════════════════════════════════════════════════
-LIGHT FLOW EDITS (Optional)
-═══════════════════════════════════════════════════════════════════════════
-
-You may make minor flow improvements:
-✅ Break up run-on sentences
-✅ Add brief transitions ("By comparison," "However,")
-✅ Reorder sentences for logical progression (scenarios only)
-
-PRESERVE CAUSAL CONNECTIONS:
-
-Remove editorial judgment (opinion about importance):
-❌ "This is important because..."
-❌ "This trend directly supports the company's strategy"
-❌ "making this a direct tailwind"
-❌ "providing a stable underpinning"
-
-Keep causal connections (explains HOW or WHY):
-✅ "driven by higher approved rates"
-✅ "capturing the benefit of strong pricing environment"
-✅ "highlighting the volatility of this income source"
-✅ "which reflects competitive pressure"
-✅ "partly due to lower pricing"
-
-Test: Does the phrase explain HOW or WHY something matters? Keep it.
-Does the phrase just assert that it's important? Remove it.
-
-GUARDRAILS:
-❌ DO NOT remove any facts
-❌ DO NOT remove any attribution
-❌ DO NOT merge Context into Content
-❌ DO NOT remove causal explanations
-
-═══════════════════════════════════════════════════════════════════════════
-QUANTIFICATION STANDARDS (CRITICAL)
-═══════════════════════════════════════════════════════════════════════════
-
-Context should be specific, not vague:
-
-❌ VAGUE:                            ✅ SPECIFIC:
-"significant exposure"           → "56.2% of FY2024 revenue per 10-K"
-"high leverage"                  → "$535M debt with July 2027 maturity per 10-Q"
-"competitive pressure"           → "new lease rates down 2.9% YoY per Oct 30 call"
-"major customer"                 → "6.0% of consolidated rent per 10-K"
-
-If Phase 2 Context contains vague language, it likely should be removed.
-
-PRESERVE COMPLETE QUANTIFICATION:
-
-Do not truncate metrics in Content or Context. Preserve BOTH absolute values AND relative changes:
-
-✅ COMPLETE:
-"EIA projects prices will rise 23% to $47/MWh in 2025"
-"Analyst raised target to $175 from $150 (+17%)"
-"Revenue grew 15% to $12.8B from $11.1B"
-
-❌ INCOMPLETE (do not truncate to this):
-"EIA projects prices will rise 23%" (missing: to what level?)
-"Analyst raised target" (missing: from what? to what?)
-"Revenue grew 15%" (missing: to what absolute level?)
-
-CONFLICTING NUMBERS:
-
-If Content and Context have different figures for the same metric, preserve both with sources:
-"Debt load $97.5B per Yahoo Finance; $93.8B per FY2024 10-K"
-
-DENOMINATORS IN CONTEXT:
-
-Context is valuable when it provides scale for Content numbers:
-
-Content: "Company announced 500,000 job cuts"
-Context: "Workforce totaled 1.5M employees per 10-K" 
-
-The reader can now grasp scale (33% of workforce).
-This is high-value context — keep it.
+Content and Context remain SEPARATE. Do not merge them.
+When merging duplicate bullets: Content facts → proposed_content. Context facts → proposed_context.
 
 ═══════════════════════════════════════════════════════════════════════════
 SCENARIO EDITING (Bottom Line/Upside/Downside)
 ═══════════════════════════════════════════════════════════════════════════
 
-Phase 1 already wrote scenario Content. Your job is cleanup and enhancement.
+Phase 1 already wrote scenario Content. Phase 2 added scenario Context.
 
-PRIMARY JOB: Remove references to filtered bullets.
-Scan each scenario for claims. If a claim references a bullet that was filtered:
+SCENARIO CONTENT:
+
+Job 1 — Remove references to filtered/duplicate bullets:
+Scan Content for claims. If a claim references a bullet that was filtered or marked duplicate:
 → REMOVE that sentence
 → Rewrite surrounding sentences for coherence
 
-SECONDARY JOB: Cross-bullet synthesis.
-→ Enhance scenario Content with facts from body bullet Content (see SCENARIO CROSS-BULLET SYNTHESIS)
-→ Enhance scenario Context with facts from body bullet Context
-→ Content pulls from Content only; Context pulls from Context only
+Job 2 — Cross-bullet synthesis (optional):
+→ May enhance Content with facts from body bullet Content
+→ Content pulls from Content only
 
-TERTIARY JOB: Light flow improvements.
-→ Break up run-on sentences
-→ Reorder for logical progression if needed
-→ Do NOT merge Context into Content
+SCENARIO CONTEXT:
 
-PRESERVE (do not summarize away):
-✅ Management quotes with attribution ("targeting legacy businesses 'costing us billions' per Oct 29 call")
-✅ Specific figures ("$17.58-$18.50 per share", "56.2% of revenue")
+Job 1 — Remove references to filtered/duplicate bullets:
+Scan Context for facts. If a fact traces to a bullet that was filtered or marked duplicate:
+→ REMOVE that fact
+→ Leave remaining Context unchanged
+
+No other Context edits. Do not select "most important" points, do not remove "redundancy," do not rewrite for flow.
+
+PRESERVE (do not remove):
+✅ Management quotes with attribution
+✅ Specific figures
 ✅ All source attribution
+✅ Causal connections (driven by, reflecting, due to)
 
-Context for scenarios:
-Apply same rules as bullet Context — select 1-2 most important points, remove redundancy with Content, remove if unrelated. May pull from body bullet Context to strengthen.
+Content and Context remain SEPARATE. Do not merge them.
 
 ═══════════════════════════════════════════════════════════════════════════
 SCENARIO VALIDATION (Bottom Line/Upside/Downside ONLY)
 ═══════════════════════════════════════════════════════════════════════════
 
-Low-quality bullets have been FILTERED OUT before reaching you.
-Scenario Content (from Phase 1) may still reference those removed bullets.
+Bullets marked FILTERED or DUPLICATE have been removed from the report.
+Scenario Content and Context (from Phase 1+2) may still reference those removed bullets.
 
-YOUR PRIMARY JOB: Remove unsupported claims from scenario Content.
+YOUR JOB: Remove unsupported claims from scenario Content and Context.
 
-For each scenario:
-1. Read every sentence/claim in Content
-2. Check: Is this claim supported by ANY bullet in the JSON?
+For scenario Content:
+1. Read every sentence/claim
+2. Check: Is this claim supported by ANY remaining bullet (status: unique or primary)?
 3. If NO → REMOVE that sentence/claim
 4. If YES → KEEP
 5. Rewrite for coherence after removals
-6. Do NOT add new information
 
-REMOVE claims that:
-❌ Reference facts not in any remaining bullet (e.g., "new CFO" when no executive change bullet exists)
-❌ Cite specific metrics not present in bullets (e.g., "$12B revenue" when bullets don't have this number)
-❌ Discuss themes with no corresponding bullet (e.g., "operational challenges" when no operations bullet exists)
+For scenario Context:
+1. Read every fact
+2. Check: Does this fact trace to a remaining bullet (status: unique or primary)?
+3. If NO → REMOVE that fact
+4. If YES → KEEP
+5. Do NOT rewrite or consolidate remaining Context
 
-KEEP claims that:
-✅ Are directly supported by at least one bullet
-✅ Are synthesized from multiple bullets (e.g., "competitive pressure" from pricing bullet + margin bullet)
-✅ Are directionally consistent with bullet themes
+REMOVE claims/facts that:
+❌ Reference facts from filtered bullets
+❌ Reference facts from duplicate bullets (use primary bullet's facts instead)
+❌ Cite specific metrics not present in remaining bullets
+
+KEEP claims/facts that:
+✅ Are directly supported by at least one remaining bullet
+✅ Are synthesized from multiple remaining bullets
 
 Examples:
 
-Scenario claim: "New CFO brings restructuring experience"
-Bullet check: No bullet covers CFO appointment
-Action: REMOVE entire sentence
+Scenario Content claim: "Malaysia crackdown reduces global hashrate"
+Bullet check: Malaysia bullet was FILTERED (indirect + low impact)
+Action: REMOVE entire sentence from Content
 
-Scenario claim: "Facing pricing pressure and margin compression"
-Bullet check: Bullet A = "competitors lowered prices 15%", Bullet B = "gross margin declined 200 bps"
-Action: KEEP (synthesized from two bullets)
-
-Scenario claim: "Revenue grew 18% to $12B"
-Bullet check: Bullets show "revenue growth" but no specific "$12B" figure
-Action: REMOVE "$12B" metric, keep "revenue growth" if directionally supported
+Scenario Context fact: "All facilities located in United States per 10-K"
+Bullet check: This came from filtered Malaysia bullet
+Action: REMOVE from Context
 
 If scenario becomes very short after removals (e.g., 1 sentence left), that's acceptable.
-Do NOT pad with generic statements. Quality over quantity.
+Do NOT pad with generic statements.
 
 ═══════════════════════════════════════════════════════════════════════════
 SCENARIO CROSS-BULLET SYNTHESIS (Bottom Line/Upside/Downside ONLY)
 ═══════════════════════════════════════════════════════════════════════════
 
-Scenarios should represent the best available information from the full report.
-This applies to scenarios ONLY. Body bullets remain self-contained.
+Scenarios may be enhanced with facts from body bullets. This is optional but encouraged when connections exist.
+Body bullets remain unchanged.
 
-SYNTHESIS RULES:
+RULES:
 
-Scenario Content may pull from any body bullet's Content (news facts).
-Scenario Context may pull from any body bullet's Context (filing data).
+Scenario Content may pull from body bullet Content (news facts).
+Scenario Context may pull from body bullet Context (filing data).
 
 ❌ Do NOT pull Context into Content (filing data stays in Context)
 ❌ Do NOT pull Content into Context (news stays in Content)
@@ -319,13 +180,20 @@ When relevant bullets exist, connect them:
 ✅ Growth claim + Historical baseline → "vs. historical X% growth"
 
 Examples:
-- "Vistra $6.8-7.6B" (Competitor bullet Content) + "66% growth in Texas" (Market bullet Content) + "AES not in Texas" (bullet Context)
-  → Bottom Line Content: "66% of growth in Texas where AES doesn't operate, while Vistra raised guidance to $6.8-7.6B"
-  → Bottom Line Context: "AES has no Texas exposure per 10-K"
+
+Example 1:
+- Competitor bullet Content: "Vistra raised guidance to $6.8-7.6B"
+- Market bullet Content: "66% of market growth in Texas"
+- Body bullet Context: "AES has no Texas exposure per 10-K"
   
-- "1,100 MW pipeline" (Bullet Content) + "Current peak 1,625 MW" (Bullet Context) + "0.5% historical growth" (Bullet Content)
-  → Bottom Line Content: "1,100 MW pipeline vs. historical 0.5% annual growth"
-  → Bottom Line Context: "Current peak capacity 1,625 MW per 10-K (~68% expansion)"
+→ Bottom Line Content: "66% of growth in Texas where AES doesn't operate, while Vistra raised guidance to $6.8-7.6B"
+→ Bottom Line Context: "AES has no Texas exposure per 10-K"
+
+Example 2:
+- Market bullet Content: "Fed ended Quantitative Tightening; historically each QT reversal coincided with major bitcoin rallies"
+- Catalyst bullet Content: "December 10 FOMC meeting expected to cut rates"
+  
+→ Upside Content: "...a widely expected rate cut at the December 10 FOMC meeting. Historically, each QT reversal has coincided with major bitcoin rallies."
 
 GUARDRAILS:
 ❌ Do NOT invent facts not in the JSON
@@ -333,76 +201,10 @@ GUARDRAILS:
 ❌ Do NOT cross-pollinate Content and Context
 
 ═══════════════════════════════════════════════════════════════════════════
-CONTEXT FILTERING (Body Bullets ONLY)
-═══════════════════════════════════════════════════════════════════════════
-
-Step 1: CHECK FOR DUPLICATION WITH CONTENT
-Remove any Context fact already stated in Content.
-Context should add new information, not echo the news.
-
-Step 2: FILTER FOR RELEVANCE
-Keep Context that:
-✅ Quantifies materiality (% of revenue, customer ranking, concentration)
-✅ Explains trajectory (QoQ, YoY, sequential changes)
-✅ Adds scale (denominators, baselines, comparisons)
-✅ Provides dependencies (sole suppliers, customer concentration, contractual terms)
-
-Remove Context that:
-❌ Duplicates Content (same fact stated twice)
-❌ Is tangentially related (doesn't answer: How big? What trajectory? Who matters?)
-❌ Discusses different aspect without clear connection to Content
-❌ Is generic boilerplate
-
-Step 3: SELECT TOP 1-2 CONTEXT POINTS
-If multiple context points pass filtering, keep only the 1-2 most important.
-Remove the rest.
-
-Step 4: DEDUPLICATE ACROSS BODY BULLETS
-
-Before outputting, systematically scan ALL body bullet Context fields for repeated filing facts.
-
-Process:
-1. List every quantified fact in Context across all body bullets:
-   - Percentages (21.4% of revenue, 32% capacity)
-   - Dollar amounts ($132B run-rate, $6.72B warranty reserve)
-   - Quotes ("good progress on Siri", "biggest product of all time")
-   - Specific metrics (17.0% margin, 150% QoQ growth)
-
-2. Check if any fact appears in multiple body bullets
-
-3. If duplicate found:
-   - Identify which bullet's Content most directly relates to the filing stat
-   - KEEP the context in that bullet
-   - REMOVE from all other bullets
-
-Most relevant = bullet whose Content is the primary story for that filing stat.
-
-Example:
-- "Good progress on Siri" appears in AI Leadership Context + Enhanced Siri Context
-- AI Leadership Content is about executive appointment
-- Enhanced Siri Content is about the Siri launch catalyst
-→ Siri quote is most relevant to Enhanced Siri → Keep there, remove from AI Leadership
-
-Example:
-- "$132B run-rate, $200B backlog" appears in Supabase Context + Microsoft AI Context
-- Supabase Content is about a partnership announcement
-- Microsoft AI Content is about AWS competitive positioning vs Azure
-→ AWS scale metrics are most relevant to Microsoft AI → Keep there, remove from Supabase
-
-This applies to body bullets ONLY. Scenarios may repeat context from body bullets.
-
-Step 5: OUTPUT
-- content: Phase 1 news with light flow edits (preserve all facts and attribution)
-- context: Filtered Phase 2 (may be empty string "" if all removed)
-
-Do NOT merge Content and Context. They remain separate outputs.
-Note: Body bullets have no length limit. Do not compress Content or Context to save space.
-
-═══════════════════════════════════════════════════════════════════════════
 CROSS-SECTION DEDUPLICATION
 ═══════════════════════════════════════════════════════════════════════════
 
-After context filtering, check for duplicate bullets across ALL sections.
+Check for duplicate bullets across ALL sections.
 
 WHAT IS A DUPLICATE?
 Two bullets are duplicates if they report the SAME NEWS from articles.
@@ -446,19 +248,16 @@ CONSOLIDATION (for proposed_content and proposed_context):
 When creating consolidated output for a PRIMARY bullet:
 
 For proposed_content:
-1. Combine unique news facts from primary + absorbed bullet(s) Content
+1. Combine ALL unique news facts from primary + absorbed bullet(s) Content
 2. Preserve all attribution
 3. Do NOT add Context facts here
+4. Do NOT summarize or compress — include everything
 
 For proposed_context:
-1. Review ALL absorbed bullets' Context fields
-2. Select the 1-2 best context points across all absorbed bullets:
-   - Prefer quantified context (specific numbers, percentages)
-   - Prefer context directly relevant to the news theme
-   - If complementary, include both; if overlapping, keep more specific
+1. Combine ALL context points from primary + absorbed bullet(s) Context
+2. Preserve all filing attribution
 3. Do NOT add Content facts here
-
-Do NOT add new information - only use facts from the bullets' "content" and "context" fields.
+4. Do NOT select "best" or filter — include everything
 
 EXEMPT FROM DEDUPLICATION:
 - bottom_line
@@ -476,8 +275,8 @@ Primary (absorbs duplicates):
   "status": "primary",
   "absorbs": ["bullet_id_1", "bullet_id_2"],
   "shared_theme": "brief theme description",
-  "proposed_content": "consolidated news facts from absorbed bullets",
-  "proposed_context": "best 1-2 context points from absorbed bullets"
+  "proposed_content": "combined news facts from all absorbed bullets",
+  "proposed_context": "combined context from all absorbed bullets"
 }
 
 Duplicate (absorbed by another):
@@ -488,85 +287,23 @@ Duplicate (absorbed by another):
 }
 
 ═══════════════════════════════════════════════════════════════════════════
-LENGTH GUIDANCE (Scenarios ONLY: Bottom Line/Upside/Downside)
-═══════════════════════════════════════════════════════════════════════════
-
-Length guidance for Content + Context combined:
-- Bottom Line: Aim for 150-180 words
-- Upside Scenario: Aim for 100-180 words
-- Downside Scenario: Aim for 100-180 words
-
-These are guidelines, not hard limits. Substance > word count.
-
-PROCESS:
-
-Step 1: VALIDATE claims (remove references to filtered bullets per SCENARIO VALIDATION)
-Step 2: SYNTHESIZE cross-bullet connections (per SCENARIO CROSS-BULLET SYNTHESIS)
-Step 3: CHECK combined length (Content + Context)
-Step 4: If under limit → Done
-Step 5: If over limit → Compress in this order:
-
-TIER 1 - Cut narrative overhead:
-- Transition phrases ("This is important because...")
-- Qualifying adverbs ("notably", "significantly", "clearly")
-- Redundant setup ("The company stated that..." → "Company stated...")
-
-TIER 2 - Consolidate attribution:
-- Multiple sources → group at end
-- "per Reuters... per Bloomberg... per Yahoo Finance" → "per Reuters, Bloomberg, and Yahoo Finance"
-
-TIER 3 - Remove lower-priority facts:
-- Tertiary details that don't affect thesis
-- Contrarian data points if consensus is clear
-- Background that's implied by remaining facts
-- Context points beyond the top 1-2 most important
-
-NEVER REMOVE TO SAVE WORDS:
-✅ Quantified metrics (competitor $X, company Y%, region Z GW)
-✅ Cross-bullet synthesis you added (Company $X vs. Competitor $Y)
-✅ Geographic/competitive positioning facts
-✅ Management quotes with attribution
-✅ Factual qualifiers (potential, exploratory, preliminary)
-✅ Reasoning behind conclusions (why someone said something)
-✅ Specific named examples (robo taxis, product liability claims)
-✅ Causal connections (driven by, reflecting, due to)
-
-If content requires more words, output at natural length.
-Institutional substance > arbitrary word count.
-
-If you cannot hit 170 words without removing protected facts:
-→ Output at 171-180 words
-→ Institutional metrics > arbitrary word count
-
-═══════════════════════════════════════════════════════════════════════════
 WHAT NOT TO DO
 ═══════════════════════════════════════════════════════════════════════════
 
-❌ Don't merge Content and Context into one paragraph
-❌ Don't add new information to body bullets (synthesis only allowed in scenarios)
-❌ Don't pull Context facts into Content or Content facts into Context
-❌ Don't restructure (keep paragraphs as paragraphs, bullets as bullets)
-❌ Don't add article publication dates (post-processing appends these from date_range field)
-❌ Don't return metadata fields (impact, sentiment, etc. already in Phase 2)
+BODY BULLETS:
+❌ Don't edit content or context — pass through unchanged
 ❌ Don't change topic_label or bullet_id
-❌ Don't remove facts or attribution from Content
-❌ Don't keep more than 1-2 Context points per bullet
 
-READABILITY OVER WORD COUNT:
+SCENARIOS:
+❌ Don't merge Content and Context into one paragraph
+❌ Don't pull Context facts into Content or Content facts into Context
+❌ Don't add new information (only remove filtered refs, add synthesis from existing bullets)
+❌ Don't add article publication dates (post-processing appends these)
+❌ Don't compress to hit word counts
 
-❌ Don't strip articles (the, a, an) to save words
-❌ Don't strip pronouns (its, the company's) to save words
-❌ Don't remove factual qualifiers (potential, exploratory, preliminary, reportedly)
+ALL OUTPUT:
+❌ Don't return metadata fields (impact, sentiment, etc. already in Phase 2)
 
-Natural prose > telegram style. If Phase 1 wrote readable sentences, preserve them.
-
-Examples of what NOT to do:
-❌ "Company exploring ending partnership" → ✅ "The company is exploring ending its partnership"
-❌ "This logistics overhaul" (when not final) → ✅ "This potential logistics overhaul"
-❌ "Development is part of strategy" → ✅ "This development is part of a broader strategy"
-
-✅ PRESERVE all filing attribution in Context (per Oct 15 call, per Q3 10-Q, per 10-K)
-✅ PRESERVE all source attribution in Content (per Reuters, per Yahoo Finance, per management)
 ✅ Content and Context remain separate outputs
 ✅ Scenarios may use cross-bullet synthesis (Content→Content, Context→Context)
 
@@ -577,15 +314,15 @@ JSON OUTPUT STRUCTURE
 {
   "sections": {
     "bottom_line": {
-      "content": "News synthesis paragraph",
-      "context": "Filing grounding paragraph (may be empty string)"
+      "content": "News synthesis (edited: filtered refs removed, synthesis added)",
+      "context": "Filing synthesis (edited: filtered refs removed only)"
     },
     "major_developments": [
       {
         "bullet_id": "q3_earnings_beat",
         "topic_label": "Q3 earnings beat",
-        "content": "Phase 1 news, edited for flow",
-        "context": "Phase 2 filing data, filtered to 1-2 points (may be empty string)",
+        "content": "Phase 1 news (unchanged)",
+        "context": "Phase 2 filing data (unchanged)",
         "deduplication": {"status": "unique"}
       }
     ],
@@ -595,19 +332,19 @@ JSON OUTPUT STRUCTURE
     "competitive_industry_dynamics": [...],
     "upcoming_catalysts": [...],
     "upside_scenario": {
-      "content": "News synthesis paragraph",
-      "context": "Filing grounding paragraph (may be empty string)"
+      "content": "News synthesis (edited: filtered refs removed, synthesis added)",
+      "context": "Filing synthesis (edited: filtered refs removed only)"
     },
     "downside_scenario": {
-      "content": "News synthesis paragraph",
-      "context": "Filing grounding paragraph (may be empty string)"
+      "content": "News synthesis (edited: filtered refs removed, synthesis added)",
+      "context": "Filing synthesis (edited: filtered refs removed only)"
     },
     "key_variables": [
       {
         "bullet_id": "q4_guidance",
         "topic_label": "Q4 guidance",
-        "content": "Phase 1 news, edited for flow",
-        "context": "Phase 2 filing data, filtered (may be empty string)",
+        "content": "Phase 1 news (unchanged)",
+        "context": "Phase 2 filing data (unchanged)",
         "deduplication": {"status": "unique"}
       }
     ]
@@ -615,41 +352,58 @@ JSON OUTPUT STRUCTURE
 }
 
 All 10 sections must be present (use [] for empty bullet sections, {} for empty scenarios).
-Content and Context are always separate fields. Use empty string "" if Context is fully removed.
+Content and Context are always separate fields.
 
-═══════════════════════════════════════════════════════════════════════════
 ═══════════════════════════════════════════════════════════════════════════
 EXAMPLE TRANSFORMATION
 ═══════════════════════════════════════════════════════════════════════════
 
-INPUT (Phase 1 + Phase 2):
+EXAMPLE 1: Body Bullet (pass through unchanged)
+
+INPUT:
+{
+  "bullet_id": "amedisys_acquisition",
+  "topic_label": "Amedisys acquisition",
+  "content": "Acquired Amedisys for $3.4B, expanding home health footprint per Reuters.",
+  "context": "Acquisition valued $3.4B with 300K patients across 38 states per Q3 10-Q; home health segment represents 42% of revenue per 10-K"
+}
+
+OUTPUT:
 {
   "bullet_id": "amedisys_acquisition",
   "topic_label": "Amedisys acquisition",
   "content": "Acquired Amedisys for $3.4B, expanding home health footprint per Reuters.",
   "context": "Acquisition valued $3.4B with 300K patients across 38 states per Q3 10-Q; home health segment represents 42% of revenue per 10-K",
-  "date_range": "Oct 28"
-}
-
-OUTPUT (Phase 3):
-{
-  "bullet_id": "amedisys_acquisition",
-  "topic_label": "Amedisys acquisition",
-  "content": "Acquired Amedisys for $3.4B, expanding home health footprint per Reuters.",
-  "context": "Acquisition adds 300K patients across 38 states; home health represents 42% of revenue per Q3 10-Q and 10-K.",
   "deduplication": {"status": "unique"}
 }
 
 Notes:
-- Content unchanged (news already clean, attribution preserved)
-- Context filtered: Removed "$3.4B" (already in Content), kept patient count and revenue share
-- Context retains filing attribution (per Q3 10-Q and 10-K)
-- Content and Context remain SEPARATE fields
-- Article date "Oct 28" will be appended by post-processing from date_range field
+- Content unchanged
+- Context unchanged
+- Only addition is deduplication tagging
 
-Final display to reader:
-Content (regular text): "Acquired Amedisys for $3.4B, expanding home health footprint per Reuters. (Oct 28)"
-Context (italics): "Acquisition adds 300K patients across 38 states; home health represents 42% of revenue per Q3 10-Q and 10-K."
+───────────────────────────────────────────────────────────────────────────
+
+EXAMPLE 2: Scenario with filtered bullet removal
+
+INPUT (Downside Scenario):
+{
+  "content": "The primary risk is Bitcoin price volatility, with prices falling 36% from October highs. Additionally, Malaysian authorities cracking down on illegal mining could shift hashrate dynamics. Macroeconomic headwinds from Bank of Japan rate hikes add pressure.",
+  "context": "Cost to mine one bitcoin was $79,002 in Q3 per 10-Q. All facilities located in United States per 10-K, insulating from international crackdowns."
+}
+
+FILTERED BULLET: "malaysia_mining_crackdown" (indirect + low impact)
+
+OUTPUT:
+{
+  "content": "The primary risk is Bitcoin price volatility, with prices falling 36% from October highs. Macroeconomic headwinds from Bank of Japan rate hikes add pressure.",
+  "context": "Cost to mine one bitcoin was $79,002 in Q3 per 10-Q."
+}
+
+Notes:
+- Content: Removed Malaysia sentence (references filtered bullet)
+- Context: Removed "All facilities located in United States" (traces to filtered Malaysia bullet)
+- Remaining content/context unchanged
 
 ═══════════════════════════════════════════════════════════════════════════
 VALIDATION CHECKLIST
@@ -663,24 +417,19 @@ STRUCTURE:
 □ Valid JSON (parseable by json.loads())
 □ Only bullet_id, topic_label, content, context, deduplication in output
 
-CONTENT:
-□ All Phase 1 facts preserved (no information loss)
-□ All source attribution preserved (per Reuters, per Yahoo Finance, per management)
-□ NO article dates added (those come from date_range field in post-processing)
-
-CONTEXT:
-□ Filtered to 1-2 most important points per bullet
-□ Duplicate facts removed (if in Content, remove from Context)
-□ Cross-report deduplication applied (same filing stat appears only once)
-□ All filing attribution preserved (per 10-K, per Q3 10-Q, per Oct 15 call)
-□ May be empty string "" if all context removed
+BODY BULLETS:
+□ Content unchanged from input
+□ Context unchanged from input
+□ Deduplication field added with status
 
 SCENARIOS (Bottom Line/Upside/Downside):
-□ SCENARIO VALIDATION completed (removed references to filtered bullets)
-□ Cross-bullet synthesis applied (Content→Content, Context→Context)
-□ Length limits enforced (Bottom Line ≤170, Scenarios 80-160 for Content + Context combined)
+□ Content: References to filtered/duplicate bullets removed
+□ Content: Cross-bullet synthesis applied where relevant
+□ Context: References to filtered/duplicate bullets removed
+□ Context: No other edits made
 
 DEDUPLICATION:
 □ All bullet sections have deduplication field with status
-□ PRIMARY bullets have proposed_content and proposed_context
-□ DUPLICATE bullets have absorbed_by pointing to the primary bullet_id
+□ PRIMARY bullets have absorbs, shared_theme, proposed_content, proposed_context
+□ DUPLICATE bullets have absorbed_by and shared_theme
+□ UNIQUE bullets have status only

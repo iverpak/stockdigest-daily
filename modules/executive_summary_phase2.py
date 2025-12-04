@@ -1277,18 +1277,19 @@ def strip_escape_hatch_context(phase2_result: Dict) -> Dict:
     Returns:
         Modified phase2_result with escape hatch text replaced
     """
-    ESCAPE_HATCH = "No relevant filing context found for this development"
+    # Use startswith() to handle variations (with/without period, etc.)
+    ESCAPE_HATCH_PREFIX = "No relevant filing context found"
 
     # Strip escape hatch from bullet enrichments
     enrichments = phase2_result.get("enrichments", {})
     for bullet_id, enrichment in enrichments.items():
-        if enrichment.get("context") == ESCAPE_HATCH:
+        if enrichment.get("context", "").startswith(ESCAPE_HATCH_PREFIX):
             enrichment["context"] = ""
 
     # Strip escape hatch from scenario contexts
     scenario_contexts = phase2_result.get("scenario_contexts", {})
     for key in ["bottom_line_context", "upside_scenario_context", "downside_scenario_context"]:
-        if scenario_contexts.get(key) == ESCAPE_HATCH:
+        if scenario_contexts.get(key, "").startswith(ESCAPE_HATCH_PREFIX):
             scenario_contexts[key] = ""
 
     return phase2_result

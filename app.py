@@ -15663,6 +15663,16 @@ def generate_email_html_core(
     else:
         LOG.info(f"[{ticker}] Weekly report: Showing all {len(sections)} sections")
 
+    # Extract preheader text from bottom_line (first ~120 chars for email preview)
+    preheader_text = ""
+    if sections.get("bottom_line") and len(sections["bottom_line"]) > 0:
+        raw_text = sections["bottom_line"][0]
+        # Truncate at ~120 chars at word boundary
+        if len(raw_text) > 120:
+            preheader_text = raw_text[:120].rsplit(' ', 1)[0] + "..."
+        else:
+            preheader_text = raw_text
+
     # Fetch flagged articles (already sorted by SQL) - SAME AS EMAIL #3
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     articles_by_category = {"company": [], "industry": [], "competitor": [], "value_chain": []}
@@ -15837,6 +15847,9 @@ def generate_email_html_core(
     user_report_template = template_env.get_template('email_user_report.html')
 
     html = user_report_template.render(
+        # Email preheader (for Gmail/Outlook preview text)
+        preheader_text=preheader_text,
+
         # Core identifiers
         ticker=ticker,
         company_name=company_name,

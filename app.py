@@ -13283,7 +13283,7 @@ def send_beta_signup_notification(name: str, email: str, tickers: list, returnin
                     {ticker_list_html}
                 </ul>
                 <p style="margin: 8px 0; color: #6b7280; font-size: 14px;">
-                    <strong>Signed up:</strong> {datetime.now().strftime('%B %d, %Y at %I:%M %p EST')}
+                    <strong>Signed up:</strong> {datetime.now(pytz.timezone('America/New_York')).strftime('%B %d, %Y at %I:%M %p %Z')}
                 </p>
             </div>
 

@@ -13229,7 +13229,7 @@ def send_email(subject: str, html_body: str, to: str | None = None, bcc: str | N
         return False
 
 
-def send_beta_signup_notification(name: str, email: str, ticker1: str, ticker2: str, ticker3: str) -> bool:
+def send_beta_signup_notification(name: str, email: str, tickers: list) -> bool:
     """
     Send admin notification email for new beta signup.
     Returns True if email sent successfully, False otherwise.
@@ -13237,12 +13237,14 @@ def send_beta_signup_notification(name: str, email: str, ticker1: str, ticker2: 
     try:
         # Get company names for better readability
         companies = []
-        for ticker in [ticker1, ticker2, ticker3]:
+        for ticker in tickers:
             config = get_ticker_config(ticker)
             if config:
                 companies.append(f"{ticker} ({config.get('company_name', 'Unknown')})")
             else:
                 companies.append(ticker)
+
+        ticker_list_html = ''.join(f'<li>{c}</li>' for c in companies)
 
         html_body = f"""
         <div style="font-family: Arial, sans-serif; max-width: 600px;">
@@ -13251,11 +13253,9 @@ def send_beta_signup_notification(name: str, email: str, ticker1: str, ticker2: 
             <div style="background: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
                 <p style="margin: 8px 0;"><strong>Name:</strong> {name}</p>
                 <p style="margin: 8px 0;"><strong>Email:</strong> {email}</p>
-                <p style="margin: 8px 0;"><strong>Tracking:</strong></p>
+                <p style="margin: 8px 0;"><strong>Tracking ({len(tickers)} ticker{'s' if len(tickers) > 1 else ''}):</strong></p>
                 <ul style="margin: 8px 0; padding-left: 20px;">
-                    <li>{companies[0]}</li>
-                    <li>{companies[1]}</li>
-                    <li>{companies[2]}</li>
+                    {ticker_list_html}
                 </ul>
                 <p style="margin: 8px 0; color: #6b7280; font-size: 14px;">
                     <strong>Signed up:</strong> {datetime.now().strftime('%B %d, %Y at %I:%M %p EST')}
@@ -13268,7 +13268,7 @@ def send_beta_signup_notification(name: str, email: str, ticker1: str, ticker2: 
         </div>
         """
 
-        subject = f"🎉 New Beta User: {name} tracking {ticker1}, {ticker2}, {ticker3}"
+        subject = f"🎉 New Beta User: {name} tracking {', '.join(tickers)}"
 
         return send_email(subject=subject, html_body=html_body, to=ADMIN_EMAIL)
 
@@ -21013,8 +21013,8 @@ class BetaSignupRequest(BaseModel):
     name: str
     email: str
     ticker1: str
-    ticker2: str
-    ticker3: str
+    ticker2: str = ""  # Optional
+    ticker3: str = ""  # Optional
 
 
 def generate_unsubscribe_token_for_user(user_id: int, email: str) -> str:
@@ -21149,11 +21149,24 @@ async def beta_signup_endpoint(signup: BetaSignupRequest):
                 content={"status": "error", "message": "Invalid email format"}
             )
 
-        # Normalize and validate tickers
+        # Normalize and validate tickers (ticker1 required, ticker2/3 optional)
         tickers = []
         ticker_data = []
-        for ticker_input in [signup.ticker1, signup.ticker2, signup.ticker3]:
-            normalized = normalize_ticker_format(ticker_input.strip())
+        ticker_inputs = [signup.ticker1, signup.ticker2, signup.ticker3]
+
+        for i, ticker_input in enumerate(ticker_inputs):
+            ticker_input = ticker_input.strip() if ticker_input else ""
+
+            # Skip empty optional tickers
+            if not ticker_input:
+                if i == 0:  # ticker1 is required
+                    return JSONResponse(
+                        status_code=400,
+                        content={"status": "error", "message": "At least one ticker is required"}
+                    )
+                continue
+
+            normalized = normalize_ticker_format(ticker_input)
             config = get_ticker_config(normalized)
 
             if not config:
@@ -21208,7 +21221,7 @@ async def beta_signup_endpoint(signup: BetaSignupRequest):
             # Don't block signup if token generation fails
 
         # Send admin notification email
-        send_beta_signup_notification(name, email, tickers[0], tickers[1], tickers[2])
+        send_beta_signup_notification(name, email, tickers)
 
         LOG.info(f"✅ New beta signup {user_id}: {email} tracking {', '.join(tickers)} (pending approval)")
 

@@ -1345,21 +1345,22 @@
                     <div class="form-group">
                         <label>Email Address</label>
                         <input type="email" id="email" placeholder="jane@example.com" required>
+                        <div id="email-feedback" class="ticker-feedback"></div>
                     </div>
 
                     <div class="form-group">
-                        <label>Your 3 Tickers</label>
+                        <label>Your Tickers</label>
                         <div class="ticker-grid">
                             <div class="ticker-wrapper">
                                 <input type="text" id="ticker1" class="ticker-input" placeholder="AAPL" maxlength="10" required>
                                 <div id="ticker1-feedback" class="ticker-feedback"></div>
                             </div>
                             <div class="ticker-wrapper">
-                                <input type="text" id="ticker2" class="ticker-input" placeholder="NVDA" maxlength="10" required>
+                                <input type="text" id="ticker2" class="ticker-input" placeholder="NVDA" maxlength="10">
                                 <div id="ticker2-feedback" class="ticker-feedback"></div>
                             </div>
                             <div class="ticker-wrapper">
-                                <input type="text" id="ticker3" class="ticker-input" placeholder="TSLA" maxlength="10" required>
+                                <input type="text" id="ticker3" class="ticker-input" placeholder="TSLA" maxlength="10">
                                 <div id="ticker3-feedback" class="ticker-feedback"></div>
                             </div>
                         </div>
@@ -1465,15 +1466,33 @@
             const submitBtn = document.getElementById('submit-btn');
             const originalText = submitBtn.textContent;
             const termsCheckbox = document.getElementById('terms-checkbox');
+            const emailFeedback = document.getElementById('email-feedback');
+
+            // Clear previous email error
+            emailFeedback.textContent = '';
+            emailFeedback.className = 'ticker-feedback';
 
             if (!termsCheckbox.checked) {
                 alert('Please agree to the Terms of Service and Privacy Policy.');
                 return;
             }
 
-            const allValid = ['ticker1', 'ticker2', 'ticker3'].every(id => tickerValidation[id] !== null);
-            if (!allValid) {
-                alert('Please ensure all tickers are validated.');
+            // Check that at least ticker1 is valid (required), ticker2/3 are optional
+            if (!tickerValidation.ticker1) {
+                alert('Please enter at least one valid ticker.');
+                return;
+            }
+
+            // Validate any non-empty optional tickers
+            const ticker2Input = document.getElementById('ticker2').value.trim();
+            const ticker3Input = document.getElementById('ticker3').value.trim();
+
+            if (ticker2Input && !tickerValidation.ticker2) {
+                alert('Please ensure ticker 2 is valid or leave it empty.');
+                return;
+            }
+            if (ticker3Input && !tickerValidation.ticker3) {
+                alert('Please ensure ticker 3 is valid or leave it empty.');
                 return;
             }
 
@@ -1484,8 +1503,8 @@
                 name: document.getElementById('name').value.trim(),
                 email: document.getElementById('email').value.trim().toLowerCase(),
                 ticker1: tickerValidation.ticker1,
-                ticker2: tickerValidation.ticker2,
-                ticker3: tickerValidation.ticker3
+                ticker2: tickerValidation.ticker2 || '',
+                ticker3: tickerValidation.ticker3 || ''
             };
 
             try {
@@ -1512,7 +1531,13 @@
                         </div>
                     `;
                 } else {
-                    alert(data.message || 'Something went wrong. Please try again.');
+                    // Show email-specific errors inline
+                    if (data.message && data.message.toLowerCase().includes('email')) {
+                        emailFeedback.textContent = data.message;
+                        emailFeedback.className = 'ticker-feedback error';
+                    } else {
+                        alert(data.message || 'Something went wrong. Please try again.');
+                    }
                     submitBtn.disabled = false;
                     submitBtn.textContent = originalText;
                 }

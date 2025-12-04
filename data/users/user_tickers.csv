@@ -1,17 +1,4 @@
-name,email,ticker1,ticker2,ticker3
-IV Top2,stockdigest.research@gmail.com,TSM,BRK-B,LLY
-IV Top1,stockdigest.research@gmail.com,GOOGL,MSFT,AVGO
-IV Telecommunications,stockdigest.research@gmail.com,VZ,LBRDK,SHEN
-IV Communication Services,stockdigest.research@gmail.com,META,NXST,YELP
-IV Utilities,stockdigest.research@gmail.com,NEE,AES,NWE
-IV Real Estate,stockdigest.research@gmail.com,PLD,INVH,ELME
-IV Materials,stockdigest.research@gmail.com,LIN,CF,NGVT
-IV Industrials,stockdigest.research@gmail.com,UPS,URI,ATGE
-IV Energy,stockdigest.research@gmail.com,XOM,DVN,SM
-IV Consumer Staples,stockdigest.research@gmail.com,WMT,CAG,JJSF
-IV Consumer Discretionary,stockdigest.research@gmail.com,AMZN,DECK,BOOT
-IV Healthcare,stockdigest.research@gmail.com,UNH,HOLX,TMDX
-IV Financials,stockdigest.research@gmail.com,JPM,HBAN,BANF
-Ilia Verpakhovski3,stockdigest.research@gmail.com,NVDA,TLN,TSLA
-IV Technology,stockdigest.research@gmail.com,AAPL,PLTR,SMCI
-Ilia Verpakhovski2,stockdigest.research@gmail.com,CORZ,F,JPM
+name,email,tickers,user_type
+Ilia Verpakhovski,ilia.verpakhovski@gmail.com,"SMCI,TLN,TSLA",beta
+Ilia Verpakhovski TEST1,timelesstalesvisualized@gmail.com,"AVGO,CORZ,GEO",beta
+Ilia Verpakhovski ADMIN,stockdigest.research@gmail.com,"AAPL,AES,AMZN,ATGE,AVGO,BANF,BOOT,BRK-B,CAG,CF,CORZ,DECK,DVN,ELME,F,GOOGL,HBAN,HOLX,INVH,JJSF,JPM,LBRDK,LIN,LLY,META,MSFT,NEE,NGVT,NVDA,NWE,NXST,PLD,PLTR,SHEN,SM,SMCI,TLN,TMDX,TSLA,TSM,UNH,UPS,URI,VZ,WMT,XOM,YELP",admin

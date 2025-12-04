@@ -13229,9 +13229,17 @@ def send_email(subject: str, html_body: str, to: str | None = None, bcc: str | N
         return False
 
 
-def send_beta_signup_notification(name: str, email: str, tickers: list) -> bool:
+def send_beta_signup_notification(name: str, email: str, tickers: list, returning_user: bool = False, previous_cancelled_at: str = None) -> bool:
     """
-    Send admin notification email for new beta signup.
+    Send admin notification email for new or returning beta signup.
+
+    Args:
+        name: User's name
+        email: User's email
+        tickers: List of ticker symbols
+        returning_user: True if this is a previously cancelled user re-subscribing
+        previous_cancelled_at: Formatted date string of when they previously unsubscribed
+
     Returns True if email sent successfully, False otherwise.
     """
     try:
@@ -13246,13 +13254,30 @@ def send_beta_signup_notification(name: str, email: str, tickers: list) -> bool:
 
         ticker_list_html = ''.join(f'<li>{c}</li>' for c in companies)
 
+        # Different header and subject for returning users
+        if returning_user:
+            emoji = "🔄"
+            header = "Returning User Signed Up!"
+            header_color = "#7c3aed"  # Purple for returning
+            previous_unsub_html = f"""
+                <p style="margin: 8px 0; color: #7c3aed; font-size: 14px;">
+                    <strong>Previously unsubscribed:</strong> {previous_cancelled_at or 'Unknown date'}
+                </p>
+            """ if previous_cancelled_at else ""
+        else:
+            emoji = "🎉"
+            header = "New Beta User Signed Up!"
+            header_color = "#1e40af"  # Blue for new
+            previous_unsub_html = ""
+
         html_body = f"""
         <div style="font-family: Arial, sans-serif; max-width: 600px;">
-            <h2 style="color: #1e40af;">🎉 New Beta User Signed Up!</h2>
+            <h2 style="color: {header_color};">{emoji} {header}</h2>
 
             <div style="background: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
                 <p style="margin: 8px 0;"><strong>Name:</strong> {name}</p>
                 <p style="margin: 8px 0;"><strong>Email:</strong> {email}</p>
+                {previous_unsub_html}
                 <p style="margin: 8px 0;"><strong>Tracking ({len(tickers)} ticker{'s' if len(tickers) > 1 else ''}):</strong></p>
                 <ul style="margin: 8px 0; padding-left: 20px;">
                     {ticker_list_html}
@@ -13268,7 +13293,7 @@ def send_beta_signup_notification(name: str, email: str, tickers: list) -> bool:
         </div>
         """
 
-        subject = f"🎉 New Beta User: {name} tracking {', '.join(tickers)}"
+        subject = f"{emoji} {'Returning' if returning_user else 'New Beta'} User: {name} tracking {', '.join(tickers)}"
 
         return send_email(subject=subject, html_body=html_body, to=ADMIN_EMAIL)
 
@@ -21270,16 +21295,66 @@ async def beta_signup_endpoint(signup: BetaSignupRequest):
                 "company": config.get("company_name", "Unknown")
             })
 
-        # Check if email already exists (strict uniqueness)
+        # Check if email already exists
+        existing_user = None
         with db() as conn, conn.cursor() as cur:
-            cur.execute("SELECT id FROM users WHERE email = %s", (email,))
-            if cur.fetchone():
+            cur.execute("SELECT id, status, cancelled_at FROM users WHERE email = %s", (email,))
+            existing_user = cur.fetchone()
+
+        if existing_user:
+            if existing_user['status'] == 'blocked':
+                # Admin blocked this email - cannot re-subscribe
+                return JSONResponse(
+                    status_code=400,
+                    content={"status": "error", "message": "This email cannot be used for signup."}
+                )
+            elif existing_user['status'] == 'cancelled':
+                # User previously unsubscribed - allow re-subscribe
+                # Update existing record instead of creating new one
+                user_id = existing_user['id']
+                previous_cancelled_at = existing_user['cancelled_at'].strftime('%B %d, %Y') if existing_user['cancelled_at'] else None
+
+                with db() as conn, conn.cursor() as cur:
+                    # Update user: reset to pending, clear cancelled_at, update terms
+                    cur.execute("""
+                        UPDATE users
+                        SET name = %s, status = 'pending', cancelled_at = NULL,
+                            terms_version = %s, terms_accepted_at = NOW(),
+                            privacy_version = %s, privacy_accepted_at = NOW(),
+                            updated_at = NOW()
+                        WHERE id = %s
+                    """, (name, TERMS_VERSION, PRIVACY_VERSION, user_id))
+
+                    # Clear old tickers
+                    cur.execute("DELETE FROM user_tickers WHERE user_id = %s", (user_id,))
+
+                    # Insert new tickers
+                    for ticker in tickers:
+                        cur.execute("""
+                            INSERT INTO user_tickers (user_id, ticker)
+                            VALUES (%s, %s)
+                        """, (user_id, ticker))
+
+                    conn.commit()
+
+                # Send admin notification (returning user)
+                send_beta_signup_notification(name, email, tickers, returning_user=True, previous_cancelled_at=previous_cancelled_at)
+
+                LOG.info(f"🔄 Returning user {user_id}: {email} re-subscribed with {', '.join(tickers)} (pending approval)")
+
+                return {
+                    "status": "success",
+                    "message": "Welcome back! Your account is pending approval. You'll receive an email when activated.",
+                    "tickers": ticker_data
+                }
+            else:
+                # Active, pending, or paused - already has an account
                 return JSONResponse(
                     status_code=400,
                     content={"status": "error", "message": "An account with this email already exists."}
                 )
 
-        # Create user and tickers in transaction
+        # New user - create account
         with db() as conn, conn.cursor() as cur:
             # Insert user with 'pending' status (requires admin approval)
             cur.execute("""
@@ -21309,7 +21384,7 @@ async def beta_signup_endpoint(signup: BetaSignupRequest):
             LOG.error(f"Failed to create unsubscribe token for {email}: {e}")
             # Don't block signup if token generation fails
 
-        # Send admin notification email
+        # Send admin notification email (new user)
         send_beta_signup_notification(name, email, tickers)
 
         LOG.info(f"✅ New beta signup {user_id}: {email} tracking {', '.join(tickers)} (pending approval)")
@@ -25664,9 +25739,9 @@ async def approve_user(request: Request):
         LOG.error(f"Failed to approve user: {e}")
         return {"status": "error", "message": str(e)}
 
-@APP.post("/api/admin/reject-user")
-async def reject_user(request: Request):
-    """Reject a pending user by user_id"""
+@APP.post("/api/admin/block-user")
+async def block_user(request: Request):
+    """Block a user by user_id - prevents future signups with this email"""
     body = await request.json()
     token = body.get('token')
     user_id = body.get('user_id')
@@ -25681,19 +25756,19 @@ async def reject_user(request: Request):
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
                 UPDATE users
-                SET status = 'cancelled', updated_at = NOW()
+                SET status = 'blocked', updated_at = NOW()
                 WHERE id = %s
                 RETURNING email
             """, (user_id,))
             result = cur.fetchone()
             if result:
                 conn.commit()
-                LOG.info(f"❌ Rejected user {user_id}: {result['email']}")
-                return {"status": "success", "message": f"Rejected {result['email']}"}
+                LOG.info(f"🚫 Blocked user {user_id}: {result['email']}")
+                return {"status": "success", "message": f"Blocked {result['email']}"}
             else:
                 return {"status": "error", "message": f"User {user_id} not found"}
     except Exception as e:
-        LOG.error(f"Failed to reject user: {e}")
+        LOG.error(f"Failed to block user: {e}")
         return {"status": "error", "message": str(e)}
 
 @APP.post("/api/admin/pause-user")

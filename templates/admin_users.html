@@ -608,7 +608,7 @@
                             <div class="actions">
                         ${user.status === 'pending' ? `
                             <button class="btn btn-success" onclick="approveUser(${user.id})">Approve</button>
-                            <button class="btn btn-danger" onclick="rejectUser(${user.id})">Reject</button>
+                            <button class="btn btn-danger" onclick="blockUser(${user.id})">Block</button>
                             <button class="btn btn-danger" onclick="deleteUser(${user.id}, '${user.email}')" style="opacity: 0.7;">Delete</button>
                         ` : ''}
                         ${user.status === 'active' ? `
@@ -623,6 +623,11 @@
                         ` : ''}
                         ${user.status === 'cancelled' ? `
                             <button class="btn btn-secondary" onclick="reactivateUser(${user.id})">Reactivate</button>
+                            <button class="btn btn-danger" onclick="blockUser(${user.id})">Block</button>
+                            <button class="btn btn-danger" onclick="deleteUser(${user.id}, '${user.email}')" style="opacity: 0.7;">Delete</button>
+                        ` : ''}
+                        ${user.status === 'blocked' ? `
+                            <button class="btn btn-secondary" onclick="reactivateUser(${user.id})">Unblock</button>
                             <button class="btn btn-danger" onclick="deleteUser(${user.id}, '${user.email}')" style="opacity: 0.7;">Delete</button>
                         ` : ''}
                             </div>
@@ -659,7 +664,7 @@
                 // Render user lists
                 const pending = data.users.filter(u => u.status === 'pending');
                 const active = data.users.filter(u => u.status === 'active');
-                const inactive = data.users.filter(u => u.status === 'paused' || u.status === 'cancelled');
+                const inactive = data.users.filter(u => u.status === 'paused' || u.status === 'cancelled' || u.status === 'blocked');
 
                 document.getElementById('pending-users').innerHTML = pending.length > 0 ?
                     pending.map(createUserCard).join('') :
@@ -684,9 +689,9 @@
             await userAction('/api/admin/approve-user', {token, user_id});
         }
 
-        async function rejectUser(user_id) {
-            if (!confirm('Reject this user?')) return;
-            await userAction('/api/admin/reject-user', {token, user_id});
+        async function blockUser(user_id) {
+            if (!confirm('Block this user? They will not be able to sign up again.')) return;
+            await userAction('/api/admin/block-user', {token, user_id});
         }
 
         async function pauseUser(user_id) {

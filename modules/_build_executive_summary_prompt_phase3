@@ -254,10 +254,21 @@ For proposed_content:
 4. Do NOT summarize or compress — include everything
 
 For proposed_context:
-1. Combine ALL context points from primary + absorbed bullet(s) Context
-2. Preserve all filing attribution
-3. Do NOT add Content facts here
-4. Do NOT select "best" or filter — include everything
+1. Combine context points from primary + absorbed bullet(s) Context
+2. DEDUPLICATE overlapping filing references:
+   - If same 10-K/10-Q section cited → keep ONE citation with all unique metrics
+   - If same statistic appears in both contexts → keep ONE instance
+   - If same disclosure quoted → keep ONE quote
+3. Preserve all filing attribution (per 10-K, per 10-Q, etc.)
+4. Do NOT add Content facts here
+
+Example of BAD proposed_context (repetition):
+"The Q3 10-Q shows gas prices rose 51.3% YoY. The 10-K discloses correlation between gas and power. The Q3 10-Q shows this risk materializing with gas prices rising 51.3% YoY."
+↑ WRONG: "51.3% YoY" appears twice, Q3 10-Q referenced redundantly
+
+Example of GOOD proposed_context (deduplicated):
+"The Q3 10-Q shows regional gas prices rose 51.3% YoY, with fuel purchases up 16.7% to $259M. The FY2024 10-K discloses a strong correlation between gas and power prices."
+↑ CORRECT: Each unique fact once, both bullets' unique insights included
 
 EXEMPT FROM DEDUPLICATION:
 - bottom_line

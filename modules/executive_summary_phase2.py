@@ -1578,13 +1578,14 @@ def apply_deduplication(phase3_merged_json: Dict) -> Dict:
             if status == 'primary':
                 primaries_consolidated += 1
 
-                # Use proposed_content + proposed_context if available (consolidated from absorbed bullets)
+                # Use proposed_content for merged facts, but KEEP original context
+                # (proposed_context often has duplicated filing references when merging bullets)
                 proposed_content = dedup.get('proposed_content', '')
-                proposed_context = dedup.get('proposed_context', '')
                 if proposed_content:
                     bullet['content_integrated'] = proposed_content
-                    bullet['context_integrated'] = proposed_context
-                    LOG.debug(f"Using proposed_content/context for primary bullet: {bullet.get('bullet_id')}")
+                    # Use original Phase 1+2 context (clean, non-duplicated)
+                    bullet['context_integrated'] = bullet.get('context', '')
+                    LOG.debug(f"Using proposed_content with original context for primary bullet: {bullet.get('bullet_id')}")
 
                 # Merge source_articles from absorbed bullets
                 absorbed_ids = dedup.get('absorbs', [])

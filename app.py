@@ -17900,7 +17900,8 @@ async def process_regenerate_email_phase(job: dict):
                                         article_count = %s,
                                         status = 'ready',
                                         updated_at = NOW(),
-                                        error_message = NULL
+                                        error_message = NULL,
+                                        sent_at = NULL
                                     WHERE ticker = %s
                                 """, (
                                     email3_data['html'],

@@ -1,4 +1,4 @@
 name,email,tickers,user_type,ticker_limit,status,created_at,terms_accepted_at,privacy_accepted_at,cancelled_at
 Ilia Verpakhovski,ilia.verpakhovski@gmail.com,"SMCI,TLN,TSLA",beta,3,active,2025-12-04 04:16:01.405757+00:00,2025-12-04 04:16:01.405757+00:00,2025-12-04 04:16:01.405757+00:00,
 Ilia Verpakhovski TEST1,timelesstalesvisualized@gmail.com,"AVGO,CORZ,GEO",beta,3,active,2025-12-04 04:15:13.667475+00:00,2025-12-04 04:15:13.667475+00:00,2025-12-04 04:15:13.667475+00:00,
-Ilia Verpakhovski ADMIN,stockdigest.research@gmail.com,"AAPL,AMZN,AVGO,CORZ,F,GOOGL,JPM,META,MSFT,NVDA,PLD,SMCI,TLN,TSLA,UNH,UPS,URI,VZ,WMT,XOM",admin,,active,2025-12-03 23:41:29.459829+00:00,2025-12-03 23:41:29.459829+00:00,2025-12-03 23:41:29.459829+00:00,
+Ilia Verpakhovski ADMIN,stockdigest.research@gmail.com,"AAPL,AMZN,CORZ,JPM,META,MSFT,NVDA,PLD,SMCI,TLN,TSLA,UNH,URI,VZ,XOM",admin,,active,2025-12-03 23:41:29.459829+00:00,2025-12-03 23:41:29.459829+00:00,2025-12-03 23:41:29.459829+00:00,

@@ -567,24 +567,33 @@ def log_cost_summary(ticker: str, company_name: str = ""):
 
     # Define friendly names and emojis
     function_display = {
-        "triage_company": ("🎯 Triage (Company)", 1),
-        "triage_fundamental_drivers": ("🏭 Triage (Industry)", 2),
-        "triage_competitor": ("🏢 Triage (Competitor)", 3),
-        "triage_upstream": ("⬆️ Triage (Upstream)", 4),
-        "triage_downstream": ("⬇️ Triage (Downstream)", 5),
-        "article_summary_company": ("📝 Company Summaries", 6),
-        "article_summary_competitor": ("🏆 Competitor Summaries", 7),
-        "article_summary_upstream": ("⬆️ Upstream Summaries", 8),
-        "article_summary_downstream": ("⬇️ Downstream Summaries", 9),
-        "article_summary_industry": ("🌐 Industry Summaries", 10),
-        "fundamental_driver_scoring": ("⚖️ Industry Scoring", 11),
-        "executive_summary": ("📊 Executive Summary (OLD)", 12),
-        "executive_summary_phase1": ("📊 Executive Summary - Phase 1", 13),
-        "executive_summary_phase1_5": ("🔍 Executive Summary - Phase 1.5", 14),
-        "executive_summary_phase2": ("📄 Executive Summary - Phase 2", 15),
-        "executive_summary_phase3": ("📝 Executive Summary - Phase 3", 16),
-        "research_summary": ("📋 Research Summary (Transcript/PR)", 17),
-        "ticker_metadata_generation": ("🏷️ Ticker Metadata Generation", 18)
+        # Triage - 10 entries (5 categories × 2 providers)
+        "triage_company_claude": ("🎯 Triage Company (Claude)", 1),
+        "triage_company_gemini": ("🎯 Triage Company (Gemini)", 2),
+        "triage_industry_claude": ("🏭 Triage Industry (Claude)", 3),
+        "triage_industry_gemini": ("🏭 Triage Industry (Gemini)", 4),
+        "triage_competitor_claude": ("🏢 Triage Competitor (Claude)", 5),
+        "triage_competitor_gemini": ("🏢 Triage Competitor (Gemini)", 6),
+        "triage_upstream_claude": ("⬆️ Triage Upstream (Claude)", 7),
+        "triage_upstream_gemini": ("⬆️ Triage Upstream (Gemini)", 8),
+        "triage_downstream_claude": ("⬇️ Triage Downstream (Claude)", 9),
+        "triage_downstream_gemini": ("⬇️ Triage Downstream (Gemini)", 10),
+        # Article summaries
+        "article_summary_company": ("📝 Company Summaries", 11),
+        "article_summary_competitor": ("🏆 Competitor Summaries", 12),
+        "article_summary_upstream": ("⬆️ Upstream Summaries", 13),
+        "article_summary_downstream": ("⬇️ Downstream Summaries", 14),
+        "article_summary_industry": ("🌐 Industry Summaries", 15),
+        "fundamental_driver_scoring": ("⚖️ Industry Scoring", 16),
+        # Executive summary phases
+        "executive_summary": ("📊 Executive Summary (OLD)", 17),
+        "executive_summary_phase1": ("📊 Executive Summary - Phase 1", 18),
+        "executive_summary_phase1_5": ("🔍 Executive Summary - Phase 1.5", 19),
+        "executive_summary_phase2": ("📄 Executive Summary - Phase 2", 20),
+        "executive_summary_phase3": ("📝 Executive Summary - Phase 3", 21),
+        # Other
+        "research_summary": ("📋 Research Summary (Transcript/PR)", 22),
+        "ticker_metadata_generation": ("🏷️ Ticker Metadata Generation", 23)
     }
 
     # Sort by display order
@@ -9715,7 +9724,7 @@ async def perform_ai_triage_with_fallback_async(
             # Unpack result: (results, provider_name, usage_metadata)
             result, provider_name, usage_metadata = result_tuple
 
-            # Track API usage
+            # Track API usage counts
             if provider_name == "dual":
                 dual_success_count += 1
             elif provider_name == "claude_only":
@@ -9724,6 +9733,29 @@ async def perform_ai_triage_with_fallback_async(
                 gemini_fallback_count += 1
             else:
                 both_failed_count += 1
+
+            # Track triage costs for both providers
+            if usage_metadata:
+                # Determine triage type for function name
+                triage_type = op['type']
+                if triage_type == 'value_chain':
+                    # Use upstream/downstream based on value_chain_type
+                    triage_type = op.get('value_chain_type', 'upstream')
+
+                # Track Claude costs
+                if 'claude' in usage_metadata and usage_metadata['claude']:
+                    calculate_claude_api_cost(
+                        usage_metadata['claude'],
+                        f"triage_{triage_type}_claude"
+                    )
+
+                # Track Gemini costs
+                if 'gemini' in usage_metadata and usage_metadata['gemini']:
+                    calculate_gemini_api_cost(
+                        usage_metadata['gemini'],
+                        f"triage_{triage_type}_gemini",
+                        model="flash"
+                    )
 
             # Score fields are already set by the merge function in the module
             # (claude_score and gemini_score are in the result items)

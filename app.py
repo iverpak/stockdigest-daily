@@ -341,16 +341,16 @@ CLAUDE_PRICING = {
     "cache_read": 0.30       # $0.30 per 1M cache read tokens (90% savings)
 }
 
-# Gemini Flash API Pricing (per 1M tokens as of November 2024)
+# Gemini Flash API Pricing (per 1M tokens as of December 2025)
 GEMINI_FLASH_PRICING = {
-    "input": 0.075,          # $0.075 per 1M input tokens (40x cheaper than Claude)
-    "output": 0.30,          # $0.30 per 1M output tokens (50x cheaper than Claude)
+    "input": 0.30,           # $0.30 per 1M input tokens
+    "output": 2.50,          # $2.50 per 1M output tokens
 }
 
-# Gemini Pro API Pricing (per 1M tokens as of November 2024)
+# Gemini Pro API Pricing (per 1M tokens as of December 2025, under 200k context)
 GEMINI_PRO_PRICING = {
-    "input": 1.25,           # $1.25 per 1M input tokens (2.4x cheaper than Claude)
-    "output": 10.00,         # $10.00 per 1M output tokens (1.5x cheaper than Claude)
+    "input": 1.25,           # $1.25 per 1M input tokens
+    "output": 10.00,         # $10.00 per 1M output tokens
 }
 # NOTE: Gemini does not support prompt caching (Claude-only feature)
 

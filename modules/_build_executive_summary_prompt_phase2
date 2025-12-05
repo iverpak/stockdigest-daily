@@ -244,7 +244,7 @@ TRANSCRIPT FORMAT:
 [TICKER (Company Name) 10-K FILING FOR FISCAL YEAR 2024, Filed: Feb 28, 2025]
 
 CRITICAL: Extract period from headers for accurate citations:
-- Transcript: Use call date for citations ("per Oct 23, 2025 transcript" or "on Oct 23 call")
+- Earnings Call: Use call date for citations ("per Oct 23 call" or "per Oct 23, 2025 earnings call")
 - 10-Q: Use quarter and year ("per Q2 2025 10-Q")
 - 10-K: Use fiscal year ("per FY2024 10-K")
 
@@ -369,8 +369,8 @@ CRITICAL: MATCH EACH FACT TO ITS ACTUAL SOURCE
 
 When combining data from multiple filings in one context:
 
-❌ NEVER: Write "X and Y per 10-Q" when Y is actually from Transcript
-✅ ALWAYS: Split citations - "X per 10-Q; Y per transcript"
+❌ NEVER: Write "X and Y per 10-Q" when Y is actually from earnings call
+✅ ALWAYS: Split citations - "X per 10-Q; Y per Oct 23 call"
 
 VERIFICATION (apply as you write, not after):
 □ Is this fact actually in the document I'm about to cite?
@@ -379,8 +379,8 @@ VERIFICATION (apply as you write, not after):
 
 Example error from production:
 ❌ "renewal rate 4.8% with tenure 41 months per Q3 10-Q"
-   (tenure is from Transcript, NOT 10-Q)
-✅ "renewal rate 4.8% per Q3 10-Q; average tenure 41 months per Oct 30 transcript"
+   (tenure is from earnings call, NOT 10-Q)
+✅ "renewal rate 4.8% per Q3 10-Q; average tenure 41 months per Oct 30 call"
 
 5 FIELDS TO GENERATE FOR EACH BULLET (6 fields for competitive_industry_dynamics):
 
@@ -455,7 +455,7 @@ RULE #1: TARGET COMPANY FILINGS ONLY
 - Consensus estimates or Bloomberg data
 
 Example:
-✅ CORRECT: "Tesla tariff impact $400M Q3 per Oct 23 transcript"
+✅ CORRECT: "Tesla tariff impact $400M Q3 per Oct 23 call"
 ❌ WRONG: "GM reduced tariff estimate to $4B; Tesla tariff $400M..." (GM data not allowed)
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -482,7 +482,7 @@ EXAMPLES:
 
 ✅ GOOD:
 Bullet: "Medicare Advantage membership declining 1M"
-Context: "MA represents 40% of consolidated revenue per FY2024 10-K; current base 8.4M members as of Sep 30 2025 per Q3 10-Q; management expects margin improvement in 2026 despite volume loss per Oct 28 transcript"
+Context: "MA represents 40% of consolidated revenue per FY2024 10-K; current base 8.4M members as of Sep 30 2025 per Q3 10-Q; management expects margin improvement in 2026 despite volume loss per Oct 28 call"
 (Adds revenue exposure + baseline count + forward guidance not in bullet)
 
 ❌ BAD:
@@ -492,7 +492,7 @@ Context: "MA membership 8.4M declining by 1M per Q3 10-Q"
 
 ✅ GOOD:
 Bullet: "Q3 MCR 89.9% up from 85.2% prior year"
-Context: "By segment: UHC MCR 87.2% vs Optum 94.5% per Q3 10-Q; sequential Q1 88.1%→Q2 88.9%→Q3 89.9% shows stabilization; management expects 88-89% range in 2026 per Oct 28 transcript"
+Context: "By segment: UHC MCR 87.2% vs Optum 94.5% per Q3 10-Q; sequential Q1 88.1%→Q2 88.9%→Q3 89.9% shows stabilization; management expects 88-89% range in 2026 per Oct 28 call"
 (Adds segment breakdown + QoQ trend + forward guidance not in bullet)
 
 ❌ BAD:
@@ -502,12 +502,12 @@ Context: "MCR increased 4.7pp YoY to 89.9% per Q3 10-Q"
 
 ✅ GOOD:
 Bullet: "Company completed acquisition of Amedisys for $3.4 billion in Q3"
-Context: "Amedisys operates home health with 300K patients across 38 states per Oct 28 transcript; represents 7.2% of company market cap; debt-to-capital ratio stable 44.1% post-close with target 40% by H2 2026 per Q3 10-Q"
+Context: "Amedisys operates home health with 300K patients across 38 states per Oct 28 call; represents 7.2% of company market cap; debt-to-capital ratio stable 44.1% post-close with target 40% by H2 2026 per Q3 10-Q"
 (Adds what Amedisys does + deal size context + balance sheet impact not in bullet)
 
 ❌ BAD:
 Bullet: "Company completed acquisition of Amedisys for $3.4 billion in Q3"
-Context: "Completed Amedisys acquisition for $3.4B net cash disbursement in Q3 per transcript"
+Context: "Completed Amedisys acquisition for $3.4B net cash disbursement in Q3 per Oct 28 call"
 (Repeats "$3.4B" and "Q3" verbatim from bullet)
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -568,18 +568,19 @@ Extract periods from filing headers (first line of each filing summary):
 10-Q: "per Q2 2025 10-Q"
    (from header: "Q2 2025 10-Q Filing")
 
-Transcript: "per Oct 23, 2025 transcript" OR "per Oct 23 call"
+Earnings Call: "per Oct 23 call" OR "per Oct 23, 2025 earnings call"
    (from header: "Q3 2025 Earnings Call (Oct 23, 2025)")
 
-CRITICAL: Transcript citations MUST include date
+CRITICAL: Earnings call citations MUST include date
 ❌ Wrong: "per transcript"
-❌ Wrong: "per earnings call"
-✅ Correct: "per Oct 23, 2025 transcript"
+❌ Wrong: "per earnings call" (missing date)
+❌ Wrong: "per call" (missing date)
 ✅ Correct: "per Oct 23 call"
+✅ Correct: "per Oct 23, 2025 earnings call"
 
 TEMPORAL NOTES (flag only when material):
 ✓ "per Q2 10-Q (pre-dates Q3 event)" - if filing >1 quarter old
-✓ "per Aug 7 transcript (supersedes 10-K guidance)" - if guidance updated
+✓ "per Aug 7 call (supersedes 10-K guidance)" - if guidance updated
 ✓ "increased to 28% per Q2 10-Q vs 22% in FY2024 10-K" - material change
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -609,7 +610,7 @@ STEP 3: Handle multi-document matches
   → Cite most recent source (Transcript > 10-Q > 10-K)
   
   FOR BOTH DATA + COMMENTARY:
-  → Cite each source separately: "X per 10-Q; management stated Y per transcript"
+  → Cite each source separately: "X per 10-Q; management stated Y per Oct 23 call"
 
 - Accuracy > recency: Never cite wrong document just because it's newer
 
@@ -639,8 +640,8 @@ STEP 5: Pre-citation checklist
    - Cumulative data → Label as "YTD Q3 2025" (e.g., "$31.8M YTD Q3 2025")
 □ If citing multiple facts to one source, I verified ALL facts exist in that source
 □ If facts come from multiple sources, I either:
-   - Cited each source separately ("X per 10-Q; Y per transcript"), OR
-   - Used combined citation ("X and Y per 10-Q and transcript")
+   - Cited each source separately ("X per 10-Q; Y per Oct 23 call"), OR
+   - Used combined citation ("X and Y per 10-Q and Oct 23 call")
 
 COMMON ERRORS TO AVOID:
 
@@ -654,9 +655,9 @@ COMMON ERRORS TO AVOID:
 ✅ CORRECT: Topic discussed in 10-K, data from Q3 10-Q → cite Q3 10-Q for that data
 
 ❌ WRONG: "Rent change 49% and occupancy 95.3% (+20 bps sequential) per Q3 10-Q"
-   (Mixes transcript data with 10-Q citation)
-✅ CORRECT: "Occupancy 95.3% per Q3 10-Q; rent change 49% with +20 bps 
-   sequential gain per transcript"
+   (Mixes earnings call data with 10-Q citation)
+✅ CORRECT: "Occupancy 95.3% per Q3 10-Q; rent change 49% with +20 bps
+   sequential gain per Oct 30 call"
 
 EXAMPLE VERIFICATION:
 
@@ -697,9 +698,9 @@ FORBIDDEN WORDS (unless quoting management):
 ❌ "pressures", "drives", "enables", "creates", "positions", "benefits" (causal without attribution)
 ❌ "leads to", "results in", "causes", "contributes to" (explicit causal chains)
 
-✅ CORRECT: "Management stated lower rates would benefit housing liquidity per Oct 30 transcript"
+✅ CORRECT: "Management stated lower rates would benefit housing liquidity per Oct 30 call"
 ❌ WRONG: "End of QT should lead to lower rates benefiting housing liquidity"
-(Transcript didn't say "QT end causes lower rates" - that's YOUR inference)
+(Earnings call didn't say "QT end causes lower rates" - that's YOUR inference)
 
 ═══════════════════════════════════════════════════════════════════════════════
 RULE #8: ANTI-FABRICATION
@@ -735,7 +736,7 @@ Before outputting context, verify:
 □ Included management explanation when available
 □ Length 40-50 words
 □ All citations include period ("per Q3 2025 10-Q" not "per 10-Q")
-□ Transcript citations include date ("per Oct 23 call")
+□ Earnings call citations include date ("per Oct 23 call")
 □ No interpretive language unless quoting management
 □ No fabrication - all numbers match filing labels exactly
 □ For 10-Q metrics: Quarterly figures labeled "Q3 2025", cumulative figures labeled "YTD Q3 2025"
@@ -808,13 +809,13 @@ Context must show BOTH (not cherry-pick optimism).
 Examples:
 ❌ BAD: "Robotaxi costs in Services segment ($3.5B revenue)"
 ✅ GOOD: "Robotaxi costs in Services segment ($3.5B revenue); robotaxi
-currently unprofitable, expects breakeven 2026 per transcript; management
-noted 'paranoid about deployment' due to regulatory dependencies per call"
+currently unprofitable, expects breakeven 2026 per Oct 23 call; management
+noted 'paranoid about deployment' due to regulatory dependencies per Oct 23 call"
 
 ❌ BAD: "Optimus production targets 1M units by 2026 per management"
 ✅ GOOD: "Optimus targets 1M units by 2026 per management; currently moving
 boxes in lab settings, no supply chain established, 10,000 unique parts
-creating bottleneck per Oct call"
+creating bottleneck per Oct 23 call"
 
 For unprofitable products: Show vision AND current reality.
 
@@ -1043,7 +1044,7 @@ Example contexts:
 
 "$2B acquisition targets 12% unlevered IRR per investor presentation on Aug 7 call, vs company WACC 9%"
 
-"Capex $1.2B for expansion; management projects 3-year payback per transcript"
+"Capex $1.2B for expansion; management projects 3-year payback per Oct 23 call"
 
 
 ---
@@ -1068,7 +1069,7 @@ Example contexts:
 
 "FDA approval expected mid-2025 per 10-K; submission completed Q2 per 10-Q"
 
-"Product launch delayed from Q2 to Q4 per Aug 7 transcript (originally Q2 per 10-K)"
+"Product launch delayed from Q2 to Q4 per Aug 7 call (originally Q2 per 10-K)"
 
 
 ---
@@ -1172,7 +1173,7 @@ Format: "[Entity] is [description from filings] [scale if available] per [filing
 
 Example contexts:
 
-"Amedisys is home health provider with 300K patients across 38 states per Oct 28 transcript"
+"Amedisys is home health provider with 300K patients across 38 states per Oct 28 call"
 
 "Optum at Home generated $X revenue (Y% of Optum Health) per Q3 10-Q"
 

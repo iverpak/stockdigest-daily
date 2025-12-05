@@ -842,7 +842,6 @@ SMTP_STARTTLS = os.getenv("SMTP_STARTTLS", "1") not in ("0", "false", "False", "
 
 EMAIL_FROM = _first(os.getenv("MAILGUN_FROM"), os.getenv("EMAIL_FROM"), SMTP_USERNAME)
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL")
-DIGEST_TO = _first(os.getenv("DIGEST_TO"), ADMIN_EMAIL)
 
 # Legal document versions
 TERMS_VERSION = "1.0"
@@ -862,8 +861,6 @@ _financials_check_job = {
     "error": None
 }
 _financials_check_lock = threading.Lock()
-
-DEFAULT_RETAIN_DAYS = int(os.getenv("DEFAULT_RETAIN_DAYS", "90"))
 
 # FIXED: Enhanced spam filtering with more comprehensive domain list
 # These domains are blocked at ingestion - articles never stored
@@ -13215,7 +13212,7 @@ def send_email(subject: str, html_body: str, to: str | None = None, bcc: str | N
         return False
 
     try:
-        recipient = to or DIGEST_TO
+        recipient = to or ADMIN_EMAIL
 
         # multipart/alternative for text + HTML, wrapped in mixed not needed if no attachments
         msg = MIMEMultipart('alternative')
@@ -16058,7 +16055,7 @@ def send_user_intelligence_report(
         return {"status": "error", "message": "No ticker specified"}
 
     ticker = tickers[0]
-    LOG.info(f"Generating stock intelligence report for {ticker} → {recipient_email or DIGEST_TO}")
+    LOG.info(f"Generating stock intelligence report for {ticker} → {recipient_email or ADMIN_EMAIL}")
 
     # Determine report_type if not provided (use day-of-week detection)
     if not report_type:
@@ -16071,7 +16068,7 @@ def send_user_intelligence_report(
     email_data = generate_email_html_core(
         ticker=ticker,
         hours=hours,
-        recipient_email=recipient_email or DIGEST_TO,
+        recipient_email=recipient_email or ADMIN_EMAIL,
         report_type=report_type
     )
 
@@ -16082,17 +16079,17 @@ def send_user_intelligence_report(
     success = send_email(
         email_data['subject'],
         email_data['html'],
-        to=recipient_email or DIGEST_TO,
+        to=recipient_email or ADMIN_EMAIL,
         bcc=bcc
     )
 
-    LOG.info(f"📧 Email #3 (Stock Intelligence): {'✅ SENT' if success else '❌ FAILED'} to {recipient_email or DIGEST_TO}")
+    LOG.info(f"📧 Email #3 (Stock Intelligence): {'✅ SENT' if success else '❌ FAILED'} to {recipient_email or ADMIN_EMAIL}")
 
     return {
         "status": "sent" if success else "failed",
         "articles_analyzed": email_data['article_count'],
         "ticker": ticker,
-        "recipient": recipient_email or DIGEST_TO,
+        "recipient": recipient_email or ADMIN_EMAIL,
         "email_type": "stock_intelligence"
     }
 
@@ -17081,9 +17078,9 @@ async def process_company_profile_phase(job: dict):
                 send_email(
                     subject=email_data['subject'],
                     html_body=email_data['html'],
-                    to=DIGEST_TO  # ✅ FIXED: Was hardcoded 'stockdigest.research@gmail.com'
+                    to=ADMIN_EMAIL  # ✅ FIXED: Was hardcoded 'stockdigest.research@gmail.com'
                 )
-                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email sent to {DIGEST_TO}")
+                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email sent to {ADMIN_EMAIL}")
 
             except Exception as email_error:
                 LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send email: {email_error}")
@@ -18098,9 +18095,9 @@ async def process_10q_profile_phase(job: dict):
                 send_email(
                     subject=email_data['subject'],
                     html_body=email_data['html'],
-                    to=DIGEST_TO  # ✅ FIXED: Was hardcoded 'stockdigest.research@gmail.com'
+                    to=ADMIN_EMAIL  # ✅ FIXED: Was hardcoded 'stockdigest.research@gmail.com'
                 )
-                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email sent to {DIGEST_TO}")
+                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email sent to {ADMIN_EMAIL}")
 
             except Exception as email_error:
                 LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send email: {email_error}")
@@ -18281,8 +18278,8 @@ async def process_transcript_phase(job: dict):
                     stock_data=stock_data
                 )
 
-                send_email(subject=email_data['subject'], html_body=email_data['html'], to=DIGEST_TO)
-                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email v2 sent to {DIGEST_TO}")
+                send_email(subject=email_data['subject'], html_body=email_data['html'], to=ADMIN_EMAIL)
+                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email v2 sent to {ADMIN_EMAIL}")
 
             except Exception as email_error:
                 LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send email: {email_error}")
@@ -18474,8 +18471,8 @@ async def process_transcript_generation_phase(job: dict):
                     stock_data=stock_data
                 )
 
-                send_email(subject=email_data['subject'], html_body=email_data['html'], to=DIGEST_TO)
-                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email sent to {DIGEST_TO}")
+                send_email(subject=email_data['subject'], html_body=email_data['html'], to=ADMIN_EMAIL)
+                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email sent to {ADMIN_EMAIL}")
 
             except Exception as email_error:
                 LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Failed to send email: {email_error}")
@@ -18827,7 +18824,7 @@ async def process_8k_summary_phase(job: dict):
                     # Raw 8-K subject line (pre-AI processing)
                     subject = f"{ticker} 8-K Raw - Exhibit {exhibit_num} - {formatted_date}"
 
-                    send_email(subject=subject, html_body=email_html, to=DIGEST_TO)
+                    send_email(subject=subject, html_body=email_html, to=ADMIN_EMAIL)
                     LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email sent for Exhibit {exhibit_num}")
 
                 except Exception as email_error:
@@ -19251,7 +19248,7 @@ Generate the complete page-by-page deck analysis now.
             send_email(
                 subject=email_data['subject'],
                 html_body=email_data['html'],
-                to=DIGEST_TO  # ✅ Uses ADMIN_EMAIL env var
+                to=ADMIN_EMAIL  # ✅ Uses ADMIN_EMAIL env var
             )
 
         # Clean up temp PDF file
@@ -19675,7 +19672,7 @@ async def process_ticker_job(job: dict):
                             editorial_result = send_user_intelligence_report(
                                 hours=int(minutes/60),
                                 tickers=[ticker],
-                                recipient_email=DIGEST_TO,
+                                recipient_email=ADMIN_EMAIL,
                                 summary_date=datetime.now().date(),
                                 report_type=report_type
                             )
@@ -23062,7 +23059,7 @@ async def admin_export_user_csv(request: Request):
 #         "status": "sent" if success else "failed",
 #         "articles": total_articles,
 #         "tickers": list(articles_by_ticker.keys()),
-#         "recipient": DIGEST_TO
+#         "recipient": ADMIN_EMAIL
 #     }
 
 @APP.post("/admin/wipe-database")
@@ -23169,7 +23166,7 @@ def test_email(request: Request):
     )
     
     success = send_email("Quantbrief Test Email", test_html)
-    return {"status": "sent" if success else "failed", "recipient": DIGEST_TO}
+    return {"status": "sent" if success else "failed", "recipient": ADMIN_EMAIL}
 
 @APP.get("/admin/stats")
 async def get_stats(
@@ -27553,13 +27550,13 @@ async def email_company_profile_api(request: Request):
         send_email(
             subject=email_data['subject'],
             html_body=email_data['html'],
-            to=DIGEST_TO  # Admin email
+            to=ADMIN_EMAIL  # Admin email
         )
 
-        LOG.info(f"📧 Emailed company profile for {ticker} to {DIGEST_TO}")
+        LOG.info(f"📧 Emailed company profile for {ticker} to {ADMIN_EMAIL}")
         return {
             "status": "success",
-            "message": f"Profile for {ticker} emailed successfully to {DIGEST_TO}"
+            "message": f"Profile for {ticker} emailed successfully to {ADMIN_EMAIL}"
         }
 
     except Exception as e:
@@ -28050,12 +28047,12 @@ async def email_research_api(request: Request):
             html_body = email_data['html']
             subject = email_data['subject']  # Subject automatically distinguishes earnings vs material events
 
-        send_email(subject=subject, html_body=html_body, to=DIGEST_TO)
+        send_email(subject=subject, html_body=html_body, to=ADMIN_EMAIL)
 
-        LOG.info(f"📧 Emailed {research_type} for {ticker} to {DIGEST_TO}")
+        LOG.info(f"📧 Emailed {research_type} for {ticker} to {ADMIN_EMAIL}")
         return {
             "status": "success",
-            "message": f"{research_type.replace('_', ' ').title()} for {ticker} emailed successfully to {DIGEST_TO}"
+            "message": f"{research_type.replace('_', ' ').title()} for {ticker} emailed successfully to {ADMIN_EMAIL}"
         }
 
     except Exception as e:
@@ -33182,8 +33179,8 @@ def process_hourly_alerts():
 
                 # Send to admin ONLY - same pattern as Email #1 and #2
                 subject = f"Hourly Alerts: {tickers_str} ({len(article_data)} articles) - {hour_str} EST"
-                send_email(subject=subject, html_body=html, to=DIGEST_TO)
-                LOG.info(f"✅ Hourly alert sent to {DIGEST_TO} ({len(article_data)} articles)")
+                send_email(subject=subject, html_body=html, to=ADMIN_EMAIL)
+                LOG.info(f"✅ Hourly alert sent to {ADMIN_EMAIL} ({len(article_data)} articles)")
 
         except Exception as e:
             LOG.error(f"❌ Error generating hourly alert: {e}")

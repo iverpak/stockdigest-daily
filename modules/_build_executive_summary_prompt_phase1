@@ -261,8 +261,10 @@ Article publication dates are NEVER included inline in the content field.
 Store them ONLY in the date_range field.
 
 - ❌ WRONG: "Company reported earnings per Bloomberg (Nov 04)"
+- ❌ WRONG: "...margin sensitivity per Q3 10-Q (Dec 02-03)"
 - ✅ CORRECT: "Company reported earnings per Bloomberg"
-- Article date goes to date_range field: "Nov 04"
+- ✅ CORRECT: "...margin sensitivity per Q3 10-Q"
+- Article date goes to date_range field: "Nov 04" or "Dec 02-03"
 
 The date_range field will be appended at the end during post-processing.
 
@@ -286,6 +288,19 @@ Example of correct date handling:
 }
 
 Post-processing will display as: "Company reported Q3 earnings beat per Bloomberg (Nov 04)"
+
+CRITICAL - SOURCE ARTICLE REFERENCES:
+
+source_articles is a JSON array field, NOT inline text.
+NEVER include bracketed article numbers like [0], [3], [5] in the content text.
+
+- ❌ WRONG: "Tesla sales surged 41% per CPCA [3, 5]"
+- ❌ WRONG: "Company beat estimates [0] while guidance disappointed [2]"
+- ✅ CORRECT: "Tesla sales surged 41% per CPCA"
+  (with source_articles: [3, 5] in JSON)
+
+The [0], [1], [2] numbering is for YOUR reference to track sources.
+Output goes in source_articles array only - never in content text.
 
 ═══════════════════════════════════════════════════════════════════════════════
 SECTION LENGTH LIMITS

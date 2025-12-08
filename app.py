@@ -33132,38 +33132,21 @@ def process_hourly_alerts():
     LOG.info(f"📰 Starting hourly alerts processing at {now_est.strftime('%I:%M %p')} EST")
 
     try:
-        # Step 1: Load active users and their tickers from normalized schema
-        with db() as conn, conn.cursor() as cur:
-            # Get unique users
-            cur.execute("""
-                SELECT DISTINCT u.id, u.name, u.email
-                FROM users u
-                JOIN user_tickers ut ON u.id = ut.user_id
-                WHERE u.status = 'active'
-                ORDER BY u.created_at
-            """)
-            users = cur.fetchall()
+        # Step 1: Load active users and their tickers using production helper
+        # Reuses same function as daily workflow (process_daily_workflow)
+        ticker_recipients = load_active_users()
 
-            # Get unique tickers
-            cur.execute("""
-                SELECT DISTINCT ut.ticker
-                FROM users u
-                JOIN user_tickers ut ON u.id = ut.user_id
-                WHERE u.status = 'active'
-            """)
-            ticker_rows = cur.fetchall()
-
-        if not users:
+        if not ticker_recipients:
             LOG.info("No active users found for hourly alerts")
             return
 
-        LOG.info(f"Found {len(users)} active users")
-
-        # Step 2: Get unique tickers
-        unique_tickers = [row['ticker'].upper() for row in ticker_rows if row['ticker']]
+        # Extract unique tickers and count users
+        unique_tickers = sorted(list(ticker_recipients.keys()))
+        unique_emails = set(email for emails in ticker_recipients.values() for email in emails)
+        LOG.info(f"Found {len(unique_emails)} active users")
         LOG.info(f"Processing {len(unique_tickers)} unique tickers: {', '.join(unique_tickers)}")
 
-        # Step 3: Process RSS feeds for unique tickers CONCURRENTLY
+        # Step 2: Process RSS feeds for unique tickers CONCURRENTLY
         # Uses production ThreadPoolExecutor pattern with MAX_CONCURRENT_JOBS
         MAX_CONCURRENT_JOBS = int(os.getenv("MAX_CONCURRENT_JOBS", "3"))
         LOG.info(f"🚀 Processing up to {MAX_CONCURRENT_JOBS} tickers concurrently")

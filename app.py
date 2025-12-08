@@ -1823,6 +1823,9 @@ def ensure_schema():
                 -- Add value_chain_articles_count for upstream/downstream tracking
                 ALTER TABLE executive_summaries ADD COLUMN IF NOT EXISTS value_chain_articles_count INTEGER DEFAULT 0;
 
+                -- Add ai_models column for tracking AI models used per phase (Dec 2025)
+                ALTER TABLE executive_summaries ADD COLUMN IF NOT EXISTS ai_models JSONB;
+
                 -- TRANSCRIPT SUMMARIES: Store earnings transcript and press release summaries
                 CREATE TABLE IF NOT EXISTS transcript_summaries (
                     id SERIAL PRIMARY KEY,
@@ -1912,38 +1915,8 @@ def ensure_schema():
                     WHEN duplicate_object THEN NULL;  -- Constraint already exists, ignore
                 END $$;
 
-                -- PRESS RELEASES: Store AI-generated press release summaries (separated from transcripts)
-                CREATE TABLE IF NOT EXISTS press_releases (
-                    id SERIAL PRIMARY KEY,
-                    ticker VARCHAR(20) NOT NULL,
-                    company_name VARCHAR(255),
-
-                    -- Date & Title (sufficient for uniqueness)
-                    report_date DATE NOT NULL,           -- YYYY-MM-DD
-                    pr_title VARCHAR(200) NOT NULL,      -- Press release title
-
-                    -- Content
-                    summary_text TEXT NOT NULL,          -- AI-generated summary
-
-                    -- AI metadata
-                    ai_provider VARCHAR(20) NOT NULL,    -- 'claude' or 'gemini'
-                    ai_model VARCHAR(50),                -- Model name
-
-                    -- Job tracking
-                    job_id VARCHAR(50),
-                    processing_duration_seconds INTEGER,
-
-                    -- Timestamps
-                    generated_at TIMESTAMPTZ DEFAULT NOW(),
-
-                    -- Unique constraint: ticker + date + title (supports 100+ PRs per day)
-                    CONSTRAINT press_releases_unique UNIQUE(ticker, report_date, pr_title)
-                );
-
-                -- Indexes for press_releases
-                CREATE INDEX IF NOT EXISTS idx_press_releases_ticker ON press_releases(ticker);
-                CREATE INDEX IF NOT EXISTS idx_press_releases_date ON press_releases(report_date DESC);
-                CREATE INDEX IF NOT EXISTS idx_press_releases_ticker_date ON press_releases(ticker, report_date DESC);
+                -- NOTE: press_releases table DROPPED (Dec 2025) - replaced by company_releases
+                -- Data migrated, table no longer needed
 
                 -- SEC 8-K FILINGS: Store AI-generated 8-K summaries from SEC Edgar
                 CREATE TABLE IF NOT EXISTS sec_8k_filings (
@@ -1961,8 +1934,14 @@ def ensure_schema():
                     item_codes VARCHAR(100),                 -- "2.02, 9.01"
                     sec_html_url TEXT NOT NULL,              -- Direct link to 8-K HTML on SEC.gov
 
+                    -- Exhibit-level tracking (Dec 2025 - supports multiple exhibits per 8-K)
+                    exhibit_number VARCHAR(10),              -- '99.1', '99.2', etc.
+                    exhibit_description TEXT,                -- Description from filing documents page
+                    exhibit_type VARCHAR(10),                -- 'EX-99.1', 'EX-99.2', etc.
+
                     -- Raw content (Exhibit 99.1 or main body)
                     raw_content TEXT,                        -- Raw extracted content before AI processing
+                    char_count INTEGER,                      -- Character count of raw_content
 
                     -- AI Summary
                     summary_text TEXT NOT NULL,              -- Gemini-generated summary (noise filtered, 90% retention)
@@ -1982,9 +1961,50 @@ def ensure_schema():
                     -- Timestamps
                     generated_at TIMESTAMPTZ DEFAULT NOW(),
 
-                    -- Unique constraint: ticker + accession number (allows re-processing with ON CONFLICT DO UPDATE)
-                    CONSTRAINT sec_8k_unique UNIQUE(ticker, accession_number)
+                    -- Unique constraint: ticker + accession + exhibit (allows multiple exhibits per 8-K)
+                    CONSTRAINT sec_8k_unique UNIQUE(ticker, accession_number, exhibit_number)
                 );
+
+                -- Migration: Add new columns to existing sec_8k_filings table (Dec 2025)
+                DO $$ BEGIN
+                    ALTER TABLE sec_8k_filings ADD COLUMN exhibit_number VARCHAR(10);
+                EXCEPTION
+                    WHEN duplicate_column THEN NULL;
+                END $$;
+
+                DO $$ BEGIN
+                    ALTER TABLE sec_8k_filings ADD COLUMN exhibit_description TEXT;
+                EXCEPTION
+                    WHEN duplicate_column THEN NULL;
+                END $$;
+
+                DO $$ BEGIN
+                    ALTER TABLE sec_8k_filings ADD COLUMN exhibit_type VARCHAR(10);
+                EXCEPTION
+                    WHEN duplicate_column THEN NULL;
+                END $$;
+
+                DO $$ BEGIN
+                    ALTER TABLE sec_8k_filings ADD COLUMN char_count INTEGER;
+                EXCEPTION
+                    WHEN duplicate_column THEN NULL;
+                END $$;
+
+                -- Migration: Update UNIQUE constraint to include exhibit_number (Dec 2025)
+                -- This allows multiple exhibits per 8-K filing
+                DO $$
+                BEGIN
+                    -- Drop old constraint if it exists with only 2 columns (ticker + accession)
+                    -- and re-add with 3 columns (ticker + accession + exhibit_number)
+                    IF EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'sec_8k_unique'
+                        AND array_length(conkey, 1) = 2
+                    ) THEN
+                        ALTER TABLE sec_8k_filings DROP CONSTRAINT sec_8k_unique;
+                        ALTER TABLE sec_8k_filings ADD CONSTRAINT sec_8k_unique UNIQUE(ticker, accession_number, exhibit_number);
+                    END IF;
+                END $$;
 
                 -- Indexes for sec_8k_filings
                 CREATE INDEX IF NOT EXISTS idx_8k_ticker ON sec_8k_filings(ticker);
@@ -2167,54 +2187,8 @@ def ensure_schema():
                 FROM sec_filings
                 WHERE filing_type = '10-K';
 
-                -- PARSED PRESS RELEASES: Unified Gemini summaries from FMP PRs and 8-K exhibits
-                -- Used to feed company announcements into Phase 1 executive summary as pseudo-articles
-                CREATE TABLE IF NOT EXISTS parsed_press_releases (
-                    id SERIAL PRIMARY KEY,
-                    ticker VARCHAR(20) NOT NULL,
-                    company_name VARCHAR(255),
-
-                    -- Source tracking (polymorphic relationship)
-                    source_type VARCHAR(10) NOT NULL,       -- 'fmp' or '8k'
-                    source_id INTEGER,                      -- FK to press_releases.id or sec_8k_filings.id
-
-                    -- Original document metadata
-                    document_date TIMESTAMPTZ NOT NULL,     -- Publication date/time
-                    document_title VARCHAR(500) NOT NULL,   -- Press release or 8-K title
-                    source_url TEXT,                        -- Direct link (SEC URL for 8-K, FMP URL for PR)
-
-                    -- 8-K specific fields (NULL for FMP PRs)
-                    exhibit_number VARCHAR(20),             -- '99.1', '99.2', etc.
-                    item_codes VARCHAR(100),                -- '2.02, 9.01'
-
-                    -- Gemini-generated summary
-                    parsed_summary TEXT NOT NULL,           -- Structured extraction (company article format)
-
-                    -- AI metadata
-                    ai_provider VARCHAR(20) DEFAULT 'gemini',
-                    ai_model VARCHAR(50),
-                    token_count_input INTEGER,
-                    token_count_output INTEGER,
-                    processing_duration_seconds INTEGER,
-
-                    -- Phase 1 integration tracking (Part 2)
-                    fed_to_phase1 BOOLEAN DEFAULT FALSE,
-                    fed_to_phase1_at TIMESTAMPTZ,
-                    phase1_article_id INTEGER,              -- FK to ticker_articles.id when injected
-
-                    -- Timestamps
-                    generated_at TIMESTAMPTZ DEFAULT NOW(),
-
-                    -- Unique constraint: one parsed summary per source document/exhibit
-                    CONSTRAINT parsed_pr_unique UNIQUE(ticker, source_type, source_id, exhibit_number)
-                );
-
-                -- Indexes for parsed_press_releases
-                CREATE INDEX IF NOT EXISTS idx_parsed_pr_ticker ON parsed_press_releases(ticker);
-                CREATE INDEX IF NOT EXISTS idx_parsed_pr_date ON parsed_press_releases(document_date DESC);
-                CREATE INDEX IF NOT EXISTS idx_parsed_pr_ticker_date ON parsed_press_releases(ticker, document_date DESC);
-                CREATE INDEX IF NOT EXISTS idx_parsed_pr_source ON parsed_press_releases(source_type, source_id);
-                CREATE INDEX IF NOT EXISTS idx_parsed_pr_fed ON parsed_press_releases(fed_to_phase1) WHERE fed_to_phase1 = FALSE;
+                -- NOTE: parsed_press_releases table DROPPED (Dec 2025) - replaced by company_releases
+                -- Data migrated, table no longer needed
 
                 -- ============================================================
                 -- USERS TABLE (Dec 2025 - replaces beta_users)
@@ -33498,8 +33472,8 @@ def link_article_to_ticker_minimal(article_id: int, ticker: str, feed_id: int):
     with db() as conn, conn.cursor() as cur:
         try:
             cur.execute("""
-                INSERT INTO ticker_articles (article_id, ticker, feed_id, flagged)
-                VALUES (%s, %s, %s, FALSE)
+                INSERT INTO ticker_articles (article_id, ticker, feed_id)
+                VALUES (%s, %s, %s)
                 ON CONFLICT (article_id, ticker) DO NOTHING
             """, (article_id, ticker, feed_id))
 

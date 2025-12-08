@@ -938,6 +938,7 @@ SPAM_DOMAINS = {
     # User-generated content platforms (Dec 2025)
     "vocal.media", "www.vocal.media",  # UGC platform, unvetted articles
     "seekingalpha.com", "www.seekingalpha.com",  # Contributor-driven, unvetted retail analysis
+    "gobankingrates.com", "www.gobankingrates.com",  # Personal finance listicles, retail-oriented
 }
 
 QUALITY_DOMAINS = {

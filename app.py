@@ -29773,7 +29773,14 @@ def check_all_filings_cron():
                 results.append(result)
             return results
 
-        results = asyncio.run(check_all())
+        # Handle both CLI (no event loop) and FastAPI (existing event loop) contexts
+        try:
+            loop = asyncio.get_running_loop()
+            # Already in event loop (FastAPI) - create task and run
+            results = loop.run_until_complete(check_all())
+        except RuntimeError:
+            # No event loop (CLI) - use asyncio.run()
+            results = asyncio.run(check_all())
 
         # Aggregate results
         for result in results:
@@ -33315,9 +33322,12 @@ def process_hourly_alerts():
 
                 if article_ids:
                     LOG.info(f"[{ticker}] Resolving {len(article_ids)} Google News URLs...")
-                    # Use asyncio.run() to call async function from sync context
-                    import asyncio
-                    asyncio.run(resolve_flagged_google_news_urls(ticker, article_ids))
+                    # Handle both CLI (no event loop) and FastAPI (existing event loop) contexts
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.run_until_complete(resolve_flagged_google_news_urls(ticker, article_ids))
+                    except RuntimeError:
+                        asyncio.run(resolve_flagged_google_news_urls(ticker, article_ids))
                     LOG.info(f"[{ticker}] ✅ Resolution complete")
             except Exception as e:
                 LOG.error(f"[{ticker}] ❌ Resolution failed: {e}")

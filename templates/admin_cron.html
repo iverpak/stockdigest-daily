@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cron Jobs - Weavara Admin</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #f8f9fa;
+            min-height: 100vh;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
+            color: #ffffff;
+            padding: 24px 32px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .header h1 {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        .header-nav {
+            margin-top: 12px;
+            display: flex;
+            gap: 16px;
+        }
+
+        .header-nav a {
+            color: rgba(255,255,255,0.9);
+            text-decoration: none;
+            font-size: 14px;
+            transition: color 0.2s;
+        }
+
+        .header-nav a:hover {
+            color: #ffffff;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 40px auto;
+            padding: 0 20px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+        }
+
+        .card {
+            background: #ffffff;
+            padding: 24px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            display: flex;
+            flex-direction: column;
+            min-height: 180px;
+        }
+
+        .card.empty {
+            background: #f8f9fa;
+            box-shadow: none;
+            border: 2px dashed #e5e7eb;
+        }
+
+        .card-icon {
+            font-size: 32px;
+            margin-bottom: 12px;
+        }
+
+        .card-title {
+            font-size: 18px;
+            font-weight: 700;
+            color: #1e40af;
+            margin-bottom: 8px;
+        }
+
+        .card-desc {
+            font-size: 13px;
+            color: #6b7280;
+            line-height: 1.5;
+            flex-grow: 1;
+            margin-bottom: 16px;
+        }
+
+        .btn {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            width: 100%;
+        }
+
+        .btn-primary {
+            background: #1e40af;
+            color: #ffffff;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: #1e3a8a;
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .btn.loading {
+            position: relative;
+            color: transparent;
+        }
+
+        .btn.loading::after {
+            content: "";
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            top: 50%;
+            left: 50%;
+            margin-left: -8px;
+            margin-top: -8px;
+            border: 2px solid #ffffff;
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .btn.success {
+            background: #10b981;
+        }
+
+        .btn.error {
+            background: #ef4444;
+        }
+
+        .info-box {
+            background: #eff6ff;
+            border-left: 4px solid #1e40af;
+            padding: 16px 20px;
+            border-radius: 6px;
+            margin-bottom: 24px;
+        }
+
+        .info-box p {
+            font-size: 14px;
+            color: #1e40af;
+            line-height: 1.5;
+        }
+
+        @media (max-width: 768px) {
+            .grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        @media (max-width: 500px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🕐 Cron Jobs</h1>
+        <p>Manually trigger scheduled tasks for testing</p>
+        <div class="header-nav">
+            <a href="/admin?token={{ token }}">← Dashboard</a>
+            <a href="/admin/queue?token={{ token }}">📧 Email Queue</a>
+            <a href="/admin/test?token={{ token }}">🧪 Test Runner</a>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="info-box">
+            <p>Click any button to manually run a cron job. Check Render logs for detailed output.</p>
+        </div>
+
+        <div class="grid">
+            <!-- Row 1 -->
+            <div class="card">
+                <div class="card-icon">🗑️</div>
+                <div class="card-title">Cleanup</div>
+                <div class="card-desc">Delete old email queue entries</div>
+                <button class="btn btn-primary" onclick="runCron('cleanup', this)">Run Cleanup</button>
+            </div>
+
+            <div class="card">
+                <div class="card-icon">⚙️</div>
+                <div class="card-title">Process</div>
+                <div class="card-desc">Generate reports for all users</div>
+                <button class="btn btn-primary" onclick="runCron('process', this)">Run Process</button>
+            </div>
+
+            <div class="card">
+                <div class="card-icon">📧</div>
+                <div class="card-title">Send</div>
+                <div class="card-desc">Send all ready emails</div>
+                <button class="btn btn-primary" onclick="runCron('send', this)">Run Send</button>
+            </div>
+
+            <!-- Row 2 -->
+            <div class="card">
+                <div class="card-icon">🔍</div>
+                <div class="card-title">Check Filings</div>
+                <div class="card-desc">Check for new SEC filings</div>
+                <button class="btn btn-primary" onclick="runCron('check-filings', this)">Run Check</button>
+            </div>
+
+            <div class="card">
+                <div class="card-icon">📰</div>
+                <div class="card-title">Hourly Alerts</div>
+                <div class="card-desc">Ingest articles + admin alert</div>
+                <button class="btn btn-primary" onclick="runCron('alerts', this)">Run Alerts</button>
+            </div>
+
+            <div class="card">
+                <div class="card-icon">💾</div>
+                <div class="card-title">Export Users</div>
+                <div class="card-desc">Backup users to CSV</div>
+                <button class="btn btn-primary" onclick="runCron('export', this)">Run Export</button>
+            </div>
+
+            <!-- Row 3 -->
+            <div class="card">
+                <div class="card-icon">🕐</div>
+                <div class="card-title">Scheduler</div>
+                <div class="card-desc">Run master scheduler</div>
+                <button class="btn btn-primary" onclick="runCron('scheduler', this)">Run Scheduler</button>
+            </div>
+
+            <div class="card empty"></div>
+            <div class="card empty"></div>
+        </div>
+    </div>
+
+    <script>
+        const token = '{{ token }}';
+
+        async function runCron(endpoint, btn) {
+            // Set loading state
+            btn.disabled = true;
+            btn.classList.add('loading');
+            const originalText = btn.textContent;
+
+            try {
+                const response = await fetch(`/api/cron/${endpoint}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ token: token })
+                });
+
+                const data = await response.json();
+
+                btn.classList.remove('loading');
+
+                if (data.status === 'success') {
+                    btn.classList.add('success');
+                    btn.textContent = '✓ Done';
+                } else {
+                    btn.classList.add('error');
+                    btn.textContent = '✗ Error';
+                    console.error('Cron error:', data.message);
+                }
+
+                // Reset after 3 seconds
+                setTimeout(() => {
+                    btn.classList.remove('success', 'error');
+                    btn.textContent = originalText;
+                    btn.disabled = false;
+                }, 3000);
+
+            } catch (error) {
+                btn.classList.remove('loading');
+                btn.classList.add('error');
+                btn.textContent = '✗ Error';
+                console.error('Fetch error:', error);
+
+                setTimeout(() => {
+                    btn.classList.remove('error');
+                    btn.textContent = originalText;
+                    btn.disabled = false;
+                }, 3000);
+            }
+        }
+    </script>
+</body>
+</html>

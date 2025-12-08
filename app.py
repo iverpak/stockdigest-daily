@@ -25745,6 +25745,133 @@ def admin_research_page(request: Request, token: str = Query(...)):
         "token": token
     })
 
+@APP.get("/admin/cron")
+def admin_cron_page(request: Request, token: str = Query(...)):
+    """Cron Jobs - Manually trigger scheduled tasks (for staging/testing)"""
+    if not check_admin_token(token):
+        return HTMLResponse("Unauthorized", status_code=401)
+
+    return templates.TemplateResponse("admin_cron.html", {
+        "request": request,
+        "token": token
+    })
+
+# ------------------------------------------------------------------------------
+# CRON JOB API ENDPOINTS (for /admin/cron page)
+# ------------------------------------------------------------------------------
+
+@APP.post("/api/cron/cleanup")
+async def api_cron_cleanup(request: Request):
+    """Manually trigger cleanup_old_queue_entries()"""
+    body = await request.json()
+    token = body.get('token')
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        LOG.info("🕐 [CRON API] Running cleanup via /api/cron/cleanup")
+        cleanup_old_queue_entries()
+        return {"status": "success", "message": "Cleanup completed"}
+    except Exception as e:
+        LOG.error(f"❌ [CRON API] Cleanup failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/cron/process")
+async def api_cron_process(request: Request):
+    """Manually trigger process_daily_workflow()"""
+    body = await request.json()
+    token = body.get('token')
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        LOG.info("🕐 [CRON API] Running process via /api/cron/process")
+        process_daily_workflow()
+        return {"status": "success", "message": "Process workflow started (check logs for progress)"}
+    except Exception as e:
+        LOG.error(f"❌ [CRON API] Process failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/cron/send")
+async def api_cron_send(request: Request):
+    """Manually trigger auto_send_cron_job()"""
+    body = await request.json()
+    token = body.get('token')
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        LOG.info("🕐 [CRON API] Running send via /api/cron/send")
+        auto_send_cron_job()
+        return {"status": "success", "message": "Send completed"}
+    except Exception as e:
+        LOG.error(f"❌ [CRON API] Send failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/cron/check-filings")
+async def api_cron_check_filings(request: Request):
+    """Manually trigger check_all_filings_cron()"""
+    body = await request.json()
+    token = body.get('token')
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        LOG.info("🕐 [CRON API] Running check_filings via /api/cron/check-filings")
+        check_all_filings_cron()
+        return {"status": "success", "message": "Filings check completed"}
+    except Exception as e:
+        LOG.error(f"❌ [CRON API] Check filings failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/cron/alerts")
+async def api_cron_alerts(request: Request):
+    """Manually trigger process_hourly_alerts()"""
+    body = await request.json()
+    token = body.get('token')
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        LOG.info("🕐 [CRON API] Running alerts via /api/cron/alerts")
+        process_hourly_alerts()
+        return {"status": "success", "message": "Hourly alerts completed"}
+    except Exception as e:
+        LOG.error(f"❌ [CRON API] Alerts failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/cron/export")
+async def api_cron_export(request: Request):
+    """Manually trigger export_users_csv()"""
+    body = await request.json()
+    token = body.get('token')
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        LOG.info("🕐 [CRON API] Running export via /api/cron/export")
+        export_users_csv()
+        return {"status": "success", "message": "Export completed"}
+    except Exception as e:
+        LOG.error(f"❌ [CRON API] Export failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+@APP.post("/api/cron/scheduler")
+async def api_cron_scheduler(request: Request):
+    """Manually trigger run_scheduler()"""
+    body = await request.json()
+    token = body.get('token')
+    if not check_admin_token(token):
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
+        LOG.info("🕐 [CRON API] Running scheduler via /api/cron/scheduler")
+        result = run_scheduler()
+        return {"status": "success", "message": f"Scheduler completed. Tasks run: {result.get('tasks_run', [])}"}
+    except Exception as e:
+        LOG.error(f"❌ [CRON API] Scheduler failed: {e}")
+        return {"status": "error", "message": str(e)}
+
 # Admin API endpoints
 @APP.get("/api/admin/stats")
 def get_admin_stats(token: str = Query(...)):

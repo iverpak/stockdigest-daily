@@ -196,7 +196,7 @@ return templates.TemplateResponse("admin_queue.html", {
 
 New `/admin/cron` page for manually triggering cron functions in staging.
 
-**Layout:** 3x3 grid of cards
+**Layout:** 2x3 grid of cards (6 cron functions)
 
 | 🗑️ Cleanup | ⚙️ Process | 📧 Send |
 |------------|------------|---------|
@@ -206,10 +206,6 @@ New `/admin/cron` page for manually triggering cron functions in staging.
 |------------------|------------------|-----------------|
 | Check for new SEC filings | Ingest articles + admin alert | Backup users to CSV |
 
-| 🕐 Scheduler | | |
-|--------------|---|---|
-| Run master scheduler | | |
-
 **API Endpoints:**
 - `POST /api/cron/cleanup`
 - `POST /api/cron/process`
@@ -217,7 +213,6 @@ New `/admin/cron` page for manually triggering cron functions in staging.
 - `POST /api/cron/check-filings`
 - `POST /api/cron/alerts`
 - `POST /api/cron/export`
-- `POST /api/cron/scheduler`
 
 **Dashboard:** Add card linking to `/admin/cron`:
 > 🕐 **Cron Jobs** - Manually run scheduled tasks

@@ -25856,22 +25856,6 @@ async def api_cron_export(request: Request):
         LOG.error(f"❌ [CRON API] Export failed: {e}")
         return {"status": "error", "message": str(e)}
 
-@APP.post("/api/cron/scheduler")
-async def api_cron_scheduler(request: Request):
-    """Manually trigger run_scheduler()"""
-    body = await request.json()
-    token = body.get('token')
-    if not check_admin_token(token):
-        return {"status": "error", "message": "Unauthorized"}
-
-    try:
-        LOG.info("🕐 [CRON API] Running scheduler via /api/cron/scheduler")
-        result = run_scheduler()
-        return {"status": "success", "message": f"Scheduler completed. Tasks run: {result.get('tasks_run', [])}"}
-    except Exception as e:
-        LOG.error(f"❌ [CRON API] Scheduler failed: {e}")
-        return {"status": "error", "message": str(e)}
-
 # Admin API endpoints
 @APP.get("/api/admin/stats")
 def get_admin_stats(token: str = Query(...)):

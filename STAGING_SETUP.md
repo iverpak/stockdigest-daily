@@ -8,7 +8,7 @@ This document outlines how to set up a staging environment for Weavara.
 PRODUCTION                          STAGING
 ──────────────────────────────────  ──────────────────────────────────
 Render Web Service (main branch)    Render Web Service (staging branch)
-Render PostgreSQL (Weavara-db)      Render PostgreSQL (Weavara-db-staging)
+Render PostgreSQL (quantbrief-db)   Render PostgreSQL (weavara-db-staging)
 7 Cron jobs                         No crons (manual testing only)
 Real beta users                     Test accounts (your emails only)
 ```
@@ -47,7 +47,7 @@ feature-branch → staging (test) → main (production)
 
 1. Go to Render Dashboard → **New** → **PostgreSQL**
 2. Configure:
-   - **Name:** `Weavara-db-staging`
+   - **Name:** `weavara-db-staging`
    - **Database:** `weavara_staging`
    - **User:** `weavara_staging_user`
    - **Region:** Oregon (same as production)
@@ -60,9 +60,9 @@ feature-branch → staging (test) → main (production)
 ## Step 3: Create Staging Web Service
 
 1. Go to Render Dashboard → **New** → **Web Service**
-2. Connect to the same GitHub repo: `iverpak/stockdigest-daily`
+2. Connect to the same GitHub repo: `iverpak/weavara-daily`
 3. Configure:
-   - **Name:** `Weavara-staging`
+   - **Name:** `weavara-staging`
    - **Branch:** `staging` (NOT main)
    - **Runtime:** Python 3
    - **Build Command:** `pip install -r requirements.txt`
@@ -332,7 +332,7 @@ For major schema changes, you may need to:
 
 | Environment | URL |
 |-------------|-----|
-| Production | `https://weavara-daily.onrender.com` |
+| Production | `https://weavara.io` (or `https://weavara-daily.onrender.com`) |
 | Staging | `https://weavara-staging.onrender.com` |
-| Production Admin | `https://weavara-daily.onrender.com/admin?token=XXX` |
+| Production Admin | `https://weavara.io/admin?token=XXX` |
 | Staging Admin | `https://weavara-staging.onrender.com/admin?token=XXX` |

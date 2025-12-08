@@ -4,12 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Information
 
-**Name:** StockDigest
-**Domain:** https://stockdigest.app
-**GitHub:** https://github.com/iverpak/stockdigest-daily
-**Database:** stockdigest-db (PostgreSQL on Render)
+**Name:** Weavara
+**Domain:** https://weavara.io
+**GitHub:** https://github.com/iverpak/weavara-daily
+**Database:** quantbrief-db (PostgreSQL on Render)
 **Legal:** Province of Ontario, Canada | CASL & PIPEDA Compliant
-**Contact:** stockdigest.research@gmail.com
+**Contact:** weavara.research@gmail.com
 
 ## Development Commands
 
@@ -212,7 +212,7 @@ restart. This prevents memory buildup from zombie threads and ensures all jobs c
 
 ### Core Application Structure
 
-**StockDigest** is a financial news aggregation and analysis system built with FastAPI. The architecture consists of:
+**Weavara** is a financial news aggregation and analysis system built with FastAPI. The architecture consists of:
 
 - **Single-file monolithic design**: All functionality is contained in `app.py` (~18,700 lines)
 - **PostgreSQL database**: Stores articles, ticker metadata, processing state, job queue, executive summaries, and beta users
@@ -355,7 +355,7 @@ The `memory_monitor.py` module provides comprehensive resource tracking includin
   - Footer links: Terms | Privacy | Contact
 - `GET /terms-of-service`: Terms of Service page (NEW Oct 2025)
   - Province of Ontario, Canada jurisdiction
-  - Contact: stockdigest.research@gmail.com
+  - Contact: weavara.research@gmail.com
   - Last Updated: October 7, 2025 (v1.0)
 - `GET /privacy-policy`: Privacy Policy page (NEW Oct 2025)
   - PIPEDA compliant (Canadian privacy law)
@@ -406,12 +406,12 @@ The `memory_monitor.py` module provides comprehensive resource tracking includin
 
 **Company Profiles & Research Summaries (UPDATED - Oct 19, 2025):**
 
-StockDigest provides AI-powered research tools for analyzing SEC filings (10-K, 10-Q), earnings transcripts, and press releases.
+Weavara provides AI-powered research tools for analyzing SEC filings (10-K, 10-Q), earnings transcripts, and press releases.
 
 ### Admin Research Dashboard
 
 **`GET /admin/research`** - Centralized research tools interface (NEW - Oct 18, 2025)
-- **Location:** `https://stockdigest.app/admin/research?token=YOUR_ADMIN_TOKEN`
+- **Location:** `https://weavara.io/admin/research?token=YOUR_ADMIN_TOKEN`
 - **Features:**
   - Tabbed interface for Company Profiles, Transcripts, and Press Releases
   - Unified UI for all research workflows
@@ -535,7 +535,7 @@ StockDigest provides AI-powered research tools for analyzing SEC filings (10-K, 
   - Maintains compatibility with existing code
 
 - `fetch_sec_html_text(url)`: Fetch 10-K/10-Q HTML from SEC.gov and extract plain text
-  - Uses proper User-Agent: "StockDigest/1.0 (stockdigest.research@gmail.com)"
+  - Uses proper User-Agent: "Weavara/1.0 (weavara.research@gmail.com)"
   - BeautifulSoup HTML parsing with script/style removal
   - Returns cleaned plain text for AI processing
 
@@ -588,7 +588,7 @@ StockDigest provides AI-powered research tools for analyzing SEC filings (10-K, 
 
 **8-K SEC Filings Analysis (NEW - Nov 8, 2025):**
 
-StockDigest provides direct SEC Edgar scraping for 8-K filings (material event disclosures), bypassing FMP delays to access official SEC filings in real-time.
+Weavara provides direct SEC Edgar scraping for 8-K filings (material event disclosures), bypassing FMP delays to access official SEC filings in real-time.
 
 **Key Features:**
 - ✅ Direct SEC Edgar scraping (no FMP dependencies)
@@ -699,7 +699,7 @@ CREATE TABLE sec_8k_filings (
 ```
 
 **Rate Limiting & SEC.gov Compliance:**
-- User-Agent: "StockDigest/1.0 (stockdigest.research@gmail.com)"
+- User-Agent: "Weavara/1.0 (weavara.research@gmail.com)"
 - Max 10 requests/second per IP (SEC requirement)
 - Implementation: 0.15s delay between requests (conservative 6.67 req/sec)
 - Respects robots.txt
@@ -1084,7 +1084,7 @@ Real-time article alerts sent to active beta users:
 
 ### 3-Email Quality Assurance Workflow
 
-StockDigest generates 3 distinct emails per ticker during processing, forming a complete QA pipeline:
+Weavara generates 3 distinct emails per ticker during processing, forming a complete QA pipeline:
 
 #### Email #1: Article Selection QA (Line 10353)
 **Function:** `send_enhanced_quick_intelligence_email()`
@@ -1309,13 +1309,13 @@ NOTE (Nov 25, 2025): Per-ticker GitHub commits removed. CSV is source of truth.
 
 ```bash
 # Check worker health
-curl https://stockdigest.app/jobs/stats -H "X-Admin-Token: $TOKEN"
+curl https://weavara.io/jobs/stats -H "X-Admin-Token: $TOKEN"
 
 # Check batch status
-curl https://stockdigest.app/jobs/batch/{batch_id} -H "X-Admin-Token: $TOKEN"
+curl https://weavara.io/jobs/batch/{batch_id} -H "X-Admin-Token: $TOKEN"
 
 # Check specific job (includes full stacktrace)
-curl https://stockdigest.app/jobs/{job_id} -H "X-Admin-Token: $TOKEN"
+curl https://weavara.io/jobs/{job_id} -H "X-Admin-Token: $TOKEN"
 ```
 
 ### SQL Queries
@@ -1346,7 +1346,7 @@ SELECT COUNT(*) FROM ticker_processing_jobs WHERE status = 'queued';
 
 ### Overview
 
-StockDigest now supports **concurrent ticker processing**, allowing 2-5 tickers to process simultaneously. This reduces total processing time when handling multiple tickers in a batch.
+Weavara now supports **concurrent ticker processing**, allowing 2-5 tickers to process simultaneously. This reduces total processing time when handling multiple tickers in a batch.
 
 ### Architecture Changes
 

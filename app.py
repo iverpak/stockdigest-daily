@@ -19358,6 +19358,39 @@ async def process_ticker_job(job: dict):
                 LOG.warning(f"[{ticker}] 🚫 [JOB {job_id}] Job cancelled before starting, exiting")
                 return
 
+        # ========================================================================
+        # FIX #1: STORE RECIPIENTS AT JOB START (Dec 2025)
+        # Creates email_queue entry immediately so we have recipients even if job fails
+        # This ensures rerun button always has the recipient list available
+        # ========================================================================
+        mode = config.get('mode', 'test')
+        recipients = config.get('recipients', [])
+
+        if mode == 'daily' and recipients:
+            ticker_config_early = get_ticker_config(ticker)
+            company_name_early = ticker_config_early.get('company_name', ticker) if ticker_config_early else ticker
+
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO email_queue (
+                        ticker, company_name, recipients, status, report_type,
+                        summary_date, heartbeat, created_at, is_production
+                    )
+                    VALUES (%s, %s, %s, 'processing', %s, CURRENT_DATE, NOW(), NOW(), TRUE)
+                    ON CONFLICT (ticker) DO UPDATE
+                    SET company_name = EXCLUDED.company_name,
+                        recipients = EXCLUDED.recipients,
+                        status = 'processing',
+                        report_type = EXCLUDED.report_type,
+                        summary_date = EXCLUDED.summary_date,
+                        heartbeat = NOW(),
+                        updated_at = NOW(),
+                        error_message = NULL
+                """, (ticker, company_name_early, recipients, report_type))
+                conn.commit()
+
+            LOG.info(f"[{ticker}] 📋 [JOB {job_id}] Email queue entry created with {len(recipients)} recipients (status=processing)")
+
         # PHASE 0: SAFETY CHECK - Ensure feeds exist (failsafe)
         # This is a defensive check in case /jobs/submit initialization somehow failed
         LOG.info(f"[{ticker}] 🔍 [JOB {job_id}] Phase 0: Checking feeds exist...")
@@ -19432,6 +19465,13 @@ async def process_ticker_job(job: dict):
             job_status = cur.fetchone()
             if job_status and job_status['status'] == 'cancelled':
                 LOG.warning(f"[{ticker}] 🚫 [JOB {job_id}] Job cancelled after Phase 1, exiting")
+                # Update email_queue to cancelled so it doesn't show as stuck processing
+                if mode == 'daily':
+                    cur.execute("""
+                        UPDATE email_queue SET status = 'cancelled', updated_at = NOW()
+                        WHERE ticker = %s AND status = 'processing'
+                    """, (ticker,))
+                    conn.commit()
                 return
 
             # Re-fetch flagged_articles that were stored during ingest phase
@@ -19534,6 +19574,13 @@ async def process_ticker_job(job: dict):
             current_status = cur.fetchone()
             if current_status and current_status['status'] == 'cancelled':
                 LOG.warning(f"[{ticker}] 🚫 [JOB {job_id}] Job cancelled after Phase 4, exiting")
+                # Update email_queue to cancelled so it doesn't show as stuck processing
+                if mode == 'daily':
+                    cur.execute("""
+                        UPDATE email_queue SET status = 'cancelled', updated_at = NOW()
+                        WHERE ticker = %s AND status = 'processing'
+                    """, (ticker,))
+                    conn.commit()
                 return
 
         # Log resource usage
@@ -19611,6 +19658,9 @@ async def process_ticker_job(job: dict):
             update_job_status(job_id, progress=97)
             LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Generating Email #3 (Stock Intelligence)...")
 
+            # Track Email #3 success for failure detection (Fix #2 - Dec 2025)
+            email3_success = False
+
             if phase3_json:
                 try:
                     # Generate Email #3 HTML
@@ -19656,6 +19706,7 @@ async def process_ticker_job(job: dict):
                                     conn.commit()
 
                                 LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #3 queued for {len(recipients)} recipients")
+                                email3_success = True  # Mark success for daily mode
 
                                 # Send preview to admin
                                 try:
@@ -19679,6 +19730,7 @@ async def process_ticker_job(job: dict):
 
                             if editorial_result and editorial_result.get('status') == 'sent':
                                 LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Email #3 sent to admin (test mode)")
+                                email3_success = True  # Mark success for test mode
                             else:
                                 LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Email #3 send failed")
                     else:
@@ -19701,6 +19753,13 @@ async def process_ticker_job(job: dict):
             current_status = cur.fetchone()
             if current_status and current_status['status'] == 'cancelled':
                 LOG.warning(f"[{ticker}] 🚫 [JOB {job_id}] Job cancelled after emails, exiting")
+                # Update email_queue to cancelled so it doesn't show as stuck processing
+                if mode == 'daily':
+                    cur.execute("""
+                        UPDATE email_queue SET status = 'cancelled', updated_at = NOW()
+                        WHERE ticker = %s AND status = 'processing'
+                    """, (ticker,))
+                    conn.commit()
                 return
 
         # ========================================================================
@@ -19719,7 +19778,7 @@ async def process_ticker_job(job: dict):
         company_name = ticker_config.get("company_name", "") if ticker_config else ""
         log_cost_summary(ticker, company_name)
 
-        # Mark complete
+        # Build result dict
         result = {
             "ticker": ticker,
             "ingest": ingest_result,
@@ -19727,9 +19786,53 @@ async def process_ticker_job(job: dict):
             "articles": articles_result,
             "summary": {"success": summary_result.get('success'), "error": summary_result.get('error')},
             "duration_seconds": duration,
-            "memory_mb": memory_used
+            "memory_mb": memory_used,
+            "email3_success": email3_success
         }
 
+        # ========================================================================
+        # FIX #2: Mark as FAILED if Email #3 was not generated in daily mode (Dec 2025)
+        # A "no material developments" email is still success - only truly failed if
+        # email_html was never generated (phase3_json is None or generate failed)
+        # ========================================================================
+        if mode == 'daily' and recipients and not email3_success:
+            error_msg = "Email #3 generation failed - no user email was created"
+            LOG.error(f"[{ticker}] ❌ [JOB {job_id}] FAILED: {error_msg}")
+
+            # Mark email_queue as failed
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE email_queue
+                    SET status = 'failed',
+                        error_message = %s,
+                        updated_at = NOW()
+                    WHERE ticker = %s
+                """, (error_msg, ticker))
+                conn.commit()
+
+            # Mark job as failed
+            update_job_status(
+                job_id,
+                status='failed',
+                phase='email_failed',
+                progress=99,
+                result=result,
+                error_message=error_msg,
+                duration_seconds=duration,
+                memory_mb=memory_used
+            )
+
+            # Update batch counters (failed job)
+            with db() as conn, conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE ticker_processing_batches
+                    SET failed_jobs = failed_jobs + 1
+                    WHERE batch_id = %s
+                """, (job['batch_id'],))
+
+            return result
+
+        # Mark complete (success case)
         update_job_status(
             job_id,
             status='completed',
@@ -19789,6 +19892,23 @@ async def process_ticker_job(job: dict):
             error_stacktrace=error_trace[:5000],
             duration_seconds=duration
         )
+
+        # Update email_queue to failed (if it exists and is still processing)
+        # This ensures we don't leave orphaned 'processing' entries
+        try:
+            mode = config.get('mode', 'test')
+            if mode == 'daily':
+                with db() as conn, conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE email_queue
+                        SET status = 'failed',
+                            error_message = %s,
+                            updated_at = NOW()
+                        WHERE ticker = %s AND status = 'processing'
+                    """, (f"Job exception: {error_msg[:500]}", ticker))
+                    conn.commit()
+        except Exception as eq_err:
+            LOG.warning(f"[{ticker}] Failed to update email_queue on exception: {eq_err}")
 
         # Update batch counters
         with db() as conn, conn.cursor() as cur:
@@ -20063,6 +20183,15 @@ def timeout_watchdog_loop():
                     else:
                         # Job permanently failed
                         LOG.error(f"❌ [FAILED] {job['ticker']} failed after 3 timeout retries - manual intervention required (job_id: {job['job_id']})")
+
+                        # Update email_queue to failed (if exists and still processing)
+                        cur.execute("""
+                            UPDATE email_queue
+                            SET status = 'failed',
+                                error_message = 'Job timed out after 3 retries',
+                                updated_at = NOW()
+                            WHERE ticker = %s AND status = 'processing'
+                        """, (job['ticker'],))
 
                         # Only update batch failed counter for permanent failures
                         cur.execute("""
@@ -30097,7 +30226,12 @@ async def fix_inconsistent_emails_api(request: Request):
         return {"status": "error", "message": str(e)}
 @APP.post("/api/rerun-ticker")
 async def rerun_ticker_api(request: Request):
-    """Rerun single ticker - uses unified job queue"""
+    """
+    Rerun single ticker - uses unified job queue.
+
+    FIX #3 (Dec 2025): Preserves original report_type from email_queue entry
+    so a Monday weekly report retried on Tuesday still uses weekly lookback.
+    """
     body = await request.json()
     token = body.get('token')
     ticker = body.get('ticker')
@@ -30109,10 +30243,10 @@ async def rerun_ticker_api(request: Request):
         return {"status": "error", "message": "Ticker required"}
 
     try:
-        # Get recipients from email_queue
+        # Get recipients AND report_type from email_queue (Fix #3)
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                SELECT recipients FROM email_queue WHERE ticker = %s
+                SELECT recipients, report_type FROM email_queue WHERE ticker = %s
             """, (ticker,))
             row = cur.fetchone()
 
@@ -30120,6 +30254,20 @@ async def rerun_ticker_api(request: Request):
                 return {"status": "error", "message": f"Ticker {ticker} not found in queue"}
 
             recipients = row['recipients']
+            # Preserve original report_type, or detect from day-of-week if not set
+            original_report_type = row.get('report_type')
+            if original_report_type:
+                report_type = original_report_type
+                # Use correct lookback for the report type
+                if report_type == 'weekly':
+                    lookback_minutes = get_weekly_lookback_minutes()
+                else:
+                    lookback_minutes = get_daily_lookback_minutes()
+                LOG.info(f"[{ticker}] 📋 Using preserved report_type: {report_type} ({lookback_minutes} min)")
+            else:
+                # Fallback: detect from day-of-week
+                report_type, lookback_minutes = get_report_type_and_lookback()
+                LOG.info(f"[{ticker}] 📋 Using day-of-week detection: {report_type} ({lookback_minutes} min)")
 
         # Submit to job queue system
         with db() as conn, conn.cursor() as cur:
@@ -30128,11 +30276,12 @@ async def rerun_ticker_api(request: Request):
                 INSERT INTO ticker_processing_batches (total_jobs, created_by, config)
                 VALUES (%s, %s, %s)
                 RETURNING batch_id
-            """, (1, 'admin_ui_single', json.dumps({
-                "minutes": get_lookback_minutes(),
+            """, (1, 'admin_ui_rerun', json.dumps({
+                "minutes": lookback_minutes,
                 "batch_size": 3,
                 "triage_batch_size": 3,
-                "mode": "daily"
+                "mode": "daily",
+                "report_type": report_type
             })))
 
             batch_id = cur.fetchone()['batch_id']
@@ -30146,21 +30295,23 @@ async def rerun_ticker_api(request: Request):
                 )
                 VALUES (%s, %s, %s, %s)
             """, (batch_id, ticker, json.dumps({
-                "minutes": get_lookback_minutes(),
+                "minutes": lookback_minutes,
                 "batch_size": 3,
                 "triage_batch_size": 3,
                 "mode": "daily",
+                "report_type": report_type,
                 "recipients": recipients
             }), timeout_at))
 
             conn.commit()
 
-        LOG.info(f"[{ticker}] 🔄 Re-run triggered by admin (batch {batch_id})")
+        LOG.info(f"[{ticker}] 🔄 Re-run triggered by admin (batch {batch_id}, report_type={report_type})")
         return {
             "status": "success",
             "ticker": ticker,
             "batch_id": str(batch_id),
-            "message": "Processing started. Check dashboard in 2-3 minutes."
+            "report_type": report_type,
+            "message": f"Processing started ({report_type} report). Check dashboard in 2-3 minutes."
         }
 
     except Exception as e:
@@ -30405,7 +30556,12 @@ async def submit_regenerate_email_job(request: Request):
 
 @APP.post("/api/retry-failed-and-cancelled")
 async def retry_failed_and_cancelled_api(request: Request):
-    """Retry all failed and cancelled tickers (non-ready only) - uses existing job queue"""
+    """
+    Retry all failed and cancelled tickers (non-ready only) - uses existing job queue.
+
+    FIX #5 (Dec 2025): Preserves original report_type from email_queue entry
+    so a Monday weekly report retried on Tuesday still uses weekly lookback.
+    """
     body = await request.json()
     token = body.get('token')
 
@@ -30419,10 +30575,10 @@ async def retry_failed_and_cancelled_api(request: Request):
         except Exception as e:
             LOG.error(f"❌ CSV sync failed: {e} - continuing anyway")
 
-        # Get all non-ready tickers (failed + cancelled)  with their recipients
+        # Get all non-ready tickers (failed + cancelled) with their recipients AND report_type
         with db() as conn, conn.cursor() as cur:
             cur.execute("""
-                SELECT ticker, company_name, recipients, status
+                SELECT ticker, company_name, recipients, status, report_type
                 FROM email_queue
                 WHERE status IN ('failed', 'cancelled')
                 ORDER BY ticker
@@ -30436,28 +30592,31 @@ async def retry_failed_and_cancelled_api(request: Request):
                 "message": "No failed or cancelled tickers to retry"
             }
 
-        # Build ticker_recipients dict
-        ticker_recipients = {
-            row['ticker']: row['recipients']
+        # Build ticker info dict with recipients and report_type
+        ticker_info = {
+            row['ticker']: {
+                'recipients': row['recipients'],
+                'report_type': row.get('report_type') or 'daily'  # Fallback if not set
+            }
             for row in retry_rows
         }
 
         # Submit to existing job queue system
-        tickers_list = sorted(list(ticker_recipients.keys()))
+        tickers_list = sorted(list(ticker_info.keys()))
 
-        # NEW: Determine report type based on day of week (same logic as other bulk endpoints)
-        report_type, lookback_minutes = get_report_type_and_lookback()
-        LOG.info(f"📅 Report Type: {report_type.upper()}, Lookback: {lookback_minutes}min")
+        # Get default report type for batch config (individual jobs override)
+        default_report_type, default_lookback = get_report_type_and_lookback()
+        LOG.info(f"📅 Default Report Type: {default_report_type.upper()}, Default Lookback: {default_lookback}min")
 
         with db() as conn, conn.cursor() as cur:
-            # Create batch record
+            # Create batch record (uses default config, individual jobs may differ)
             cur.execute("""
                 INSERT INTO ticker_processing_batches (total_jobs, created_by, config)
                 VALUES (%s, %s, %s)
                 RETURNING batch_id
             """, (len(tickers_list), 'admin_ui_retry', json.dumps({
-                "minutes": lookback_minutes,
-                "report_type": report_type,  # NEW: 'daily' or 'weekly'
+                "minutes": default_lookback,
+                "report_type": default_report_type,
                 "batch_size": 3,
                 "triage_batch_size": 3,
                 "mode": "daily"
@@ -30465,11 +30624,21 @@ async def retry_failed_and_cancelled_api(request: Request):
 
             batch_id = cur.fetchone()['batch_id']
 
-            # Create individual jobs with mode='daily' and recipients
+            # Create individual jobs - PRESERVE original report_type per ticker (Fix #5)
             # Queue timeout (4 hours) - processing timeout (45 min) set when claimed
             # retry_count defaults to 0, giving fresh 3 attempts
             timeout_at = datetime.now(timezone.utc) + timedelta(hours=4)
             for ticker in tickers_list:
+                info = ticker_info[ticker]
+                report_type = info['report_type']
+                # Use correct lookback for each ticker's report type
+                if report_type == 'weekly':
+                    lookback_minutes = get_weekly_lookback_minutes()
+                else:
+                    lookback_minutes = get_daily_lookback_minutes()
+
+                LOG.info(f"[{ticker}] 📋 Retry with preserved report_type: {report_type} ({lookback_minutes} min)")
+
                 cur.execute("""
                     INSERT INTO ticker_processing_jobs (
                         batch_id, ticker, config, timeout_at
@@ -30477,11 +30646,11 @@ async def retry_failed_and_cancelled_api(request: Request):
                     VALUES (%s, %s, %s, %s)
                 """, (batch_id, ticker, json.dumps({
                     "minutes": lookback_minutes,
-                    "report_type": report_type,  # NEW: 'daily' or 'weekly'
+                    "report_type": report_type,
                     "batch_size": 3,
                     "triage_batch_size": 3,
                     "mode": "daily",
-                    "recipients": ticker_recipients[ticker]
+                    "recipients": info['recipients']
                 }), timeout_at))
 
             conn.commit()

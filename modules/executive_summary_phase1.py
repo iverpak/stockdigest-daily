@@ -589,10 +589,14 @@ def validate_phase1_json(json_output: Dict) -> Tuple[bool, str]:
     Checks:
     - "sections" key exists
     - All 10 required sections present
-    - Bullet sections have correct structure (bullet_id, topic_label, content, source_articles, filing_hints)
+    - Bullet sections have correct structure (bullet_id, topic_label, content required; filing_hints auto-fixed if missing/malformed)
     - Bottom line has content + source_articles + word_count
     - Scenarios have content + source_articles
     - source_articles arrays contain valid non-negative integers
+
+    Auto-fixes:
+    - filing_hints: If missing or malformed, auto-fixed to {"10-K": [], "10-Q": [], "Transcript": []}
+      Phase 2 handles empty hints gracefully (uses escape hatch for context)
 
     Returns:
         (is_valid, error_message)
@@ -643,24 +647,33 @@ def validate_phase1_json(json_output: Dict) -> Tuple[bool, str]:
                 if not isinstance(bullet, dict):
                     return False, f"{section_name}[{i}] must be object"
 
-                required_fields = ["bullet_id", "topic_label", "content", "filing_hints"]
+                required_fields = ["bullet_id", "topic_label", "content"]
                 for field in required_fields:
                     if field not in bullet:
                         return False, f"{section_name}[{i}] missing '{field}'"
 
-                # Validate filing_hints structure
-                filing_hints = bullet["filing_hints"]
-                if not isinstance(filing_hints, dict):
-                    return False, f"{section_name}[{i}] filing_hints must be object"
+                # Auto-fix filing_hints if missing or malformed (optional field - Phase 2 handles empty hints)
+                default_hints = {"10-K": [], "10-Q": [], "Transcript": []}
 
-                # Check all 3 required keys exist and are arrays
-                for filing_type in ["10-K", "10-Q", "Transcript"]:
-                    if filing_type not in filing_hints:
-                        return False, f"{section_name}[{i}] filing_hints missing '{filing_type}'"
-                    if not isinstance(filing_hints[filing_type], list):
-                        return False, f"{section_name}[{i}] filing_hints['{filing_type}'] must be array"
+                if "filing_hints" not in bullet or not isinstance(bullet.get("filing_hints"), dict):
+                    # Missing or not a dict - replace with default
+                    if "filing_hints" in bullet:
+                        LOG.warning(f"Auto-fixed malformed filing_hints in {section_name}[{i}] (was {type(bullet.get('filing_hints')).__name__}, now empty dict)")
+                    else:
+                        LOG.warning(f"Auto-fixed missing filing_hints in {section_name}[{i}] (added empty structure)")
+                    bullet["filing_hints"] = default_hints
+                else:
+                    # Exists and is a dict - ensure all 3 keys exist with valid arrays
+                    filing_hints = bullet["filing_hints"]
+                    for filing_type in ["10-K", "10-Q", "Transcript"]:
+                        if filing_type not in filing_hints:
+                            LOG.warning(f"Auto-fixed filing_hints in {section_name}[{i}]: added missing '{filing_type}' key")
+                            filing_hints[filing_type] = []
+                        elif not isinstance(filing_hints[filing_type], list):
+                            LOG.warning(f"Auto-fixed filing_hints in {section_name}[{i}]: '{filing_type}' was {type(filing_hints[filing_type]).__name__}, now empty array")
+                            filing_hints[filing_type] = []
 
-                # Empty arrays are valid (means no filing context needed)
+                # Empty arrays are valid (means no filing context needed - Phase 2 uses escape hatch)
 
                 # Validate source_articles if present (optional for backward compatibility)
                 if "source_articles" in bullet:

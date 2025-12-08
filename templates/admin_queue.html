@@ -341,6 +341,11 @@
             color: #4b5563;
         }
 
+        .status-queued {
+            background: #e0e7ff;
+            color: #3730a3;
+        }
+
         .ticker-meta {
             font-size: 14px;
             color: #6b7280;
@@ -456,6 +461,7 @@
                     <button class="btn btn-warning" onclick="cancelReadyEmails()">⛔ Cancel Ready</button>
                     <button class="btn btn-success" onclick="undoCancelReadyEmails()">✅ Undo Cancel</button>
                     <button class="btn btn-success" onclick="sendAllReady()">✉️ Send All Ready</button>
+                    <button class="btn btn-primary" onclick="retryFailedAndCancelled()">🔄 Retry Failed & Cancelled</button>
                     <button class="btn btn-secondary" onclick="clearEmailQueue()">🗑️ Clear Email Queue</button>
                     <button class="btn btn-primary" onclick="regenAllEmails()">♻️ Regen All Emails</button>
                     <button class="btn btn-info" onclick="bulkReviewQuality()">🔍 Review All</button>
@@ -650,7 +656,7 @@
                             <div class="ticker-actions">
                                 ${ticker.status === 'ready' ? `<button class="btn btn-success btn-sm" onclick="sendTicker('${ticker.ticker}')">✉️ Send</button>` : ''}
                                 ${ticker.status === 'ready' ? `<button class="btn btn-warning btn-sm" onclick="cancelTicker('${ticker.ticker}')">❌ Cancel</button>` : ''}
-                                ${ticker.status === 'failed' || ticker.status === 'cancelled' ? `<button class="btn btn-primary btn-sm" onclick="rerunTicker('${ticker.ticker}')">🔄 Retry</button>` : ''}
+                                ${ticker.status !== 'processing' ? `<button class="btn btn-primary btn-sm" onclick="fullRerunTicker('${ticker.ticker}', '${ticker.status}')" title="Full rerun from scratch (triage, scrape, generate)">🔄 Full Rerun</button>` : ''}
                                 ${ticker.status !== 'processing' ? `
                                     <button class="btn btn-warning btn-sm" onclick="regenerateEmail('${ticker.ticker}')" title="Regenerate user-facing email report">♻️ Regenerate User Report</button>
                                     <button class="btn btn-info btn-sm" onclick="reviewQuality('${ticker.ticker}')" title="Review summary quality against articles and filings">🔍 Review All</button>
@@ -1086,6 +1092,47 @@
                 const result = await response.json();
                 if (result.status === 'success') {
                     alert(`✅ ${ticker} queued for reprocessing`);
+                    fetchQueueStatus();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                alert('Failed to re-run ticker');
+            }
+        }
+
+        // Fix #4: Full Rerun with confirmation for all statuses (Dec 2025)
+        async function fullRerunTicker(ticker, currentStatus) {
+            // Build confirmation message based on status
+            let message = `🔄 Full Rerun: ${ticker}\n\n`;
+            message += `Current status: ${currentStatus.toUpperCase()}\n\n`;
+            message += `This will:\n`;
+            message += `• Re-triage all articles\n`;
+            message += `• Re-scrape flagged articles\n`;
+            message += `• Re-generate executive summary\n`;
+            message += `• Re-generate all emails\n\n`;
+
+            if (currentStatus === 'ready') {
+                message += `⚠️ WARNING: This will replace the ready email!\n\n`;
+            } else if (currentStatus === 'sent') {
+                message += `⚠️ NOTE: Original email was already sent. New email will need manual send.\n\n`;
+            }
+
+            message += `Processing time: ~25-30 minutes\n\nContinue?`;
+
+            if (!confirm(message)) return;
+
+            try {
+                const response = await fetch('/api/rerun-ticker', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({token, ticker})
+                });
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    const reportType = result.report_type || 'daily';
+                    alert(`✅ ${ticker} queued for full reprocessing\n\nReport type: ${reportType}\nBatch ID: ${result.batch_id}\n\nCheck dashboard in 2-3 minutes.`);
                     fetchQueueStatus();
                 } else {
                     alert('Error: ' + result.message);

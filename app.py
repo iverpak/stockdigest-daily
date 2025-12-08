@@ -1935,9 +1935,9 @@ def ensure_schema():
                     sec_html_url TEXT NOT NULL,              -- Direct link to 8-K HTML on SEC.gov
 
                     -- Exhibit-level tracking (Dec 2025 - supports multiple exhibits per 8-K)
-                    exhibit_number VARCHAR(10),              -- '99.1', '99.2', etc.
+                    exhibit_number VARCHAR(20),              -- '99.1', '99.2', 'MAIN', etc.
                     exhibit_description TEXT,                -- Description from filing documents page
-                    exhibit_type VARCHAR(10),                -- 'EX-99.1', 'EX-99.2', etc.
+                    exhibit_type VARCHAR(20),                -- 'EX-99.1', 'EXHIBIT 10.1', etc.
 
                     -- Raw content (Exhibit 99.1 or main body)
                     raw_content TEXT,                        -- Raw extracted content before AI processing
@@ -1967,7 +1967,7 @@ def ensure_schema():
 
                 -- Migration: Add new columns to existing sec_8k_filings table (Dec 2025)
                 DO $$ BEGIN
-                    ALTER TABLE sec_8k_filings ADD COLUMN exhibit_number VARCHAR(10);
+                    ALTER TABLE sec_8k_filings ADD COLUMN exhibit_number VARCHAR(20);
                 EXCEPTION
                     WHEN duplicate_column THEN NULL;
                 END $$;
@@ -1979,7 +1979,7 @@ def ensure_schema():
                 END $$;
 
                 DO $$ BEGIN
-                    ALTER TABLE sec_8k_filings ADD COLUMN exhibit_type VARCHAR(10);
+                    ALTER TABLE sec_8k_filings ADD COLUMN exhibit_type VARCHAR(20);
                 EXCEPTION
                     WHEN duplicate_column THEN NULL;
                 END $$;
@@ -1989,6 +1989,10 @@ def ensure_schema():
                 EXCEPTION
                     WHEN duplicate_column THEN NULL;
                 END $$;
+
+                -- Migration: Widen exhibit_number and exhibit_type columns if they exist but are too small (Dec 2025)
+                ALTER TABLE sec_8k_filings ALTER COLUMN exhibit_number TYPE VARCHAR(20);
+                ALTER TABLE sec_8k_filings ALTER COLUMN exhibit_type TYPE VARCHAR(20);
 
                 -- Migration: Update UNIQUE constraint to include exhibit_number (Dec 2025)
                 -- This allows multiple exhibits per 8-K filing

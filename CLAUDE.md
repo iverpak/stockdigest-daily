@@ -1691,18 +1691,18 @@ POLYGON_API_KEY=your_api_key_here  # Get free key at polygon.io
 
 ## Hourly Alerts System (NEW - October 2025)
 
-**Purpose:** Real-time article delivery to beta users throughout the trading day.
+**Purpose:** Real-time article ingestion and admin alerting throughout the trading day.
 
 ### Overview
 
-Lightweight, fast article alerting system that sends cumulative emails every hour from 9 AM - 10 PM EST.
+Lightweight, fast article ingestion system that sends a consolidated alert email to admin every hour from 9 AM - 10 PM EST.
 
 **Key Characteristics:**
 - ✅ No AI triage, no scraping, no analysis = fast processing (~2-5 min/hour)
-- ✅ Cumulative sending (each email shows ALL articles from midnight to current hour)
+- ✅ Incremental sending (each email shows articles from previous hour only, except 9 AM which includes overnight)
 - ✅ Stores in existing `articles` and `ticker_articles` tables
 - ✅ 7 AM daily workflow automatically finds these articles (zero duplicate work!)
-- ✅ One email per user with all 3 tickers jumbled together
+- ✅ One consolidated email to admin with all tickers jumbled together
 - ✅ Sorted newest to oldest across all tickers
 
 ### Architecture
@@ -1711,20 +1711,18 @@ Lightweight, fast article alerting system that sends cumulative emails every hou
 
 **Processing Flow:**
 ```
-1. Check time (9 AM - 10 PM EST) → Exit if outside window
-2. Load active beta users from database
-3. Deduplicate tickers across all users
-4. For each unique ticker:
+1. Load active users via load_active_users() (same as daily workflow)
+2. Deduplicate tickers across all users
+3. For each unique ticker:
    - Parse RSS feeds (11 feeds per ticker)
    - Resolve Google News URLs (3-tier: Advanced API → HTTP → ScrapFly)
    - Filter spam domains (exclude Tier 4 only)
    - Store in articles table (ON CONFLICT skips duplicates)
    - Link to ticker in ticker_articles (flagged=FALSE)
-5. For each user:
-   - Query cumulative articles (midnight to now) for their 3 tickers
-   - Generate HTML email using Jinja2 template
-   - Send with unique unsubscribe token
-   - BCC admin
+4. Query articles from time window:
+   - 9 AM: All articles from midnight (overnight catch-up)
+   - Other hours: Articles from previous hour boundary only
+5. Send consolidated email to admin only
 ```
 
 **Email Format:**
@@ -1772,11 +1770,11 @@ Command: python app.py alerts
 
 ### Features
 
-✅ **Cumulative Display** - Users see full day's articles in each email
-✅ **No Tracking Table** - Simple timestamp queries
+✅ **Incremental Display** - Admin sees only new articles since last hour (9 AM shows overnight)
+✅ **No Tracking Table** - Simple timestamp queries using hour boundaries
 ✅ **Zero Duplicate Work** - Articles reused by daily workflow
 ✅ **Fast Processing** - No AI = ~2-5 min per hourly run
-✅ **Same Unsubscribe** - Reuses existing token system
+✅ **Admin Only** - Consolidated email to admin for monitoring
 ✅ **Quality/Paywall Badges** - Visual indicators preserved
 
 ## Automated Filings Check System (NEW - October 30, 2025)

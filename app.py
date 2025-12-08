@@ -33109,21 +33109,23 @@ def process_ticker_feeds_hourly(ticker: str) -> Dict[str, int]:
 
 def process_hourly_alerts():
     """
-    Process hourly stock alerts for active beta users.
+    Process hourly stock alerts - ingests articles and sends consolidated email to admin.
 
     NEW (Oct 2025): Concurrent processing using production architecture.
 
     This function:
-    1. Checks if current time is 9 AM - 10 PM EST
-    2. Loads active beta users
-    3. Deduplicates tickers across users
-    4. Processes RSS feeds CONCURRENTLY using ThreadPoolExecutor (up to MAX_CONCURRENT_JOBS tickers)
-    5. Queries cumulative articles from midnight to now
-    6. Sends one email per user with all their tickers' articles
+    1. Loads active users via load_active_users() (same as daily workflow)
+    2. Deduplicates tickers across users
+    3. Processes RSS feeds CONCURRENTLY using ThreadPoolExecutor
+    4. Resolves Google News URLs
+    5. Queries articles from time window:
+       - 9 AM: All articles from midnight (overnight catch-up)
+       - Other hours: Articles from previous hour boundary only (incremental)
+    6. Sends ONE consolidated email to admin only
 
     Performance: ~20-40 seconds (was ~10 minutes with sequential processing)
 
-    Schedule: Cron controls timing (0 13-23,0-3 * * * = 8 AM - 10 PM EST / 9 AM - 11 PM EDT)
+    Schedule: Cron controls timing (0 14-3 * * * UTC = 9 AM - 10 PM EST)
     """
     eastern = pytz.timezone('America/Toronto')
     now_est = datetime.now(timezone.utc).astimezone(eastern)

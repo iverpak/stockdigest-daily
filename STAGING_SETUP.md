@@ -9,8 +9,8 @@ PRODUCTION                          STAGING
 ──────────────────────────────────  ──────────────────────────────────
 Render Web Service (main branch)    Render Web Service (staging branch)
 Render PostgreSQL (quantbrief-db)   Render PostgreSQL (weavara-db-staging)
-7 Cron jobs                         No crons (manual testing only)
-Real beta users                     Test accounts (your emails only)
+7 Cron jobs                         No crons (manual via /admin/cron)
+Real beta users                     Test accounts (whitelisted emails)
 ```
 
 ## Cost Estimate
@@ -24,22 +24,35 @@ Real beta users                     Test accounts (your emails only)
 
 ---
 
-## Step 1: Create Staging Branch
+## Git Workflow
 
-Run these commands locally (or in Codespaces):
+**Stay on `main` branch always.** Push to different remotes to control deployments:
 
 ```bash
-# Create and push staging branch
-git checkout main
-git pull origin main
-git checkout -b staging
-git push -u origin staging
+# Deploy to STAGING (for testing)
+git push origin main:staging
+
+# Deploy to PRODUCTION (when ready)
+git push origin main
 ```
 
-**Git Workflow:**
+**Why this approach:**
+- Never switch branches (no confusion about which branch you're on)
+- Production only gets code when you explicitly push to `main`
+- Simple mental model: `main:staging` = test, `main` = ship
+
+---
+
+## Step 1: Create Staging Branch
+
+```bash
+# One-time setup: create staging branch
+git checkout main
+git pull origin main
+git push origin main:staging
 ```
-feature-branch → staging (test) → main (production)
-```
+
+This creates the `staging` branch on GitHub from your current `main`.
 
 ---
 
@@ -60,7 +73,7 @@ feature-branch → staging (test) → main (production)
 ## Step 3: Create Staging Web Service
 
 1. Go to Render Dashboard → **New** → **Web Service**
-2. Connect to the same GitHub repo: `iverpak/weavara-daily`
+2. Connect to GitHub repo: `iverpak/weavara-daily`
 3. Configure:
    - **Name:** `weavara-staging`
    - **Branch:** `staging` (NOT main)
@@ -68,13 +81,13 @@ feature-branch → staging (test) → main (production)
    - **Build Command:** `pip install -r requirements.txt`
    - **Start Command:** `uvicorn app:APP --host 0.0.0.0 --port $PORT`
    - **Plan:** Starter ($7/month)
-   - **Auto-Deploy:** Yes
+   - **Auto-Deploy:** Yes (deploys when staging branch updated)
 
 ---
 
 ## Step 4: Environment Variables for Staging
 
-Copy these from production, with modifications noted:
+Copy from production, with these modifications:
 
 ### Core Settings (MODIFY)
 
@@ -88,8 +101,8 @@ Copy these from production, with modifications noted:
 
 | Variable | Notes |
 |----------|-------|
-| `ADMIN_EMAIL` | Same |
-| `ADMIN_TOKEN` | Same (or different for extra safety) |
+| `ADMIN_EMAIL` | Same (weavara.research@gmail.com) |
+| `ADMIN_TOKEN` | Same |
 | `ANTHROPIC_API_KEY` | Same |
 | `OPENAI_API_KEY` | Same |
 | `GEMINI_API_KEY` | Same |
@@ -104,19 +117,7 @@ Copy these from production, with modifications noted:
 | `MAILGUN_API_KEY` | Same |
 | `MAILGUN_DOMAIN` | Same |
 | `MAILGUN_FROM` | Same |
-| `SMTP_HOST` | Same |
-| `SMTP_PORT` | Same |
-| `SMTP_USERNAME` | Same |
-| `SMTP_PASSWORD` | Same |
-| `SMTP_STARTTLS` | Same |
-
-### GitHub Settings (SAME AS PRODUCTION)
-
-| Variable | Notes |
-|----------|-------|
-| `GITHUB_REPO` | Same |
-| `GITHUB_TOKEN` | Same |
-| `GITHUB_CSV_PATH` | Same |
+| `SMTP_*` | Same |
 
 ### Other Settings
 
@@ -124,27 +125,31 @@ Copy these from production, with modifications noted:
 |----------|-------|
 | `TZ_DEFAULT` | `America/Toronto` |
 | `PYTHON_VERSION` | `3.12.5` |
-| `DRY_RUN` | `false` (we want real emails to test accounts) |
 
 ---
 
 ## Step 5: Code Changes Required
 
-### 5.1 Add Staging Mode Email Whitelist
+### 5.1 Email Whitelist Safety
 
-Add this safety check to prevent accidental emails to real users.
+Prevents accidental emails to real users in staging.
 
-**Location:** `app.py` (near other config constants, around line 845)
+**Whitelisted emails:**
+- `weavara.research@gmail.com`
+- `ilia.verpakhovski@gmail.com`
+- `timelesstalesvisualized@gmail.com`
+- `stockdigest.research@gmail.com`
+
+**Implementation:** Add to `app.py`:
 
 ```python
 # Staging mode - only allow emails to whitelisted addresses
 STAGING_MODE = os.getenv("STAGING_MODE", "false").lower() == "true"
 STAGING_ALLOWED_EMAILS = [
     "weavara.research@gmail.com",
-    "weavara.research+test1@gmail.com",
-    "weavara.research+test2@gmail.com",
-    "weavara.research+test3@gmail.com",
-    # Add more test emails as needed (Gmail + trick goes to same inbox)
+    "ilia.verpakhovski@gmail.com",
+    "timelesstalesvisualized@gmail.com",
+    "stockdigest.research@gmail.com",
 ]
 
 def is_email_allowed_in_staging(email: str) -> bool:
@@ -154,29 +159,20 @@ def is_email_allowed_in_staging(email: str) -> bool:
     return email.lower() in [e.lower() for e in STAGING_ALLOWED_EMAILS]
 ```
 
-**Location:** `send_email()` function (around line 13215)
+**In `send_email()` function:**
 
 ```python
-def send_email(subject: str, html_body: str, to: str | None = None, bcc: str | None = None):
-    # ... existing validation ...
-
-    recipient = to or ADMIN_EMAIL
-
-    # STAGING SAFETY: Block emails to non-whitelisted addresses
-    if STAGING_MODE and not is_email_allowed_in_staging(recipient):
-        LOG.warning(f"⚠️ STAGING MODE: Blocked email to {recipient} (not in whitelist)")
-        return False
-
-    # ... rest of function ...
+# STAGING SAFETY: Block emails to non-whitelisted addresses
+if STAGING_MODE and not is_email_allowed_in_staging(recipient):
+    LOG.warning(f"⚠️ STAGING MODE: Blocked email to {recipient} (not in whitelist)")
+    return False
 ```
 
-### 5.2 Add Staging Indicator to Admin UI
+### 5.2 Staging Banner in Admin UI
 
-Add a visual banner so you know which environment you're in.
+Red banner on all admin pages when in staging mode.
 
-**Location:** Each admin template (e.g., `templates/admin_queue.html`, `templates/admin_users.html`)
-
-Add after `<body>` tag:
+**Add to each admin template after `<body>`:**
 
 ```html
 {% if staging_mode %}
@@ -186,9 +182,7 @@ Add after `<body>` tag:
 {% endif %}
 ```
 
-**Location:** Admin route handlers in `app.py`
-
-Pass `staging_mode` to templates:
+**Pass to templates in route handlers:**
 
 ```python
 return templates.TemplateResponse("admin_queue.html", {
@@ -198,111 +192,156 @@ return templates.TemplateResponse("admin_queue.html", {
 })
 ```
 
+### 5.3 Cron Jobs Admin Page (NEW)
+
+New `/admin/cron` page for manually triggering cron functions in staging.
+
+**Layout:** 3x3 grid of cards
+
+| 🗑️ Cleanup | ⚙️ Process | 📧 Send |
+|------------|------------|---------|
+| Delete old queue entries | Generate reports for all users | Send all ready emails |
+
+| 🔍 Check Filings | 📰 Hourly Alerts | 💾 Export Users |
+|------------------|------------------|-----------------|
+| Check for new SEC filings | Ingest articles + admin alert | Backup users to CSV |
+
+| 🕐 Scheduler | | |
+|--------------|---|---|
+| Run master scheduler | | |
+
+**API Endpoints:**
+- `POST /api/cron/cleanup`
+- `POST /api/cron/process`
+- `POST /api/cron/send`
+- `POST /api/cron/check-filings`
+- `POST /api/cron/alerts`
+- `POST /api/cron/export`
+- `POST /api/cron/scheduler`
+
+**Dashboard:** Add card linking to `/admin/cron`:
+> 🕐 **Cron Jobs** - Manually run scheduled tasks
+
 ---
 
 ## Step 6: Initialize Staging Database
 
-After the staging web service deploys:
+After staging web service deploys:
 
-1. The app will automatically run `ensure_schema()` on startup
-2. All tables will be created
+1. App automatically runs `ensure_schema()` on startup
+2. All tables created
 
-To add test users, either:
+**Add test users via Admin API:**
 
-**Option A: Via Admin API**
 ```bash
 curl -X POST "https://weavara-staging.onrender.com/api/beta-signup" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Test User 1",
-    "email": "weavara.research+test1@gmail.com",
+    "email": "weavara.research@gmail.com",
     "tickers": ["AAPL", "NVDA", "TSLA"]
   }'
 ```
 
-**Option B: Direct SQL**
-```sql
-INSERT INTO users (name, email, status)
-VALUES ('Test User 1', 'weavara.research+test1@gmail.com', 'active');
-
-INSERT INTO user_tickers (user_id, ticker)
-SELECT id, unnest(ARRAY['AAPL', 'NVDA', 'TSLA'])
-FROM users WHERE email = 'weavara.research+test1@gmail.com';
-```
+Or copy existing admin/test users from production database.
 
 ---
 
-## Step 7: Testing Workflow
-
-### Daily Development Workflow
-
-1. **Make changes** in Codespaces (on `main` branch)
-2. **Push to staging** to test:
-   ```bash
-   git checkout staging
-   git merge main
-   git push
-   ```
-3. **Test on staging** via `https://weavara-staging.onrender.com`
-4. **When verified**, push to production:
-   ```bash
-   git checkout main
-   git push origin main
-   ```
-
-### Manual Testing (No Crons)
-
-Staging has no cron jobs. Use admin endpoints to test:
+## Step 7: Daily Development Workflow
 
 ```bash
-# Test daily workflow
-curl -X POST "https://weavara-staging.onrender.com/api/generate-all-reports" \
-  -H "X-Admin-Token: YOUR_TOKEN"
+# 1. Make changes in Codespaces (stay on main branch)
+git add . && git commit -m "Your changes"
 
-# Test email sending
-curl -X POST "https://weavara-staging.onrender.com/api/send-all-ready" \
-  -H "X-Admin-Token: YOUR_TOKEN"
+# 2. Deploy to staging for testing
+git push origin main:staging
 
-# Test filings check
-curl -X POST "https://weavara-staging.onrender.com/api/check-filings" \
-  -H "X-Admin-Token: YOUR_TOKEN"
+# 3. Test on staging
+#    - URL: https://weavara-staging.onrender.com
+#    - Admin: https://weavara-staging.onrender.com/admin?token=XXX
+#    - Look for red "STAGING" banner
+
+# 4. When verified, deploy to production
+git push origin main
 ```
 
-Or use the Admin Test page: `https://weavara-staging.onrender.com/admin/test`
+### Manual Testing via /admin/cron
+
+Staging has no cron jobs. Use the Cron Jobs admin page:
+
+1. Go to `https://weavara-staging.onrender.com/admin/cron?token=XXX`
+2. Click buttons to manually trigger:
+   - Cleanup, Process, Send (daily workflow)
+   - Check Filings (SEC monitoring)
+   - Hourly Alerts (article ingestion)
+   - Export Users (backup)
+3. Check Render logs for output
 
 ---
 
-## Step 8: Weekly Sync (Optional)
+## Database Migrations
 
-If you add new database columns/tables, staging will auto-sync on next deploy (via `ensure_schema()`).
+### What `ensure_schema()` handles automatically:
+- New tables (`CREATE TABLE IF NOT EXISTS`)
+- New columns (`ALTER TABLE ADD COLUMN IF NOT EXISTS`)
 
-For major schema changes, you may need to:
+### What requires manual migration:
+- Dropping columns
+- Renaming columns
+- Changing column types
+- Data migrations
 
-1. Drop and recreate staging database, OR
-2. Run manual migration SQL
+### For staging:
+Staging DB is disposable. For major schema changes, just drop and recreate:
+1. Delete `weavara-db-staging` in Render
+2. Create new database
+3. Update `DATABASE_URL` env var
+4. Redeploy (schema auto-creates)
 
-**Recommended:** Do schema sync on weekends when production doesn't run reports.
+### For production:
+Requires careful planning:
+1. Test migration on staging first
+2. Run during low-traffic time
+3. Consider multi-deploy approach (add new column → migrate data → drop old)
+
+---
+
+## Rollback Strategy
+
+If you push something broken to production:
+
+**Option 1: Render Rollback**
+- Go to Render → Web Service → Deploys
+- Click "Rollback" on previous working deploy
+
+**Option 2: Git Revert**
+```bash
+git revert HEAD
+git push origin main
+```
 
 ---
 
 ## Checklist
 
 ### One-Time Setup
-- [ ] Create `staging` branch in git
-- [ ] Create Render PostgreSQL (`Weavara-db-staging`)
-- [ ] Create Render Web Service (`Weavara-staging`) pointing to `staging` branch
-- [ ] Copy environment variables (modify `DATABASE_URL`, add `STAGING_MODE=true`)
-- [ ] Add email whitelist safety code
-- [ ] Add staging indicator to admin UI
-- [ ] Add 3-5 test users in staging database
-- [ ] Test full flow (process → send → verify email received)
+- [ ] Create `staging` branch: `git push origin main:staging`
+- [ ] Create Render PostgreSQL (`weavara-db-staging`)
+- [ ] Create Render Web Service (`weavara-staging`) on `staging` branch
+- [ ] Copy environment variables, set `DATABASE_URL` and `STAGING_MODE=true`
+- [ ] Add email whitelist code to `app.py`
+- [ ] Add staging banner to admin templates
+- [ ] Create `/admin/cron` page and API endpoints
+- [ ] Add Cron Jobs card to admin dashboard
+- [ ] Add test users to staging database
+- [ ] Test full flow: process → send → verify email received
 
 ### Per-Feature Testing
-- [ ] Push changes to `staging` branch
-- [ ] Verify staging auto-deploys
-- [ ] Test feature via admin endpoints or UI
+- [ ] Push to staging: `git push origin main:staging`
+- [ ] Verify staging auto-deploys (check Render)
+- [ ] Test feature via admin UI or `/admin/cron`
 - [ ] Verify emails only go to whitelisted addresses
-- [ ] When verified, merge to `main` for production
+- [ ] When verified, push to production: `git push origin main`
 
 ---
 
@@ -312,19 +351,18 @@ For major schema changes, you may need to:
 - Wait for web service to fully deploy (runs `ensure_schema()` on startup)
 - Check Render logs for schema initialization
 
-### Emails not sending
+### Emails not sending in staging
 - Verify `STAGING_MODE=true` is set
 - Check if recipient is in `STAGING_ALLOWED_EMAILS`
 - Check Render logs for "STAGING MODE: Blocked email" warnings
 
 ### Can't tell which environment I'm in
 - Look for red "STAGING ENVIRONMENT" banner in admin UI
-- Check URL: `weavara-staging.onrender.com` vs `weavara-daily.onrender.com`
+- Check URL: `weavara-staging.onrender.com` vs `weavara.io`
 
 ### Schema out of sync
-- Staging runs same `ensure_schema()` as production
-- New columns/tables created automatically on deploy
-- For major changes, may need to recreate staging DB
+- Staging: Drop and recreate database
+- Production: Write manual migration SQL, test on staging first
 
 ---
 
@@ -332,7 +370,8 @@ For major schema changes, you may need to:
 
 | Environment | URL |
 |-------------|-----|
-| Production | `https://weavara.io` (or `https://weavara-daily.onrender.com`) |
+| Production | `https://weavara.io` |
 | Staging | `https://weavara-staging.onrender.com` |
 | Production Admin | `https://weavara.io/admin?token=XXX` |
 | Staging Admin | `https://weavara-staging.onrender.com/admin?token=XXX` |
+| Staging Cron Runner | `https://weavara-staging.onrender.com/admin/cron?token=XXX` |

@@ -185,6 +185,11 @@
     </style>
 </head>
 <body>
+    {% if staging_mode %}
+    <div style="background: #dc2626; color: white; padding: 10px 20px; text-align: center; font-weight: 600; font-size: 14px; letter-spacing: 0.5px;">
+        ⚠️ STAGING
+    </div>
+    {% endif %}
     <div class="header">
         <h1>🕐 Cron Jobs</h1>
         <p>Manually trigger scheduled tasks for testing</p>

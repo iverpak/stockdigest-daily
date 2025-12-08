@@ -843,6 +843,15 @@ SMTP_STARTTLS = os.getenv("SMTP_STARTTLS", "1") not in ("0", "false", "False", "
 EMAIL_FROM = _first(os.getenv("MAILGUN_FROM"), os.getenv("EMAIL_FROM"), SMTP_USERNAME)
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL")
 
+# Staging mode - prevents accidental emails to real users
+STAGING_MODE = os.getenv("STAGING_MODE", "false").lower() == "true"
+STAGING_ALLOWED_EMAILS = [
+    "weavara.research@gmail.com",
+    "ilia.verpakhovski@gmail.com",
+    "timelesstalesvisualized@gmail.com",
+    "stockdigest.research@gmail.com",
+]
+
 # Legal document versions
 TERMS_VERSION = "1.0"
 PRIVACY_VERSION = "1.0"
@@ -13210,6 +13219,15 @@ def send_email(subject: str, html_body: str, to: str | None = None, bcc: str | N
     if not all([SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM]):
         LOG.error("SMTP not fully configured")
         return False
+
+    # STAGING SAFETY: Block emails to non-whitelisted addresses
+    if STAGING_MODE:
+        all_recipients = [r for r in [to or ADMIN_EMAIL, bcc] if r]
+        allowed_lower = [e.lower() for e in STAGING_ALLOWED_EMAILS]
+        for recipient in all_recipients:
+            if recipient.lower() not in allowed_lower:
+                LOG.warning(f"⚠️ STAGING: Blocked email to {recipient} (not in whitelist)")
+                return False
 
     try:
         recipient = to or ADMIN_EMAIL
@@ -25665,7 +25683,8 @@ def admin_dashboard(request: Request, token: str = Query(...)):
 
     return templates.TemplateResponse("admin.html", {
         "request": request,
-        "token": token
+        "token": token,
+        "staging_mode": STAGING_MODE
     })
 
 @APP.get("/admin/users")
@@ -25676,7 +25695,8 @@ def admin_users_page(request: Request, token: str = Query(...)):
 
     return templates.TemplateResponse("admin_users.html", {
         "request": request,
-        "token": token
+        "token": token,
+        "staging_mode": STAGING_MODE
     })
 
 @APP.get("/admin/queue")
@@ -25687,7 +25707,8 @@ def admin_queue_page(request: Request, token: str = Query(...)):
 
     return templates.TemplateResponse("admin_queue.html", {
         "request": request,
-        "token": token
+        "token": token,
+        "staging_mode": STAGING_MODE
     })
 
 @APP.get("/admin/test")
@@ -25698,7 +25719,8 @@ def admin_test_page(request: Request, token: str = Query(...)):
 
     return templates.TemplateResponse("admin_test.html", {
         "request": request,
-        "token": token
+        "token": token,
+        "staging_mode": STAGING_MODE
     })
 
 @APP.get("/admin/settings")
@@ -25709,7 +25731,8 @@ def admin_settings_page(request: Request, token: str = Query(...)):
 
     return templates.TemplateResponse("admin_settings.html", {
         "request": request,
-        "token": token
+        "token": token,
+        "staging_mode": STAGING_MODE
     })
 
 @APP.get("/admin/schedule")
@@ -25720,7 +25743,8 @@ def admin_schedule_page(request: Request, token: str = Query(...)):
 
     return templates.TemplateResponse("admin_schedule.html", {
         "request": request,
-        "token": token
+        "token": token,
+        "staging_mode": STAGING_MODE
     })
 
 @APP.get("/admin/domains")
@@ -25731,7 +25755,8 @@ def admin_domains_page(request: Request, token: str = Query(...)):
 
     return templates.TemplateResponse("admin_domains.html", {
         "request": request,
-        "token": token
+        "token": token,
+        "staging_mode": STAGING_MODE
     })
 
 @APP.get("/admin/research")
@@ -25742,7 +25767,8 @@ def admin_research_page(request: Request, token: str = Query(...)):
 
     return templates.TemplateResponse("admin_research.html", {
         "request": request,
-        "token": token
+        "token": token,
+        "staging_mode": STAGING_MODE
     })
 
 @APP.get("/admin/cron")
@@ -25753,7 +25779,8 @@ def admin_cron_page(request: Request, token: str = Query(...)):
 
     return templates.TemplateResponse("admin_cron.html", {
         "request": request,
-        "token": token
+        "token": token,
+        "staging_mode": STAGING_MODE
     })
 
 # ------------------------------------------------------------------------------

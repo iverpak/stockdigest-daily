@@ -25818,7 +25818,8 @@ async def api_cron_check_filings(request: Request):
 
     try:
         LOG.info("🕐 [CRON API] Running check_filings via /api/cron/check-filings")
-        check_all_filings_cron()
+        # Run in thread to allow asyncio.run() inside the function
+        await asyncio.to_thread(check_all_filings_cron)
         return {"status": "success", "message": "Filings check completed"}
     except Exception as e:
         LOG.error(f"❌ [CRON API] Check filings failed: {e}")
@@ -25834,7 +25835,8 @@ async def api_cron_alerts(request: Request):
 
     try:
         LOG.info("🕐 [CRON API] Running alerts via /api/cron/alerts")
-        process_hourly_alerts()
+        # Run in thread to allow asyncio.run() inside the function
+        await asyncio.to_thread(process_hourly_alerts)
         return {"status": "success", "message": "Hourly alerts completed"}
     except Exception as e:
         LOG.error(f"❌ [CRON API] Alerts failed: {e}")
@@ -29773,14 +29775,7 @@ def check_all_filings_cron():
                 results.append(result)
             return results
 
-        # Handle both CLI (no event loop) and FastAPI (existing event loop) contexts
-        try:
-            loop = asyncio.get_running_loop()
-            # Already in event loop (FastAPI) - create task and run
-            results = loop.run_until_complete(check_all())
-        except RuntimeError:
-            # No event loop (CLI) - use asyncio.run()
-            results = asyncio.run(check_all())
+        results = asyncio.run(check_all())
 
         # Aggregate results
         for result in results:
@@ -33322,12 +33317,7 @@ def process_hourly_alerts():
 
                 if article_ids:
                     LOG.info(f"[{ticker}] Resolving {len(article_ids)} Google News URLs...")
-                    # Handle both CLI (no event loop) and FastAPI (existing event loop) contexts
-                    try:
-                        loop = asyncio.get_running_loop()
-                        loop.run_until_complete(resolve_flagged_google_news_urls(ticker, article_ids))
-                    except RuntimeError:
-                        asyncio.run(resolve_flagged_google_news_urls(ticker, article_ids))
+                    asyncio.run(resolve_flagged_google_news_urls(ticker, article_ids))
                     LOG.info(f"[{ticker}] ✅ Resolution complete")
             except Exception as e:
                 LOG.error(f"[{ticker}] ❌ Resolution failed: {e}")

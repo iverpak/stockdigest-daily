@@ -11,6 +11,38 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **Legal:** Province of Ontario, Canada | CASL & PIPEDA Compliant
 **Contact:** weavara.research@gmail.com
 
+## Staging Environment
+
+**IMPORTANT:** All code changes must go to staging first, then production on user request.
+
+| Environment | URL | Branch | Database |
+|-------------|-----|--------|----------|
+| **Production** | https://weavara.io | `main` | quantbrief-db |
+| **Staging** | https://weavara-staging.onrender.com | `staging` | weavara-db-staging |
+
+**Deployment Workflow:**
+```bash
+# 1. Push to STAGING (always do this first)
+git push origin main:staging
+
+# 2. Test on staging, verify changes work
+
+# 3. Push to PRODUCTION (only when user requests)
+git push origin main
+```
+
+**Key Differences:**
+- **Staging:** No cron jobs (use `/admin/cron` for manual triggers), `STAGING_MODE=true` (email whitelist active)
+- **Production:** 7 automated cron jobs, real user emails
+
+**Email Safety:** When `STAGING_MODE=true`, emails only send to whitelisted addresses (blocks accidental emails to real users).
+
+**Admin URLs:**
+- Staging: `https://weavara-staging.onrender.com/admin?token=XXX`
+- Staging Cron Runner: `https://weavara-staging.onrender.com/admin/cron?token=XXX`
+
+**Full Setup Guide:** See [STAGING_SETUP.md](STAGING_SETUP.md)
+
 ## Development Commands
 
 ### Running the Application

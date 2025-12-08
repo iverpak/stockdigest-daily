@@ -1512,35 +1512,8 @@ def ensure_schema():
                 -- Add ingestion source tracking (Jan 2025)
                 ALTER TABLE articles ADD COLUMN IF NOT EXISTS ingestion_source VARCHAR(50);
 
-                -- Add financial data columns to ticker_reference if they don't exist
-                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_last_price NUMERIC(15, 2);
-                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_price_change_pct NUMERIC(10, 4);
-                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_yesterday_return_pct NUMERIC(10, 4);
-                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_ytd_return_pct NUMERIC(10, 4);
-                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_market_cap NUMERIC(20, 2);
-                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_enterprise_value NUMERIC(20, 2);
-                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_volume NUMERIC(15, 0);
-                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_avg_volume NUMERIC(15, 0);
-                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_analyst_target NUMERIC(15, 2);
-                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_analyst_range_low NUMERIC(15, 2);
-                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_analyst_range_high NUMERIC(15, 2);
-                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_analyst_count INTEGER;
-                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_analyst_recommendation VARCHAR(50);
-                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS financial_snapshot_date DATE;
-
-                -- Add geographic markets and subsidiaries metadata (Oct 2025)
-                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS geographic_markets TEXT;
-                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS subsidiaries TEXT;
-
-                -- Add value chain metadata (Oct 31, 2025) - 8 columns for upstream/downstream companies
-                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS upstream_1_name VARCHAR(255);
-                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS upstream_1_ticker VARCHAR(20);
-                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS upstream_2_name VARCHAR(255);
-                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS upstream_2_ticker VARCHAR(20);
-                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS downstream_1_name VARCHAR(255);
-                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS downstream_1_ticker VARCHAR(20);
-                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS downstream_2_name VARCHAR(255);
-                ALTER TABLE ticker_reference ADD COLUMN IF NOT EXISTS downstream_2_ticker VARCHAR(20);
+                -- NOTE: ticker_reference columns (financial_*, geographic_markets, subsidiaries, upstream_*, downstream_*)
+                -- are defined in the CREATE TABLE statement below. No ALTER needed.
 
                 -- NEW ARCHITECTURE: Feeds table (category-neutral, shareable feeds)
                 CREATE TABLE IF NOT EXISTS feeds (

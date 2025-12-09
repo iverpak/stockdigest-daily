@@ -739,7 +739,7 @@ def generate_editorial_filter_email(
 <meta charset="UTF-8">
 <style>
 body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; background: #f9f9f9; }}
-.header {{ background: linear-gradient(135deg, #2c3e50 0%, #1a252f 100%); color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }}
+.header {{ background: linear-gradient(135deg, #1e3a5f 0%, #0d1b2a 100%); color: #ffffff; padding: 20px; border-radius: 8px; margin-bottom: 20px; }}
 .header h2 {{ margin: 0 0 10px 0; }}
 .header p {{ margin: 5px 0; opacity: 0.9; font-size: 14px; }}
 .summary {{ background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
@@ -836,19 +836,16 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans
             css_class = 'bullet-keep' if decision == 'KEEP' else 'bullet-remove'
             badge_class = 'badge-keep' if decision == 'KEEP' else 'badge-remove'
 
-            content_preview = b['content'][:300] + '...' if len(b['content']) > 300 else b['content']
-
             html += f"""
 <div class="bullet {css_class}">
     <div class="bullet-header">
         <span class="bullet-id">{b['bullet_id']}</span>
         <span class="badge {badge_class}">{decision}</span>
     </div>
-    <div class="content">{_escape_html(content_preview)}</div>
+    <div class="content">{_escape_html(b['content'])}</div>
 """
             if b['context']:
-                context_preview = b['context'][:200] + '...' if len(b['context']) > 200 else b['context']
-                html += f'    <div class="context"><strong>Context:</strong> {_escape_html(context_preview)}</div>\n'
+                html += f'    <div class="context"><strong>Context:</strong> {_escape_html(b["context"])}</div>\n'
 
             html += '</div>\n'
 

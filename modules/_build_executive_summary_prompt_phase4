@@ -144,23 +144,53 @@ SIGNAL COUNTING:
 - Count surviving bullets where sentiment = "bearish" → bearish_count
 - Count total surviving bullets → total_count
 
+===============================================================================
+ESCAPE HATCH TEXT - USE VERBATIM (DO NOT PARAPHRASE)
+===============================================================================
+
+CRITICAL: Copy these EXACT phrases. Do not shorten, rephrase, or paraphrase.
+
+CONTENT ESCAPE HATCHES (copy verbatim):
+
+1. BOTTOM LINE (total_count = 0):
+   COPY EXACTLY: "No material developments reported for the target company this period."
+
+2. UPSIDE (bullish_count = 0):
+   COPY EXACTLY: "No material upside catalysts discussed in recent articles."
+
+3. UPSIDE (bullish_count = 1):
+   Write 1-2 sentences, then APPEND EXACTLY: "No additional upside catalysts discussed in recent articles."
+
+4. DOWNSIDE (bearish_count = 0):
+   COPY EXACTLY: "No material downside risks discussed in recent articles."
+
+5. DOWNSIDE (bearish_count = 1):
+   Write 1-2 sentences, then APPEND EXACTLY: "No additional downside risks discussed in recent articles."
+
+CONTEXT ESCAPE HATCH (copy verbatim):
+
+For ALL sections when no relevant filing context exists:
+   COPY EXACTLY: "No relevant filing context found for this development"
+
+===============================================================================
+
 SCENARIO OUTPUT BY SIGNAL COUNT:
 
 BOTTOM LINE:
-- total_count = 0 → "No material developments reported for the target company this period."
+- total_count = 0 → Use verbatim escape hatch above
 - total_count ≥ 1 → Full synthesis from surviving bullets
 
 UPSIDE SCENARIO:
-- bullish_count = 0 → "No material upside catalysts discussed in recent articles."
-- bullish_count = 1 → Write 1-2 sentences on that signal + "No additional upside catalysts discussed in recent articles."
+- bullish_count = 0 → Use verbatim escape hatch above
+- bullish_count = 1 → Write 1-2 sentences + verbatim escape hatch above
 - bullish_count ≥ 2 → Full 80-160 word scenario
 
 DOWNSIDE SCENARIO:
-- bearish_count = 0 → "No material downside risks discussed in recent articles."
-- bearish_count = 1 → Write 1-2 sentences on that signal + "No additional downside risks discussed in recent articles."
+- bearish_count = 0 → Use verbatim escape hatch above
+- bearish_count = 1 → Write 1-2 sentences + verbatim escape hatch above
 - bearish_count ≥ 2 → Full 80-160 word scenario
 
-QUIET DAY OUTPUT (0 total surviving bullets):
+QUIET DAY OUTPUT EXAMPLE (0 total surviving bullets):
 {
   "phase4_bottom_line": {
     "content": "No material developments reported for the target company this period.",
@@ -183,7 +213,7 @@ QUIET DAY OUTPUT (0 total surviving bullets):
 }
 
 CRITICAL: When signals are low (0-1), output minimal scenario. Do not fabricate
-scenarios from tangentially related data. Use escape hatch phrases exactly as written.
+scenarios from tangentially related data. Use escape hatch phrases VERBATIM as written above.
 
 ===============================================================================
 BOTTOM LINE - EDITORIAL DISCIPLINE (<=150 words)
@@ -275,10 +305,10 @@ UPSIDE SCENARIO: Single paragraph, 3-6 sentences (80-160 words)
 
 CONTENT SUFFICIENCY CHECK - Count surviving bullets with sentiment="bullish":
 
-Bullish bullets = 0 -> "No material upside catalysts discussed in recent articles."
-Bullish bullets = 1 -> Write 1-2 sentences + "No additional upside catalysts discussed in recent articles."
-Bullish bullets = 2-3 -> Write 3-4 sentence scenario
-Bullish bullets >= 4 -> Write 4-6 sentence scenario (full synthesis)
+Bullish bullets = 0 → COPY EXACTLY: "No material upside catalysts discussed in recent articles."
+Bullish bullets = 1 → Write 1-2 sentences, then APPEND EXACTLY: "No additional upside catalysts discussed in recent articles."
+Bullish bullets = 2-3 → Write 3-4 sentence scenario
+Bullish bullets >= 4 → Write 4-6 sentence scenario (full synthesis)
 
 INFERENCE DISCIPLINE: TIER 0 ONLY (Facts + Attribution). No unattributed inference.
 
@@ -314,10 +344,10 @@ DOWNSIDE SCENARIO: Single paragraph, 3-6 sentences (80-160 words)
 
 CONTENT SUFFICIENCY CHECK - Count surviving bullets with sentiment="bearish":
 
-Bearish bullets = 0 -> "No material downside risks discussed in recent articles."
-Bearish bullets = 1 -> Write 1-2 sentences + "No additional downside risks discussed in recent articles."
-Bearish bullets = 2-3 -> Write 3-4 sentence scenario
-Bearish bullets >= 4 -> Write 4-6 sentence scenario (full synthesis)
+Bearish bullets = 0 → COPY EXACTLY: "No material downside risks discussed in recent articles."
+Bearish bullets = 1 → Write 1-2 sentences, then APPEND EXACTLY: "No additional downside risks discussed in recent articles."
+Bearish bullets = 2-3 → Write 3-4 sentence scenario
+Bearish bullets >= 4 → Write 4-6 sentence scenario (full synthesis)
 
 INFERENCE DISCIPLINE: TIER 0 ONLY (Facts + Attribution). No unattributed inference.
 
@@ -422,7 +452,9 @@ Context: "Q3 AI semi revenue $12.2B; seven large LLM developers using chips"
 
 ESCAPE HATCH:
 If no relevant filing context exists for your content threads:
-"No relevant filing context found for this development"
+COPY EXACTLY: "No relevant filing context found for this development"
+
+Do NOT paraphrase to "No relevant filing context available" or any other variation.
 
 NEVER FORCE CONTEXT:
 - Don't stretch to include tangential filing data

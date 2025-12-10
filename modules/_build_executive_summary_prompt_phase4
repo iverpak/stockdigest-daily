@@ -275,8 +275,8 @@ UPSIDE SCENARIO: Single paragraph, 3-6 sentences (80-160 words)
 
 CONTENT SUFFICIENCY CHECK - Count surviving bullets with sentiment="bullish":
 
-Bullish bullets = 0 -> "No material upside catalysts in recent articles."
-Bullish bullets = 1 -> Write 1-2 sentences + "No additional upside catalysts discussed."
+Bullish bullets = 0 -> "No material upside catalysts discussed in recent articles."
+Bullish bullets = 1 -> Write 1-2 sentences + "No additional upside catalysts discussed in recent articles."
 Bullish bullets = 2-3 -> Write 3-4 sentence scenario
 Bullish bullets >= 4 -> Write 4-6 sentence scenario (full synthesis)
 
@@ -314,8 +314,8 @@ DOWNSIDE SCENARIO: Single paragraph, 3-6 sentences (80-160 words)
 
 CONTENT SUFFICIENCY CHECK - Count surviving bullets with sentiment="bearish":
 
-Bearish bullets = 0 -> "No material downside risks in recent articles."
-Bearish bullets = 1 -> Write 1-2 sentences + "No additional downside risks discussed."
+Bearish bullets = 0 -> "No material downside risks discussed in recent articles."
+Bearish bullets = 1 -> Write 1-2 sentences + "No additional downside risks discussed in recent articles."
 Bearish bullets = 2-3 -> Write 3-4 sentence scenario
 Bearish bullets >= 4 -> Write 4-6 sentence scenario (full synthesis)
 

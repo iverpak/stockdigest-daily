@@ -133,6 +133,59 @@ PHASE A: CONTENT SYNTHESIS
 ===============================================================================
 
 ===============================================================================
+QUIET DAY HANDLING - ESCAPE HATCH FOR MINIMAL SURVIVING BULLETS
+===============================================================================
+
+Phase 4 receives surviving bullets (filtered by Phase 1.5 and Phase 3).
+Count surviving bullets by sentiment to determine output:
+
+SIGNAL COUNTING:
+- Count surviving bullets where sentiment = "bullish" → bullish_count
+- Count surviving bullets where sentiment = "bearish" → bearish_count
+- Count total surviving bullets → total_count
+
+SCENARIO OUTPUT BY SIGNAL COUNT:
+
+BOTTOM LINE:
+- total_count = 0 → "No material developments reported for the target company this period."
+- total_count ≥ 1 → Full synthesis from surviving bullets
+
+UPSIDE SCENARIO:
+- bullish_count = 0 → "No material upside catalysts discussed in recent articles."
+- bullish_count = 1 → Write 1-2 sentences on that signal + "No additional upside catalysts discussed in recent articles."
+- bullish_count ≥ 2 → Full 80-160 word scenario
+
+DOWNSIDE SCENARIO:
+- bearish_count = 0 → "No material downside risks discussed in recent articles."
+- bearish_count = 1 → Write 1-2 sentences on that signal + "No additional downside risks discussed in recent articles."
+- bearish_count ≥ 2 → Full 80-160 word scenario
+
+QUIET DAY OUTPUT (0 total surviving bullets):
+{
+  "phase4_bottom_line": {
+    "content": "No material developments reported for the target company this period.",
+    "context": "No relevant filing context found for this development",
+    "source_articles": [],
+    "date_range": "[extract from input]"
+  },
+  "phase4_upside_scenario": {
+    "content": "No material upside catalysts discussed in recent articles.",
+    "context": "No relevant filing context found for this development",
+    "source_articles": [],
+    "date_range": ""
+  },
+  "phase4_downside_scenario": {
+    "content": "No material downside risks discussed in recent articles.",
+    "context": "No relevant filing context found for this development",
+    "source_articles": [],
+    "date_range": ""
+  }
+}
+
+CRITICAL: When signals are low (0-1), output minimal scenario. Do not fabricate
+scenarios from tangentially related data. Use escape hatch phrases exactly as written.
+
+===============================================================================
 BOTTOM LINE - EDITORIAL DISCIPLINE (<=150 words)
 ===============================================================================
 
@@ -369,7 +422,7 @@ Context: "Q3 AI semi revenue $12.2B; seven large LLM developers using chips"
 
 ESCAPE HATCH:
 If no relevant filing context exists for your content threads:
-"No relevant filing context found for these developments"
+"No relevant filing context found for this development"
 
 NEVER FORCE CONTEXT:
 - Don't stretch to include tangential filing data
@@ -483,7 +536,8 @@ FINAL CHECKLIST BEFORE OUTPUT
 ===============================================================================
 
 BOTTOM LINE:
-[ ] <=150 words
+[ ] <=150 words (or escape hatch if 0 total surviving bullets)
+[ ] Escape hatch: "No material developments reported for the target company this period."
 [ ] 100% attribution density
 [ ] No banned phrases/verbs
 [ ] Balance rule applied (bullish/bearish proportional)
@@ -491,18 +545,23 @@ BOTTOM LINE:
 
 UPSIDE SCENARIO:
 [ ] 80-160 words (or escape hatch if 0-1 bullish signals)
+[ ] Escape hatch (0 bullish): "No material upside catalysts discussed in recent articles."
+[ ] Escape hatch (1 bullish): 1-2 sentences + "No additional upside catalysts discussed in recent articles."
 [ ] 100% attribution density
 [ ] Named sources (analyst+firm or publication)
 [ ] source_articles contains only used bullet indices
 
 DOWNSIDE SCENARIO:
 [ ] 80-160 words (or escape hatch if 0-1 bearish signals)
+[ ] Escape hatch (0 bearish): "No material downside risks discussed in recent articles."
+[ ] Escape hatch (1 bearish): 1-2 sentences + "No additional downside risks discussed in recent articles."
 [ ] 100% attribution density
 [ ] Named sources (analyst+firm or publication)
 [ ] source_articles contains only used bullet indices
 
 CONTEXT (all 3):
-[ ] 50-75 words each (or escape hatch)
+[ ] 50-75 words each (or escape hatch if no relevant context)
+[ ] Escape hatch: "No relevant filing context found for this development"
 [ ] Quantified where possible (%, $, units)
 [ ] No forced/tangential context
 

@@ -17849,6 +17849,40 @@ async def process_regenerate_email_phase(job: dict):
                         LOG.info(f"✅ [{ticker}] [JOB {job_id}] Phase 3 content saved")
 
                         # ============================================================
+                        # PHASE 4: Paragraph Generation (A/B Testing)
+                        # ============================================================
+                        LOG.info(f"[{ticker}] 📝 [JOB {job_id}] Running Phase 4...")
+
+                        try:
+                            from modules.executive_summary_phase4 import generate_executive_summary_phase4
+
+                            phase4_result, phase4_usage = generate_executive_summary_phase4(
+                                ticker=ticker,
+                                phase3_json=phase3_merged_json,
+                                anthropic_api_key=ANTHROPIC_API_KEY,
+                                gemini_api_key=GEMINI_API_KEY,
+                                primary_model='claude'
+                            )
+
+                            # Track Phase 4 cost
+                            if phase4_usage:
+                                phase4_model = phase4_usage.get("model", "")
+                                if "claude" in phase4_model.lower():
+                                    calculate_claude_api_cost(phase4_usage, "executive_summary_phase4", model_name=phase4_model)
+                                elif "gemini" in phase4_model.lower():
+                                    calculate_gemini_api_cost(phase4_usage, "executive_summary_phase4", model="pro", model_name=phase4_model)
+
+                            # Attach Phase 4 for Email #2 A/B display
+                            if phase4_result:
+                                phase3_merged_json['phase4'] = phase4_result
+                                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 4 complete")
+                            else:
+                                LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Phase 4 returned no result")
+
+                        except Exception as phase4_error:
+                            LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Phase 4 failed (non-fatal): {phase4_error}")
+
+                        # ============================================================
                         # EMAIL #2: Content QA (5-10s)
                         # ============================================================
                         update_job_status(job_id, progress=85)

@@ -16,6 +16,29 @@ YOUR INPUT: ONLY surviving bullets that passed all filters:
 YOUR JOB: Generate 3 paragraph sections from the CONTENT and CONTEXT of surviving bullets.
 You write paragraphs based ONLY on what survived filtering - never reference removed content.
 
+===============================================================================
+CRITICAL DATA SEPARATION - NEVER MIX CONTENT AND CONTEXT
+===============================================================================
+
+Each bullet has TWO distinct data fields:
+- `content`: Article-derived facts (from news articles, per Bloomberg, per WSJ, etc.)
+- `context`: Filing-derived facts (from 10-K, 10-Q, earnings calls, SEC filings)
+
+Your outputs have TWO distinct fields per section:
+- `content`: Paragraph synthesized from bullet CONTENT fields ONLY
+- `context`: Synthesis from bullet CONTEXT fields ONLY
+
+HARD RULES:
+1. Output "content" field → Use ONLY bullet "content" fields (article-derived)
+2. Output "context" field → Use ONLY bullet "context" fields (filing-derived)
+3. NEVER put filing data (10-K, 10-Q, per earnings call) in output "content" field
+4. NEVER put article data (per Bloomberg, per WSJ, per Reuters) in output "context" field
+
+WHY THIS MATTERS:
+- Content = what news articles reported this week (timely, market-moving)
+- Context = what SEC filings show for background (materiality, scale)
+- Mixing them confuses readers about what's new news vs. existing company data
+
 OUTPUT SECTIONS:
 1. bottom_line: Synthesis of most material developments
 2. upside_scenario: Bullish narrative from surviving bullish signals
@@ -246,6 +269,25 @@ CONTEXT SYNTHESIS RULES (50-75 words per section)
 For each paragraph section, synthesize context from the context fields of bullets used.
 
 PURPOSE: Add filing-derived materiality to the article-derived content.
+
+SYNTHESIS PROCESS:
+
+1. REVIEW all surviving bullet context fields for this paragraph
+   - Each bullet has a `context` field (40-50 words from Phase 2)
+   - Read through all contexts from bullets you used in the paragraph
+
+2. SELECT 2-3 most relevant contexts
+   - Ask: "Which bullet contexts add the most valuable quantification/materiality?"
+   - Prioritize contexts that explain or quantify the paragraph's key themes
+
+3. EXTRACT key facts from selected contexts
+   - Pull specific numbers, percentages, metrics
+   - Keep filing citations intact
+
+4. COMBINE into 50-75 words
+   - Remove redundancy if multiple contexts cite the same fact
+   - Use semicolons to separate distinct data points
+   - Use proper citation format: "per FY2024 10-K", "per Q3 10-Q", "per Oct 23 call"
 
 CONTEXT RELEVANCE CRITERIA (all must be met):
 OK Timeframe match: Near-term bullet -> near-term context (not 10-15 year plans)

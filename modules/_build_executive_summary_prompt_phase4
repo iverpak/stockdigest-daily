@@ -114,6 +114,25 @@ FIELD DEFINITIONS:
 - date_range: Consolidated date range for post-processing
 
 ===============================================================================
+GENERATION ORDER: CONTENT FIRST, THEN CONTEXT
+===============================================================================
+
+PHASE A: CONTENT SYNTHESIS
+Generate content paragraphs for all 3 sections (bottom_line, upside, downside)
+using bullet CONTENT fields. Track which bullets you use for each section.
+
+PHASE B: CONTEXT SYNTHESIS
+For each section, generate context by selecting from bullet CONTEXT fields.
+Start with context from the SAME bullets you used in Phase A - these are
+pre-linked by Phase 2 and have highest relevance.
+
+Sections below are organized: Content rules first (Phase A), then Context rules (Phase B).
+
+===============================================================================
+PHASE A: CONTENT SYNTHESIS
+===============================================================================
+
+===============================================================================
 BOTTOM LINE - EDITORIAL DISCIPLINE (<=150 words)
 ===============================================================================
 
@@ -263,46 +282,93 @@ ATTRIBUTION REQUIREMENTS (same as Upside):
 [ ] Coverage check: Include all high-impact bearish developments from surviving bullets
 
 ===============================================================================
+PHASE B: CONTEXT SYNTHESIS
+===============================================================================
+
+===============================================================================
 CONTEXT SYNTHESIS RULES (50-75 words per section)
 ===============================================================================
 
-For each paragraph section, synthesize context from the context fields of bullets used.
+For each paragraph section (bottom_line, upside_scenario, downside_scenario):
 
-PURPOSE: Add filing-derived materiality to the article-derived content.
+PURPOSE: Add filing-derived materiality that DIRECTLY SUPPORTS your content paragraph.
+Context must close the loop on content claims - never dump tangential data.
+
+WHY THIS WORKS:
+Phase 2 already enriched each bullet by answering the 12 questions below
+and stored those answers in each bullet's `context` field. The context
+is PRE-LINKED to its bullet's content.
+
+SELECTION PRIORITY:
+1. FIRST: Context fields of bullets you used in your content paragraph
+   → These are already derived for those specific topics (highest relevance)
+2. THEN: Context fields of other surviving bullets (if needed for coverage)
+
+Your job is NOT to answer these questions yourself - it's to SELECT which
+pre-computed context answers best support the content threads you wrote.
 
 SYNTHESIS PROCESS:
 
-1. REVIEW all surviving bullet context fields for this paragraph
-   - Each bullet has a `context` field (40-50 words from Phase 2)
-   - Read through all contexts from bullets you used in the paragraph
+STEP 1: Read the content paragraph you just wrote
+- Understand what the paragraph discusses and its narrative flow
+- Note what's emphasized first (most important to the narrative)
+- List the 2-4 key threads/claims you made in content
 
-2. SELECT 2-3 most relevant contexts
-   - Ask: "Which bullet contexts add the most valuable quantification/materiality?"
-   - Prioritize contexts that explain or quantify the paragraph's key themes
+STEP 2: Review bullet context fields (priority order)
+- FIRST: Context fields of bullets you used in your content paragraph
+  → These are pre-linked to the topics you wrote about (highest relevance)
+- THEN: Context fields of other surviving bullets (if needed for coverage)
+- Each bullet has a `context` field (40-50 words from Phase 2)
 
-3. EXTRACT key facts from selected contexts
-   - Pull specific numbers, percentages, metrics
-   - Keep filing citations intact
+STEP 3: Select 2-3 most relevant contexts
+- Ask: "Which bullet contexts would add the most valuable
+  quantification/materiality/explanation for what my content discussed?"
+- Prioritize contexts that enrich the narrative in content's order of emphasis
+- Look for contexts that answer these questions for topics content mentioned:
+  1. How big is this? (% of revenue, assets, capacity)
+  2. Is this profitable? (margins, ROIC, unit economics)
+  3. Do they rely on this? (concentration, dependencies, sole source)
+  4. Better or worse than before? (QoQ, YoY, vs guidance)
+  5. Did they warn about this? (disclosed risks now materializing)
+  6. How do they compare to peers? (market share, capacity, cost position)
+  7. Good use of money? (ROIC vs WACC, payback period)
+  8. On schedule? (milestones, delays, approvals)
+  9. Financially sustainable? (FCF, leverage, liquidity)
+  10. How does this fit the business model? (strategic alignment)
+  11. What's the cost/revenue exposure? (COGS breakdown, pricing)
+  12. What is this entity? (define unfamiliar divisions, targets, products)
 
-4. COMBINE into 50-75 words
-   - Remove redundancy if multiple contexts cite the same fact
-   - Use semicolons to separate distinct data points
-   - Use proper citation format: "per FY2024 10-K", "per Q3 10-Q", "per Oct 23 call"
+STEP 4: Verify thread mapping before synthesizing
+- For EACH key thread in your content, identify which context substantiates it
+- If a content thread has no supporting context → either the thread shouldn't be in content, or use escape hatch
+- No orphan data points in context (every fact must link to a content claim)
+
+STEP 5: Synthesize into 50-75 words
+- Extract key facts from selected contexts
+- Combine into natural prose with proper citations (per FY2024 10-K, per Q3 10-Q, per Oct 23 call)
+- Remove redundancy if multiple contexts cite the same fact
+- Use semicolons to separate distinct data points
 
 CONTEXT RELEVANCE CRITERIA (all must be met):
-OK Timeframe match: Near-term bullet -> near-term context (not 10-15 year plans)
-OK Direct connection: Relevance shown in 1-2 steps (not multiple logical leaps)
-OK Quantified materiality: Shows scale (%, $, units)
+✓ Thread match: Context supports a specific thread in your content paragraph
+✓ Timeframe match: Near-term content → near-term context (not 10-15 year plans)
+✓ Direct connection: Relevance shown in 1-2 steps (not multiple logical leaps)
+✓ Quantified materiality: Shows scale (%, $, units)
 
-GOOD CONTEXT EXAMPLES:
-"Q3 revenue $10.5B (+15% YoY) with Segment A representing 62% at 18% operating margin per Q3 10-Q; raised FY guidance to $42B from $40B per Oct 23 call"
+LINKING EXAMPLES:
 
-"Customer represents 28% of Q2 revenue per 10-Q; management called relationship 'strategic and expanding' per Aug 7 call"
+GOOD (context supports content threads):
+Content: "hyperscaler expansion, VMware margins, TSMC supply security"
+Context: "fourth AI chip customer with $10B orders (hyperscaler); 77% operating margin (VMware); TSMC capacity allocation increased 30% (supply)"
+→ Each content thread has a context proof point
 
-"New product gross margin 42% vs company average 31% per Q3 10-Q with 23% adoption in launch quarter"
+BAD (context tangential to content):
+Content: "hyperscaler expansion, VMware margins, TSMC supply security"
+Context: "Q3 AI semi revenue $12.2B; seven large LLM developers using chips"
+→ Context dumps data without linking to the 3 specific threads
 
 ESCAPE HATCH:
-If no relevant filing context exists in surviving bullet contexts:
+If no relevant filing context exists for your content threads:
 "No relevant filing context found for these developments"
 
 NEVER FORCE CONTEXT:

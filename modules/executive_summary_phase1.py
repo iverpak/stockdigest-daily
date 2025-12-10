@@ -1042,6 +1042,21 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
         source_articles = bl.get('source_articles', [])
         result += f"<br><br>Source Articles: {source_articles}"
 
+        # Phase 4 A/B Test (if available)
+        phase4 = phase3_json.get('phase4', {})
+        phase4_bl = phase4.get('phase4_bottom_line', {})
+        if phase4_bl:
+            content_p4 = phase4_bl.get("content", "")
+            context_p4 = phase4_bl.get("context", "")
+            source_articles_p4 = phase4_bl.get("source_articles", [])
+
+            result += "<br><br><hr style='border: 1px dashed #007bff; margin: 10px 0;'>"
+            result += "<strong style='color: #007bff;'>🔬 Phase 4 (A/B Test - From Surviving Bullets):</strong><br>"
+            result += content_p4
+            if context_p4:
+                result += f"<br><strong>Context:</strong> {context_p4}"
+            result += f"<br>Source Articles: {source_articles_p4}"
+
         sections["bottom_line"] = [result]
 
     # Helper function to format bullets with full QA display
@@ -1216,6 +1231,12 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
             ]
 
     # Scenarios (paragraph sections - no deduplication)
+    # Map JSON keys to Phase 4 keys
+    phase4_key_mapping = {
+        "upside_scenario": "phase4_upside_scenario",
+        "downside_scenario": "phase4_downside_scenario"
+    }
+
     for json_key, sections_key in [
         ("upside_scenario", "upside_scenario"),
         ("downside_scenario", "downside_scenario")
@@ -1242,6 +1263,22 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
             # Source articles (always show for QA visibility, even if empty)
             source_articles = scenario.get('source_articles', [])
             result += f"<br><br>Source Articles: {source_articles}"
+
+            # Phase 4 A/B Test (if available)
+            phase4 = phase3_json.get('phase4', {})
+            phase4_key = phase4_key_mapping.get(json_key)
+            phase4_scenario = phase4.get(phase4_key, {}) if phase4_key else {}
+            if phase4_scenario:
+                content_p4 = phase4_scenario.get("content", "")
+                context_p4 = phase4_scenario.get("context", "")
+                source_articles_p4 = phase4_scenario.get("source_articles", [])
+
+                result += "<br><br><hr style='border: 1px dashed #007bff; margin: 10px 0;'>"
+                result += "<strong style='color: #007bff;'>🔬 Phase 4 (A/B Test - From Surviving Bullets):</strong><br>"
+                result += content_p4
+                if context_p4:
+                    result += f"<br><strong>Context:</strong> {context_p4}"
+                result += f"<br>Source Articles: {source_articles_p4}"
 
             sections[sections_key] = [result]
 

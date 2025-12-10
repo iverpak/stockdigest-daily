@@ -723,9 +723,10 @@ def _should_include_bullet_in_email3(bullet: Dict, section_name: str) -> bool:
     Determine if a bullet should be included in Email #3 (user-facing).
 
     Filtering rules:
-    - Remove bullets with filter_status = "filtered_out" (NEW - Dec 2025)
+    - Remove bullets with filter_status = "filtered_out"
     - Remove bullets with relevance = "none"
     - Remove bullets with relevance = "indirect" AND impact = "low impact"
+    - Remove bullets with relevance = "direct" AND impact = "low impact"
     - Don't filter if fields are missing (safety)
     - Don't filter paragraphs (bottom_line, upside, downside)
 
@@ -763,6 +764,10 @@ def _should_include_bullet_in_email3(bullet: Dict, section_name: str) -> bool:
 
     # Filter rule 2: relevance is "indirect" AND impact is "low impact"
     if relevance == 'indirect' and impact == 'low impact':
+        return False
+
+    # Filter rule 3: relevance is "direct" AND impact is "low impact"
+    if relevance == 'direct' and impact == 'low impact':
         return False
 
     # Keep bullet

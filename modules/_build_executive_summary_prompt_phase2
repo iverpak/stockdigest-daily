@@ -202,8 +202,8 @@ BULLET ENRICHMENT (TASK 1):
    - Competitive/industry: impact, sentiment, reason, relevance, entity, context
 4. Do NOT include Phase 1 fields (topic_label, content, filing_hints)
 5. Do NOT wrap output in any additional keys
-6. Process bullets from these 5 sections only: major_developments, financial_performance, risk_factors, competitive_industry_dynamics, upcoming_catalysts
-7. Skip these 5 sections: wall_street_sentiment, bottom_line, upside_scenario, downside_scenario, key_variables
+6. Process bullets from these 6 sections only: major_developments, financial_performance, wall_street_sentiment, risk_factors, competitive_industry_dynamics, upcoming_catalysts
+7. Skip these 4 sections: bottom_line, upside_scenario, downside_scenario, key_variables
 8. If no filing data found for a bullet: context = "No relevant filing context found for this development"
 
 SCENARIO SYNTHESIS (TASK 2):

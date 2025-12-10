@@ -373,9 +373,10 @@ def _generate_phase4_gemini(
 
 def _parse_phase4_json_response(response_text: str, ticker: str) -> Optional[Dict]:
     """
-    Parse Phase 4 JSON response.
+    Parse Phase 4 JSON response with comprehensive validation.
 
     Uses unified JSON extraction utility with 4-tier fallback strategy.
+    Validates word counts, source_articles arrays, and field types.
 
     Args:
         response_text: Raw response text from AI
@@ -404,6 +405,67 @@ def _parse_phase4_json_response(response_text: str, ticker: str) -> Optional[Dic
                 "date_range": ""
             }
 
+    # Word count limits per section
+    word_limits = {
+        "phase4_bottom_line": {"max": 150, "min": 0, "name": "Bottom Line"},
+        "phase4_upside_scenario": {"max": 160, "min": 80, "name": "Upside Scenario"},
+        "phase4_downside_scenario": {"max": 160, "min": 80, "name": "Downside Scenario"}
+    }
+
+    # Validate each section
+    for field, limits in word_limits.items():
+        section = parsed.get(field, {})
+
+        # Validate content is a string
+        content = section.get("content", "")
+        if not isinstance(content, str):
+            LOG.warning(f"[{ticker}] Phase 4 {limits['name']}: content is not a string, converting")
+            content = str(content) if content else ""
+            section["content"] = content
+
+        # Validate context is a string
+        context = section.get("context", "")
+        if not isinstance(context, str):
+            LOG.warning(f"[{ticker}] Phase 4 {limits['name']}: context is not a string, converting")
+            context = str(context) if context else ""
+            section["context"] = context
+
+        # Check word count (content only, not context)
+        word_count = len(content.split()) if content else 0
+
+        # Log word count for monitoring
+        if word_count > limits["max"]:
+            LOG.warning(f"[{ticker}] Phase 4 {limits['name']}: {word_count} words exceeds max {limits['max']}")
+        elif limits["min"] > 0 and word_count < limits["min"] and word_count > 0:
+            # Only warn if there's some content but below min (escape hatch phrases are short)
+            if "No material" not in content and "No additional" not in content:
+                LOG.warning(f"[{ticker}] Phase 4 {limits['name']}: {word_count} words below min {limits['min']}")
+
+        # Validate source_articles is a list of non-negative integers
+        source_articles = section.get("source_articles", [])
+        if not isinstance(source_articles, list):
+            LOG.warning(f"[{ticker}] Phase 4 {limits['name']}: source_articles is not a list, resetting to []")
+            section["source_articles"] = []
+        else:
+            # Filter to only valid non-negative integers
+            valid_indices = []
+            for idx in source_articles:
+                if isinstance(idx, int) and idx >= 0:
+                    valid_indices.append(idx)
+                elif isinstance(idx, float) and idx >= 0 and idx == int(idx):
+                    valid_indices.append(int(idx))
+                else:
+                    LOG.warning(f"[{ticker}] Phase 4 {limits['name']}: invalid source_articles index {idx}")
+
+            if len(valid_indices) != len(source_articles):
+                LOG.warning(f"[{ticker}] Phase 4 {limits['name']}: filtered source_articles from {len(source_articles)} to {len(valid_indices)}")
+                section["source_articles"] = valid_indices
+
+        # Ensure date_range exists
+        if "date_range" not in section:
+            section["date_range"] = ""
+
+    LOG.info(f"[{ticker}] Phase 4 validation complete - all sections validated")
     return parsed
 
 

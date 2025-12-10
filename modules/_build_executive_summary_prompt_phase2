@@ -92,12 +92,12 @@ WHICH BULLETS TO PROCESS:
 Phase 1 JSON contains 10 sections. Process bullets from these 5 sections ONLY:
 - major_developments
 - financial_performance
+- wall_street_sentiment
 - risk_factors
 - competitive_industry_dynamics
 - upcoming_catalysts
 
 SKIP bullets from these 5 sections:
-- wall_street_sentiment
 - bottom_line (paragraph, not bullets)
 - upside_scenario (paragraph, not bullets)
 - downside_scenario (paragraph, not bullets)
@@ -1259,41 +1259,101 @@ THREE LEVELS:
 - medium impact: 1-5% revenue/EBIT/assets OR top 4-10 customer/supplier  
 - low impact: <1% revenue/EBIT/assets
 
-CALCULATION PROCESS:
-1. Search filings for materiality data using filing_hints
-2. Calculate % of revenue/EBIT/assets if possible
-3. Check customer/supplier ranking if relevant
-4. Check if categorical event (overrides calculation)
-5. Apply multi-factor escalation if needed
+DECISION FLOW (apply in order):
 
-HIGH IMPACT (assign if ANY true):
-- >5% of revenue/EBIT/assets
-- Top 3 customer/supplier
-- Categorical events: FDA approval/rejection, CEO fraud, M&A >$1B, bankruptcy, production halt >20% capacity, major investigation (DOJ/SEC/FTC), credit downgrade >2 notches, going concern
+STEP 1: WALL STREET SENTIMENT CHECK
+If bullet is analyst/price target content → Use thesis criteria below, then skip to Step 6.
 
-MEDIUM IMPACT (assign if ANY true):
-- 1-5% of revenue/EBIT/assets OR top 4-10 customer/supplier
-- Default when filings lack data but article suggests material ("significant", "major", 3+ articles emphasize)
-- Comparative/contextual value for institutional analysis:
-  • Competitor operational or financial metrics (deliveries, revenue, margins, capacity, market share)
-  • Industry structural trends affecting multiple players (technology shifts, regulatory changes, supply chain dynamics)
-  • Supply/demand signals from customers or suppliers (orders, capacity plans, pricing, lead times)
-  • Contrarian forecasts or data challenging consensus/management views
-  
-  Note: These bullets provide comparative context for stock selection, competitive positioning, 
-  and risk assessment even without direct target company quantification. They answer institutional 
-  questions: "How does target compare to peers?", "What's the industry trend?", "Are forecasts aligned?"
+High impact:
+- Rating change (upgrade/downgrade)
+- Initiation or discontinuation of coverage
+- Detailed thesis with specific catalysts and model assumptions
 
-LOW IMPACT:
-- <1% of revenue/EBIT/assets
+Medium impact:
+- Price target change with stated reasoning
+- Thesis identifying specific business drivers
 
-CRITICAL OVERRIDE: Strategic language does NOT override financial thresholds.
-- Example: "$2.53M lobbying on 'critical AI policy'" = 0.0006% revenue → LOW impact
-- Example: "Major customer contract" with 0.3% revenue → LOW impact
-- Apply % calculation first; ignore "strategic/critical/major" language if <1%
+Low impact:
+- Price target numbers only
+- Multiple analyst roundups without thesis
+- Consensus summaries ("45 buys, 3 holds")
+- <3 sentences of substance
 
-EVENT TYPE OVERRIDE (check after calculating entity materiality):
-Material entity + Non-operational event = LOW impact
+STEP 2: CATEGORICAL EVENT CHECK
+If categorical event → Assign HIGH, skip to Step 6.
+
+Categorical events:
+- FDA approval/rejection
+- CEO fraud
+- M&A >$1B
+- Bankruptcy
+- Production halt >20% capacity
+- Major investigation (DOJ/SEC/FTC)
+- Credit downgrade >2 notches
+- Going concern
+
+Development-stage companies (check filing for "development stage" disclosure):
+- Development milestones ARE the earnings power
+- Question: "Does this milestone change probability of success?"
+- Binary outcomes (trial results, drill intercepts, first customer) → HIGH
+
+STEP 3: CALCULATE FINANCIAL MATERIALITY
+Search filings for materiality data using filing_hints, then apply thresholds.
+
+Quantified thresholds:
+- >5% of revenue/EBIT/assets → HIGH
+- 1-5% of revenue/EBIT/assets → MEDIUM
+- <1% of revenue/EBIT/assets → LOW
+
+Customer/supplier ranking:
+- Top 3 → HIGH
+- Top 4-10 → MEDIUM
+
+MULTI-FACTOR RULE: Use HIGHEST level when multiple thresholds met.
+Example: 2% revenue (medium) + top 3 customer (high) → HIGH
+
+When filings lack quantified data:
+- Article suggests material ("significant", "major", 3+ articles emphasize) → MEDIUM
+- No signals of materiality → LOW
+
+Comparative/contextual value (assign MEDIUM even without direct quantification):
+- Competitor operational or financial metrics (deliveries, revenue, margins, capacity, market share)
+- Industry structural trends affecting multiple players (technology shifts, regulatory changes, supply chain dynamics)
+- Supply/demand signals from customers or suppliers (orders, capacity plans, pricing, lead times)
+- Contrarian forecasts or data challenging consensus/management views
+
+Note: These bullets provide comparative context for stock selection, competitive positioning, and risk assessment. They answer: "How does target compare to peers?", "What's the industry trend?", "Are forecasts aligned?"
+
+For companies with established revenue:
+- Development projects compete with core business for attention
+- Question: "Is this >5% of CURRENT earnings power?"
+- If project has no revenue disclosed → Likely <1% → LOW
+
+When uncertain: Use filing tone. Does management frame as critical or exploratory?
+
+Examples:
+"Customer 28% of Q2 revenue per 10-Q" → HIGH (>5%)
+"Customer 2.8% of revenue per 10-Q" → MEDIUM (1-5%)
+"Customer 0.3% of revenue per 10-Q" → LOW (<1%)
+
+STEP 4: LOW IMPACT FILTERS
+If ANY filter matches → Override to LOW (even if Step 3 calculated higher).
+
+Override to LOW if ANY true:
+- Backward-looking data (not new information — restating known state or prior periods)
+- Generic market stats not tied to company filings
+- Evergreen truisms ("recession could hurt demand", "tariffs create uncertainty")
+- Filing context contradicts the news premise
+- Routine governance (no strategic signal)
+- Stock price performance summaries
+- Non-operational events (see below)
+
+NON-OPERATIONAL EVENT TEST:
+Does event affect company's revenue-generating operations, capacity needs, or costs?
+- Revenue-generating operations = activities company sells/charges for
+- Investments, internal use, or support functions ≠ revenue-generating
+
+If NO → LOW (override entity materiality)
 
 Non-operational events (assign LOW regardless of entity size):
 - Promotional campaigns, marketing initiatives, seasonal sales
@@ -1301,12 +1361,11 @@ Non-operational events (assign LOW regardless of entity size):
 - Activities in geographies where company has zero operations
 - Market forecasts for products company doesn't sell
 
-Test: Does event affect company's revenue-generating operations, capacity needs, or costs?
-- Revenue-generating operations = activities company sells/charges for
-- Investments, internal use, or support functions ≠ revenue-generating
-
-If NO → LOW impact (override entity materiality)
-If YES → Use calculated entity materiality (HIGH/MEDIUM/LOW)
+STRATEGIC LANGUAGE OVERRIDE:
+Strategic language does NOT override LOW filters.
+- Example: "$2.53M lobbying on 'critical AI policy'" = 0.0006% revenue → LOW
+- Example: "Major customer contract" with 0.3% revenue → LOW
+- Apply % calculation first; ignore "strategic/critical/major" language if <1%
 
 Examples:
 - Top customer (6%) + promotional sale → LOW (marketing, not operational)
@@ -1314,8 +1373,8 @@ Examples:
 - Top customer (6%) + earnings growth → MEDIUM (health indicator)
 - Competitor + 0.02% scale action → LOW (immaterial entity already)
 
-MULTI-FACTOR RULE: Use HIGHEST level when multiple thresholds met
-Example: 2% revenue (medium) + top 3 customer (high) → high impact ✓
+STEP 5: ESCALATION CHECK
+If escalation trigger matches → Escalate ONE level (LOW→MEDIUM, MEDIUM→HIGH).
 
 ESCALATE ONE LEVEL if:
 - Beat/miss >10% vs expectations (material magnitude)
@@ -1331,26 +1390,12 @@ DO NOT escalate solely because:
 ❌ Topic is "strategically important" (strategic ≠ material financial impact)
 
 Examples:
-"Customer 28% of Q2 revenue per 10-Q" → high impact (>5%)
-"Customer 2.8% of revenue per 10-Q" → medium impact (1-5%)
-"Customer 0.3% of revenue per 10-Q" → low impact (<1%)
-"NHTSA investigation into 2.9M vehicles" → high impact (categorical)
-"Record 497K deliveries, +13% vs consensus" → high impact (escalate for material beat)
-"Record 497K deliveries, +0.5% vs consensus" → medium impact (don't escalate, marginal)
+"Record 497K deliveries, +13% vs consensus" → Escalate (material beat)
+"Record 497K deliveries, +0.5% vs consensus" → Don't escalate (marginal)
+"NHTSA investigation into 2.9M vehicles" → HIGH (categorical, Step 2)
 
-MATERIALITY IS RELATIVE TO COMPANY STAGE:
-
-For companies with established revenue:
-- Development projects compete with core business for attention
-- Question: "Is this >5% of CURRENT earnings power?"
-- If project has no revenue disclosed → Likely <1% → LOW
-
-For development-stage companies (check filing for "development stage" disclosure):
-- Development milestones ARE the earnings power
-- Question: "Does this milestone change probability of success?"
-- Binary outcomes (trial results, drill intercepts, first customer) → HIGH
-
-When uncertain: Use filing tone. Does management frame as critical or exploratory?
+STEP 6: OUTPUT
+Output one of: "high impact" | "medium impact" | "low impact"
 
 ═══════════════════════════════════════════════════════════════════════════════
 RELEVANCE TAG CALCULATION
@@ -1419,6 +1464,8 @@ Note: Three lenses are guidance. If earnings call test passes despite weak lens
 STEP 1: Is bullet ABOUT target company?
 - Financial results, guidance, operations, strategic actions, analyst/regulatory actions
 → If YES: "direct"
+
+Note on analyst coverage: "Analyst actions" means coverage OF the target company by external analysts. If the target company's research division is covering OTHER companies (e.g., JPM's equity research on AAPL appearing in JPM's report), that is NOT about the target company → Proceed to Step 5 ("none").
 
 STEP 2: Does context contain QUANTIFIED connection?
 Look for patterns like:
@@ -1519,6 +1566,22 @@ CRITICAL RULES
 6. When uncertain after Step 0 → Default to "indirect"
 7. "unclear" only when truly insufficient information
 8. Apply consistent logic across all companies - same thought process
+
+FINAL CREDIBILITY CHECK
+
+After calculating impact and relevance, apply one final test:
+
+"Would including this bullet make a professional investor question the report's credibility?"
+
+Red flags:
+- Content about Company X appearing in Company Y's report (name overlap, misclassification)
+- Context directly contradicts content (e.g., "risk" but context shows no exposure)
+- Connection requires 3+ logical steps to explain
+- Reader would pause and think "why is this here?"
+
+If ANY red flag: Override to "low impact" + "none" relevance
+
+BIAS: One bad bullet damages credibility more than one missing bullet.
 
 ═══════════════════════════════════════════════════════════════════════════════
 ENTITY TAG CLASSIFICATION (Competitive/Industry Dynamics Only)

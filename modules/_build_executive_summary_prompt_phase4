@@ -113,6 +113,8 @@ STRUCTURE (<=150 words total):
   -> Use "however" structure: "[Development A]; however, [Contrarian signal B]"
 - Sentence 5: Forward-looking monitoring statement (brief)
 
+Lead with developments from most recent trading day, then key context from earlier in coverage period.
+
 CRITICAL BALANCE RULE:
 If 3+ bullish bullets survive -> MUST add bearish counterpoint if any bearish bullets survive
 If 3+ bearish bullets survive -> MUST add bullish counterpoint if any bullish bullets survive
@@ -173,7 +175,7 @@ OK "Five negative articles published vs 2 positive; Barclays cut price target 15
 Let the facts speak for themselves. Never editorialize.
 
 ===============================================================================
-UPSIDE SCENARIO (80-160 words)
+UPSIDE SCENARIO: Single paragraph, 3-6 sentences (80-160 words)
 ===============================================================================
 
 CONTENT SUFFICIENCY CHECK - Count surviving bullets with sentiment="bullish":
@@ -212,7 +214,7 @@ OK "Per [Named Source], analysts projected..."
 OK "[Executive name with title] stated..." - "CFO Vaibhav Taneja stated..."
 
 ===============================================================================
-DOWNSIDE SCENARIO (80-160 words)
+DOWNSIDE SCENARIO: Single paragraph, 3-6 sentences (80-160 words)
 ===============================================================================
 
 CONTENT SUFFICIENCY CHECK - Count surviving bullets with sentiment="bearish":
@@ -328,6 +330,16 @@ X "Good entry point"
 X "Time to buy/sell"
 X "Strong buy"
 X "Investors should"
+
+ALWAYS USE (attribute to sources - you are reporting, not recommending):
+OK "Upside scenario per [authors]"
+OK "Downside scenario per [authors]"
+OK "[Authors] identified variables"
+OK "Next catalyst per [source]"
+OK "[Analyst] rates Buy"
+OK "[Firm] recommends"
+
+You are reporting what analysts/authors stated, not making recommendations yourself.
 
 BANNED CAUSATION WORDS (without attribution):
 X "amid", "following", "driven by", "due to", "supporting", "positioning"

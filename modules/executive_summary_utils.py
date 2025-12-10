@@ -196,6 +196,7 @@ def _get_filter_status(bullet: Dict) -> tuple:
         - (True, None) = bullet should be included
         - (False, "relevance=none") = filtered due to no relevance
         - (False, "indirect + low impact") = filtered due to indirect relevance with low impact
+        - (False, "direct + low impact") = filtered due to direct relevance with low impact
     """
     # Get enrichment fields
     relevance = bullet.get('relevance', '').lower()
@@ -212,6 +213,10 @@ def _get_filter_status(bullet: Dict) -> tuple:
     # Filter rule 2: relevance is "indirect" AND impact is "low impact"
     if relevance == 'indirect' and impact == 'low impact':
         return (False, "indirect + low impact")
+
+    # Filter rule 3: relevance is "direct" AND impact is "low impact"
+    if relevance == 'direct' and impact == 'low impact':
+        return (False, "direct + low impact")
 
     # Keep bullet
     return (True, None)
@@ -276,9 +281,10 @@ def filter_bullets_for_email3(phase2_json: Dict) -> Dict:
     Filtering rules:
     - Remove bullets with relevance = 'none'
     - Remove bullets with relevance = 'indirect' AND impact = 'low impact'
+    - Remove bullets with relevance = 'direct' AND impact = 'low impact'
     - Scenarios (bottom_line, upside_scenario, downside_scenario) pass through unchanged
 
-    This function applies the same logic as should_include_in_email3() from
+    This function applies the same logic as _should_include_bullet_in_email3() from
     executive_summary_phase1.py, but operates on full JSON structure.
 
     Args:

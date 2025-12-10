@@ -320,7 +320,9 @@ def _generate_phase4_gemini(
                     'quota' in error_str.lower() or
                     '429' in error_str or
                     'ServiceUnavailable' in error_str or
-                    '503' in error_str
+                    '503' in error_str or
+                    'DeadlineExceeded' in error_str or
+                    'timeout' in error_str.lower()
                 )
 
                 if is_retryable and attempt < max_retries:
@@ -489,16 +491,29 @@ def generate_executive_summary_phase4(
                 return phase4_json, usage
 
     else:  # primary_model == 'claude' (default)
-        # Try Claude first
+        # Try Claude first with one retry (matches Phase 3 behavior)
         if anthropic_api_key:
-            LOG.info(f"[{ticker}] Phase 4: Attempting Claude Sonnet 4.5 (primary)")
-            phase4_json, usage = _generate_phase4_claude(ticker, phase3_json, anthropic_api_key)
+            max_attempts = 2  # 1 retry = 2 total attempts
 
-            if phase4_json and usage:
-                LOG.info(f"[{ticker}] ✅ Phase 4: Claude Sonnet 4.5 succeeded")
-                return phase4_json, usage
-            else:
-                LOG.warning(f"[{ticker}] ⚠️ Phase 4: Claude failed, falling back to Gemini")
+            for attempt in range(1, max_attempts + 1):
+                if attempt == 1:
+                    LOG.info(f"[{ticker}] Phase 4: Attempting Claude Sonnet 4.5 (primary)")
+                else:
+                    LOG.info(f"[{ticker}] 🔄 Phase 4: Retrying Claude Sonnet 4.5 (attempt {attempt}/{max_attempts})")
+
+                phase4_json, usage = _generate_phase4_claude(ticker, phase3_json, anthropic_api_key)
+
+                if phase4_json and usage:
+                    LOG.info(f"[{ticker}] ✅ Phase 4: Claude Sonnet 4.5 succeeded on attempt {attempt}")
+                    return phase4_json, usage
+                else:
+                    # Failed - decide whether to retry or fall back
+                    if attempt < max_attempts:
+                        LOG.warning(f"[{ticker}] ⚠️ Phase 4: Claude attempt {attempt} failed (JSON/validation), retrying...")
+                    else:
+                        LOG.warning(f"[{ticker}] ⚠️ Phase 4: Claude failed {max_attempts} times, falling back to Gemini 2.5 Pro")
+        else:
+            LOG.warning(f"[{ticker}] ⚠️ No Anthropic API key provided, using Gemini 2.5 Pro only")
 
         # Fall back to Gemini
         if gemini_api_key:

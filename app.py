@@ -118,13 +118,6 @@ from modules.triage import (
     triage_downstream_articles_dual
 )
 
-# Editorial Filter (Phase 2.5 - Nov 2025)
-from modules.editorial_filter import (
-    run_editorial_filter,
-    generate_editorial_filter_email,
-    apply_editorial_filter
-)
-
 # ============================================================================
 # AIOHTTP CONNECTION MANAGEMENT - Prevents Connection Exhaustion & Deadlock
 # ============================================================================
@@ -13064,53 +13057,6 @@ async def generate_executive_summary_all_phases(
         LOG.info(f"[{ticker}] 🔍 Marking bullets with filter status...")
         marked_phase2_json = mark_filtered_bullets(phase2_merged_json)
 
-        # ========================================================================
-        # PHASE 2.5: EDITORIAL FILTER (TEST MODE - email only, no filtering)
-        # ========================================================================
-        # Runs editorial judgment on enriched bullets to catch:
-        # - Misplaced content (wrong company report)
-        # - Misclassified relationships
-        # - Credibility-damaging content
-        # TEST MODE: Only sends QA email, does not actually filter bullets
-        # ========================================================================
-        LOG.info(f"[{ticker}] 📝 Running Phase 2.5 (editorial filter - TEST MODE)...")
-        company_name = config.get('company_name') or config.get('name') or ticker
-
-        editorial_result = run_editorial_filter(
-            phase2_json=phase2_merged_json,
-            ticker=ticker,
-            company_name=company_name,
-            anthropic_api_key=ANTHROPIC_API_KEY,
-            gemini_api_key=GEMINI_API_KEY
-        )
-
-        if editorial_result.get('success'):
-            stats = editorial_result.get('removal_stats', {})
-            LOG.info(
-                f"[{ticker}] ✅ Phase 2.5 complete: "
-                f"{stats.get('keep_count', 0)} KEEP, {stats.get('remove_count', 0)} REMOVE "
-                f"({stats.get('removal_rate', 0):.0%} removal rate)"
-            )
-
-            # Send QA email (TEST MODE - always send for review)
-            try:
-                editorial_email_html = generate_editorial_filter_email(
-                    ticker=ticker,
-                    company_name=company_name,
-                    phase2_json=phase2_merged_json,
-                    filter_result=editorial_result
-                )
-                email_subject = f"📝 Phase 2.5 Editorial Filter: {ticker} - {stats.get('remove_count', 0)} suggested removals"
-                send_email(email_subject, editorial_email_html)
-                LOG.info(f"[{ticker}] 📧 Phase 2.5 QA email sent")
-            except Exception as email_err:
-                LOG.warning(f"[{ticker}] ⚠️ Phase 2.5 QA email failed: {email_err}")
-
-            # TODO: When ready to enable filtering, uncomment this line:
-            # filtered_json_for_phase3 = apply_editorial_filter(phase2_merged_json, editorial_result)
-        else:
-            LOG.warning(f"[{ticker}] ⚠️ Phase 2.5 bypassed (model failures)")
-
         # FILTER bullets before Phase 3 (remove relevance='none' or low impact + indirect)
         filtered_json_for_phase3 = filter_bullets_for_email3(phase2_merged_json)
 
@@ -17826,47 +17772,6 @@ async def process_regenerate_email_phase(job: dict):
 
                 # Mark bullets with filter_status (for Email #2 display)
                 marked_phase2_json = mark_filtered_bullets(phase2_merged_json)
-
-                # ============================================================
-                # PHASE 2.5: Editorial Filter (TEST MODE - email only)
-                # ============================================================
-                LOG.info(f"[{ticker}] 📝 [JOB {job_id}] Phase 2.5: Editorial filter (TEST MODE)...")
-                regen_company_name = ticker_config.get('company_name') or ticker_config.get('name') or ticker
-
-                editorial_result = run_editorial_filter(
-                    phase2_json=phase2_merged_json,
-                    ticker=ticker,
-                    company_name=regen_company_name,
-                    anthropic_api_key=ANTHROPIC_API_KEY,
-                    gemini_api_key=GEMINI_API_KEY
-                )
-
-                if editorial_result.get('success'):
-                    stats = editorial_result.get('removal_stats', {})
-                    LOG.info(
-                        f"[{ticker}] ✅ [JOB {job_id}] Phase 2.5 complete: "
-                        f"{stats.get('keep_count', 0)} KEEP, {stats.get('remove_count', 0)} REMOVE "
-                        f"({stats.get('removal_rate', 0):.0%} removal rate)"
-                    )
-
-                    # Send QA email (TEST MODE)
-                    try:
-                        editorial_email_html = generate_editorial_filter_email(
-                            ticker=ticker,
-                            company_name=regen_company_name,
-                            phase2_json=phase2_merged_json,
-                            filter_result=editorial_result
-                        )
-                        email_subject = f"📝 Phase 2.5 Editorial Filter (Regen): {ticker} - {stats.get('remove_count', 0)} suggested removals"
-                        send_email(email_subject, editorial_email_html)
-                        LOG.info(f"[{ticker}] 📧 [JOB {job_id}] Phase 2.5 QA email sent")
-                    except Exception as email_err:
-                        LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Phase 2.5 QA email failed: {email_err}")
-
-                    # TODO: When ready to enable filtering, uncomment:
-                    # filtered_json_for_phase3 = apply_editorial_filter(phase2_merged_json, editorial_result)
-                else:
-                    LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Phase 2.5 bypassed (model failures)")
 
                 # Filter bullets before Phase 3
                 filtered_json_for_phase3 = filter_bullets_for_email3(phase2_merged_json)

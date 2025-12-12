@@ -232,11 +232,13 @@ CRITICAL: Extract period from headers for accurate citations:
 - Earnings Call: Use call date for citations ("per Oct 23 call" or "per Oct 23, 2025 earnings call")
 - 10-Q: Use quarter and year ("per Q2 2025 10-Q")
 - 10-K: Use fiscal year ("per FY2024 10-K")
+- 8-K: Use filing date ("per Oct 15 8-K" or "per Nov 03 8-K")
 
 FILING SECTIONS:
 10-K: 17 sections (INDUSTRY CLASSIFICATION, BUSINESS MODEL SUMMARY, REVENUE STREAMS, etc.)
 10-Q: 12 sections (QUARTERLY FINANCIAL PERFORMANCE (QoQ & YoY), SEGMENT PERFORMANCE TRENDS, etc.)
 Transcript: 14 sections (BOTTOM LINE, FINANCIAL RESULTS, OPERATIONAL METRICS, etc.)
+8-K: 11 sections (BOTTOM LINE, FINANCIAL RESULTS, TRANSACTION DETAILS, GUIDANCE & OUTLOOK, etc.)
 
 Each section formatted as:
 # SECTION NAME
@@ -256,9 +258,10 @@ When bullet has filing_keywords: ["keyword1", "keyword2", "keyword3"]
 
 SEARCH PROCESS:
 
-1. Search each keyword across ALL THREE FILINGS (10-K, 10-Q, Transcript)
+1. Search each keyword across ALL FILINGS (10-K, 10-Q, Transcript, 8-K)
    - Think Ctrl+F: Find every mention of the keyword
    - Not limited to filing_hints sections
+   - 8-K filings are especially useful for recent material events (post-earnings)
 
 2. Review all matches for relevance:
    - Does this match discuss the bullet's topic?
@@ -309,13 +312,19 @@ When filings conflict:
 
 SOURCE PRIORITY:
 
-Recency-first (for views/tone): Transcript → 10-Q → 10-K
-Precision-first (for numbers): 10-Q → 10-K → Transcript
+Recency-first (for views/tone): 8-K (if matches event) → Transcript → 10-Q → 10-K
+Precision-first (for numbers): 10-Q → 10-K → 8-K → Transcript
 
-Most bullets need BOTH:
+When to prefer 8-K:
+- Article discusses event AFTER last earnings call → Check 8-K first
+- Breaking news matches recent 8-K filing date (within 3-5 days) → Use 8-K
+- M&A, guidance changes, leadership changes → 8-K is primary source
+
+Most bullets need MULTIPLE sources:
 1. Get precise numbers from 10-Q/10-K
-2. Get management view from Transcript
-3. Synthesize into single context
+2. Get recent event details from 8-K (if applicable)
+3. Get management view from Transcript
+4. Synthesize into single context
 
 Example output for this bullet:
 {
@@ -432,6 +441,7 @@ RULE #1: TARGET COMPANY FILINGS ONLY
 - Target company 10-K data
 - Target company 10-Q data
 - Target company earnings transcript data
+- Target company 8-K filings (especially for post-earnings material events)
 
 ❌ NEVER INCLUDE:
 - Article quotes or analyst commentary
@@ -494,6 +504,16 @@ Context: "Amedisys operates home health with 300K patients across 38 states per 
 Bullet: "Company completed acquisition of Amedisys for $3.4 billion in Q3"
 Context: "Completed Amedisys acquisition for $3.4B net cash disbursement in Q3 per Oct 28 call"
 (Repeats "$3.4B" and "Q3" verbatim from bullet)
+
+✅ GOOD (8-K example):
+Bullet: "Management raised FY guidance to $50B revenue, up from prior $48B"
+Context: "Revenue guidance raised to $50B per Oct 15 8-K from $48B per Aug 7 call; Q3 run-rate $12.8B implies 2% acceleration needed to hit midpoint; gross margin guidance maintained at 42-44% per Oct 15 8-K"
+(Uses 8-K for recent guidance update + calculates implications + compares to prior guidance)
+
+✅ GOOD (8-K + Transcript combined):
+Bullet: "Company announced $2B share buyback program"
+Context: "Buyback represents 8.5% of market cap per Oct 20 8-K; funded from $4.2B cash on hand per Q3 10-Q; prior $1.5B program completed 3 months early per Oct 23 call"
+(8-K for program details + 10-Q for financing capacity + Transcript for context)
 
 ═══════════════════════════════════════════════════════════════════════════════
 RULE #3: WHAT TO INCLUDE IN CONTEXT
@@ -619,13 +639,18 @@ Reason: Declaration date (Dec 2024) determines fiscal period (Q4 2024), not paym
 STEP 5: Pre-citation checklist
 □ I found this statement in the document I'm citing (not just similar topics)
 □ I verified it's NOT only in a different filing
-□ Citation includes correct period (FY2024 10-K vs Q3 2025 10-Q vs Oct 23 call)
+□ Citation includes correct format:
+   - 10-K: "per FY2024 10-K"
+   - 10-Q: "per Q3 2025 10-Q"
+   - Transcript: "per Oct 23 call"
+   - 8-K: "per Oct 15 8-K" (use filing date from header)
 □ If from 10-Q, I specified whether YTD (9-month) or quarterly (3-month):
    - Quarterly data → Label as "Q3 2025" (e.g., "$12.4M Q3 2025")
    - Cumulative data → Label as "YTD Q3 2025" (e.g., "$31.8M YTD Q3 2025")
+□ If from 8-K, I used the filing date from the header (not the event date)
 □ If citing multiple facts to one source, I verified ALL facts exist in that source
 □ If facts come from multiple sources, I either:
-   - Cited each source separately ("X per 10-Q; Y per Oct 23 call"), OR
+   - Cited each source separately ("X per 10-Q; Y per Oct 23 call; Z per Oct 15 8-K"), OR
    - Used combined citation ("X and Y per 10-Q and Oct 23 call")
 
 COMMON ERRORS TO AVOID:

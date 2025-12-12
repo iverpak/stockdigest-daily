@@ -108,7 +108,8 @@ You MUST output valid JSON with this EXACT structure:
         "filing_hints": {
           "10-K": ["Section Name 1", "Section Name 2"],
           "10-Q": ["Section Name 1", "Section Name 2"],
-          "Transcript": ["Section Name 1", "Section Name 2"]
+          "Transcript": ["Section Name 1", "Section Name 2"],
+          "8-K": ["Section Name 1", "Section Name 2"]
         },
         "filing_keywords": ["keyword1", "keyword2", "keyword3"]
       }
@@ -123,7 +124,8 @@ You MUST output valid JSON with this EXACT structure:
         "filing_hints": {
           "10-K": ["Section Name 1", "Section Name 2"],
           "10-Q": ["Section Name 1", "Section Name 2"],
-          "Transcript": ["Section Name 1", "Section Name 2"]
+          "Transcript": ["Section Name 1", "Section Name 2"],
+          "8-K": ["Section Name 1", "Section Name 2"]
         },
         "filing_keywords": ["keyword1", "keyword2", "keyword3"]
       }
@@ -141,7 +143,8 @@ You MUST output valid JSON with this EXACT structure:
         "filing_hints": {
           "10-K": ["Section Name 1", "Section Name 2"],
           "10-Q": ["Section Name 1", "Section Name 2"],
-          "Transcript": ["Section Name 1", "Section Name 2"]
+          "Transcript": ["Section Name 1", "Section Name 2"],
+          "8-K": ["Section Name 1", "Section Name 2"]
         },
         "filing_keywords": ["keyword1", "keyword2", "keyword3"]
       }
@@ -376,7 +379,8 @@ Each bullet in sections (major_developments, financial_performance, risk_factors
      "filing_hints": {
        "10-K": ["Section Name 1", "Section Name 2"],
        "10-Q": ["Section Name 1", "Section Name 2"],
-       "Transcript": ["Section Name 1", "Section Name 2"]
+       "Transcript": ["Section Name 1", "Section Name 2"],
+       "8-K": ["Section Name 1", "Section Name 2"]
      }
    }
 
@@ -498,7 +502,8 @@ Format when no context needed:
   "filing_hints": {
     "10-K": [],
     "10-Q": [],
-    "Transcript": []
+    "Transcript": [],
+    "8-K": []
   }
 }
 
@@ -562,6 +567,38 @@ TRANSCRIPT SECTIONS (15 available):
 14. DOWNSIDE SCENARIO
 15. KEY VARIABLES TO MONITOR
 
+8-K SECTIONS (11 available):
+1. BOTTOM LINE
+2. FINANCIAL RESULTS
+3. OPERATIONAL METRICS
+4. MAJOR DEVELOPMENTS
+5. TRANSACTION DETAILS
+6. GUIDANCE & OUTLOOK
+7. STRATEGIC INITIATIVES
+8. RISK FACTORS & HEADWINDS
+9. INDUSTRY & COMPETITIVE LANDSCAPE
+10. CAPITAL ALLOCATION & BALANCE SHEET
+11. KEY VARIABLES TO MONITOR
+
+8-K SELECTION GUIDANCE:
+
+WHEN TO USE 8-K:
+- Material events AFTER last earnings call (M&A, guidance changes, leadership)
+- Breaking news that matches recent 8-K filing date (within 3-5 days)
+- Earnings pre-announcements (Item 2.02)
+- Material agreements (Item 1.01)
+
+TEMPORAL PRIORITY (most recent takes precedence):
+1. 8-K (if event matches filing date) - most timely for material events
+2. Transcript - earnings call context
+3. 10-Q - quarterly baseline
+4. 10-K - annual baseline
+
+8-K vs TRANSCRIPT:
+- Use 8-K when article discusses event AFTER last earnings call
+- Use Transcript when article references earnings call commentary
+- Both can be used together for comprehensive coverage
+
 SELECTION GUIDELINES:
 
 Based on what the bullet discusses, select relevant sections:
@@ -570,31 +607,37 @@ Financial metrics (revenue, margins, EPS):
 → 10-K: FINANCIAL SNAPSHOT (Latest Year), REVENUE STREAMS
 → 10-Q: QUARTERLY FINANCIAL PERFORMANCE (QoQ & YoY), SEGMENT PERFORMANCE TRENDS (QoQ & YoY)
 → Transcript: FINANCIAL RESULTS
+→ 8-K: FINANCIAL RESULTS, GUIDANCE & OUTLOOK
 
 Operational metrics (production, deliveries, users, capacity):
 → 10-K: KEY OPERATIONAL METRICS (KPIs), INFRASTRUCTURE & ASSETS
 → 10-Q: OPERATIONAL METRICS (QoQ & YoY), SEGMENT PERFORMANCE TRENDS (QoQ & YoY)
 → Transcript: OPERATIONAL METRICS
+→ 8-K: OPERATIONAL METRICS, FINANCIAL RESULTS
 
 Strategic developments (M&A, partnerships, investments):
 → 10-K: STRATEGIC PRIORITIES & OUTLOOK, BUSINESS MODEL SUMMARY
 → 10-Q: RECENT EVENTS & SUBSEQUENT EVENTS, SUMMARY OF KEY CHANGES
 → Transcript: MAJOR DEVELOPMENTS, STRATEGIC INITIATIVES
+→ 8-K: TRANSACTION DETAILS, MAJOR DEVELOPMENTS, STRATEGIC INITIATIVES
 
 Risks (regulatory, competitive, operational):
 → 10-K: SPECIFIC RISKS & CONCENTRATIONS, REGULATORY OVERSIGHT
 → 10-Q: NEW RISKS & MATERIAL DEVELOPMENTS, MANAGEMENT COMMENTARY
 → Transcript: RISK FACTORS & HEADWINDS, Q&A HIGHLIGHTS
+→ 8-K: RISK FACTORS & HEADWINDS, MAJOR DEVELOPMENTS
 
 Guidance and outlook:
 → 10-K: STRATEGIC PRIORITIES & OUTLOOK
 → 10-Q: GUIDANCE & OUTLOOK UPDATES, MANAGEMENT COMMENTARY
 → Transcript: GUIDANCE, MANAGEMENT SENTIMENT & TONE
+→ 8-K: GUIDANCE & OUTLOOK, BOTTOM LINE
 
 Balance sheet items (cash, debt, inventory):
 → 10-K: FINANCIAL SNAPSHOT (Latest Year), COST STRUCTURE
 → 10-Q: BALANCE SHEET CHANGES (vs Prior Quarter & Year-End), CASH FLOW ANALYSIS (QTD & YTD)
 → Transcript: CAPITAL ALLOCATION & BALANCE SHEET
+→ 8-K: CAPITAL ALLOCATION & BALANCE SHEET, FINANCIAL RESULTS
 
 Multi-theme bullets (e.g., "Q3 revenue beat and raised guidance"):
 → Include sections for ALL themes mentioned (max 3 per filing type)
@@ -2093,7 +2136,8 @@ Example bullet:
   "filing_hints": {
     "10-K": [],
     "10-Q": [],
-    "Transcript": []
+    "Transcript": [],
+    "8-K": []
   },
   "filing_keywords": []
 }
@@ -2110,6 +2154,7 @@ Select:
 → 10-K: "STRATEGIC PRIORITIES & OUTLOOK", "KEY THINGS TO MONITOR"
 → 10-Q: "GUIDANCE & OUTLOOK UPDATES", "RECENT EVENTS & SUBSEQUENT EVENTS"
 → Transcript: "GUIDANCE", "MAJOR DEVELOPMENTS"
+→ 8-K: "GUIDANCE & OUTLOOK", "MAJOR DEVELOPMENTS"
 
 Example bullet: "Q3 earnings October 22 - Q4 guidance and margin outlook expected"
 → These sections will have forward-looking statements, upcoming milestones
@@ -2124,6 +2169,7 @@ Select:
 → 10-K: "GEOGRAPHIC PRESENCE", "REVENUE STREAMS"
 → 10-Q: "SEGMENT PERFORMANCE TRENDS (QoQ & YoY)", "MANAGEMENT COMMENTARY"
 → Transcript: "FINANCIAL RESULTS", "STRATEGIC INITIATIVES"
+→ 8-K: "FINANCIAL RESULTS", "OPERATIONAL METRICS"
 
 Example bullet: "Asia-Pacific revenue grew 45% YoY to $3.2B"
 → These sections will have geographic footprint, segment revenue breakdown, regional trends
@@ -2138,6 +2184,7 @@ Select:
 → 10-K: "MATERIAL DEPENDENCIES", "SPECIFIC RISKS & CONCENTRATIONS"
 → 10-Q: "NEW RISKS & MATERIAL DEVELOPMENTS", "MANAGEMENT COMMENTARY"
 → Transcript: "RISK FACTORS & HEADWINDS", "Q&A HIGHLIGHTS"
+→ 8-K: "TRANSACTION DETAILS", "RISK FACTORS & HEADWINDS"
 
 Example bullet: "Top customer contract renewal secured for 5 years"
 → These sections will have customer concentration data, supplier dependencies, concentration metrics
@@ -2152,6 +2199,7 @@ Select:
 → 10-K: "LEGAL PROCEEDINGS & CONTINGENCIES", "SPECIFIC RISKS & CONCENTRATIONS"
 → 10-Q: "NEW RISKS & MATERIAL DEVELOPMENTS", "RECENT EVENTS & SUBSEQUENT EVENTS"
 → Transcript: "RISK FACTORS & HEADWINDS", "Q&A HIGHLIGHTS"
+→ 8-K: "RISK FACTORS & HEADWINDS", "MAJOR DEVELOPMENTS"
 
 Example bullet: "Class action lawsuit filed alleging securities fraud"
 → These sections will have existing legal proceedings, contingent liabilities, litigation history
@@ -2173,7 +2221,8 @@ Filing hints should cover BOTH:
   "filing_hints": {
     "10-K": ["FINANCIAL SNAPSHOT (Latest Year)", "STRATEGIC PRIORITIES & OUTLOOK"],
     "10-Q": ["QUARTERLY FINANCIAL PERFORMANCE (QoQ & YoY)", "GUIDANCE & OUTLOOK UPDATES"],
-    "Transcript": ["FINANCIAL RESULTS", "GUIDANCE"]
+    "Transcript": ["FINANCIAL RESULTS", "GUIDANCE"],
+    "8-K": ["FINANCIAL RESULTS", "GUIDANCE & OUTLOOK"]
   }
 }
 
@@ -2195,6 +2244,7 @@ Select:
 → 10-K: "BUSINESS MODEL SUMMARY", "COST STRUCTURE"
 → 10-Q: "RECENT EVENTS & SUBSEQUENT EVENTS", "SEGMENT PERFORMANCE TRENDS (QoQ & YoY)"
 → Transcript: "STRATEGIC INITIATIVES", "FINANCIAL RESULTS"
+→ 8-K: "TRANSACTION DETAILS", "STRATEGIC INITIATIVES"
 
 REGULATORY IMPACT ON OPERATIONS:
 Themes: Regulatory (theme 1) + Operations (theme 2)
@@ -2206,6 +2256,7 @@ Select:
 → 10-K: "REGULATORY OVERSIGHT", "INFRASTRUCTURE & ASSETS"
 → 10-Q: "NEW RISKS & MATERIAL DEVELOPMENTS", "CASH FLOW ANALYSIS (QTD & YTD)"
 → Transcript: "RISK FACTORS & HEADWINDS", "CAPITAL ALLOCATION & BALANCE SHEET"
+→ 8-K: "RISK FACTORS & HEADWINDS", "CAPITAL ALLOCATION & BALANCE SHEET"
 
 COMPETITIVE THREAT TO MARKET POSITION:
 Themes: Competitive (theme 1) + Market share/positioning (theme 2)
@@ -2217,6 +2268,7 @@ Select:
 → 10-K: "INDUSTRY CLASSIFICATION", "KEY PRODUCTS & SERVICES"
 → 10-Q: "COMPETITIVE & INDUSTRY CONTEXT", "SEGMENT PERFORMANCE TRENDS (QoQ & YoY)"
 → Transcript: "INDUSTRY & COMPETITIVE LANDSCAPE", "Q&A HIGHLIGHTS"
+→ 8-K: "INDUSTRY & COMPETITIVE LANDSCAPE", "MAJOR DEVELOPMENTS"
 
 ═══════════════════════════════════════════════════════════════════════════════
 SELECTION PRINCIPLES
@@ -2392,7 +2444,8 @@ NORMAL DAY EXAMPLE (20+ articles, full brief):
         "filing_hints": {
           "10-K": ["KEY OPERATIONAL METRICS (KPIs)", "INFRASTRUCTURE & ASSETS"],
           "10-Q": ["OPERATIONAL METRICS (QoQ & YoY)", "SEGMENT PERFORMANCE TRENDS (QoQ & YoY)"],
-          "Transcript": ["OPERATIONAL METRICS"]
+          "Transcript": ["OPERATIONAL METRICS"],
+          "8-K": ["OPERATIONAL METRICS", "FINANCIAL RESULTS"]
         },
         "filing_keywords": ["deliveries", "production", "automotive revenue"]
       },
@@ -2405,7 +2458,8 @@ NORMAL DAY EXAMPLE (20+ articles, full brief):
         "filing_hints": {
           "10-K": ["KEY PRODUCTS & SERVICES", "STRATEGIC PRIORITIES & OUTLOOK"],
           "10-Q": ["SUMMARY OF KEY CHANGES", "MANAGEMENT COMMENTARY"],
-          "Transcript": ["MAJOR DEVELOPMENTS", "STRATEGIC INITIATIVES"]
+          "Transcript": ["MAJOR DEVELOPMENTS", "STRATEGIC INITIATIVES"],
+          "8-K": ["MAJOR DEVELOPMENTS", "STRATEGIC INITIATIVES"]
         },
         "filing_keywords": ["tax credit", "United States", "Model 3"]
       }

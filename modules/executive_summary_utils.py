@@ -2,13 +2,14 @@
 Shared utilities for executive summary email generation.
 
 Functions:
+- should_include_bullet(): Unified filter check for all bullet filtering (single source of truth)
 - format_bullet_header(): Universal bullet header formatter
 - add_dates_to_email_sections(): Add dates using bullet_id matching
 - filter_bullets_for_email3(): Apply Email #3 filter to remove low-quality bullets
 """
 
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple, Union
 
 
 # Sections where sentiment tags are hidden in Email #3 (user-facing)
@@ -19,6 +20,64 @@ HIDE_SENTIMENT_SECTIONS = {
     'upcoming_catalysts',     # Future events; sentiment doesn't apply cleanly
     'financial_performance',  # Results speak for themselves; "beat" = bullish is obvious
 }
+
+
+def should_include_bullet(bullet: Dict, return_reason: bool = False) -> Union[bool, Tuple[bool, Optional[str]]]:
+    """
+    Unified filter check for all bullet filtering. Single source of truth.
+
+    Filtering rules (in order):
+    1. If filter_status='filtered_out' already set (by Phase 1.5 or previous marking) → exclude
+    2. relevance='none' → exclude
+    3. relevance='indirect' AND impact='low impact' → exclude
+    4. relevance='direct' AND impact='low impact' → exclude
+    5. Missing relevance/impact fields → include (safety default)
+
+    Args:
+        bullet: Bullet dict with optional filter_status, relevance, impact fields
+        return_reason: If True, returns (bool, reason). If False, returns bool only.
+
+    Returns:
+        If return_reason=False: bool (True to include, False to exclude)
+        If return_reason=True: tuple (should_include: bool, reason: str or None)
+
+    Used by:
+        - mark_filtered_bullets(): Sets filter_status on bullets (return_reason=True)
+        - filter_bullets_for_email3(): Removes filtered bullets before Phase 3
+        - get_used_article_indices(): Collects source_articles from surviving bullets
+        - convert_phase1_to_sections_dict(): Filters bullets for Email #3 display
+    """
+    # Check if already filtered (by Phase 1.5 staleness or previous marking)
+    existing_status = bullet.get('filter_status', '').lower()
+    existing_reason = bullet.get('filter_reason', '')
+
+    if existing_status == 'filtered_out':
+        # Already marked as filtered - preserve existing reason
+        reason = existing_reason or 'filtered'
+        return (False, reason) if return_reason else False
+
+    # Get enrichment fields from Phase 2
+    relevance = bullet.get('relevance', '').lower()
+    impact = bullet.get('impact', '').lower()
+
+    # Safety: Don't filter if fields are missing (defensive)
+    if not relevance or not impact:
+        return (True, None) if return_reason else True
+
+    # Filter rule 1: relevance is "none"
+    if relevance == 'none':
+        return (False, "relevance=none") if return_reason else False
+
+    # Filter rule 2: relevance is "indirect" AND impact is "low impact"
+    if relevance == 'indirect' and impact == 'low impact':
+        return (False, "indirect + low impact") if return_reason else False
+
+    # Filter rule 3: relevance is "direct" AND impact is "low impact"
+    if relevance == 'direct' and impact == 'low impact':
+        return (False, "direct + low impact") if return_reason else False
+
+    # Keep bullet
+    return (True, None) if return_reason else True
 
 
 def format_bullet_header(bullet: Dict, show_reason: bool = True, section_name: str = None) -> str:
@@ -187,41 +246,6 @@ def add_dates_to_email_sections(
     return sections
 
 
-def _get_filter_status(bullet: Dict) -> tuple:
-    """
-    Determine filter status for a bullet.
-
-    Returns:
-        Tuple of (should_include: bool, filter_reason: str or None)
-        - (True, None) = bullet should be included
-        - (False, "relevance=none") = filtered due to no relevance
-        - (False, "indirect + low impact") = filtered due to indirect relevance with low impact
-        - (False, "direct + low impact") = filtered due to direct relevance with low impact
-    """
-    # Get enrichment fields
-    relevance = bullet.get('relevance', '').lower()
-    impact = bullet.get('impact', '').lower()
-
-    # Safety: Don't filter if fields are missing
-    if not relevance or not impact:
-        return (True, None)
-
-    # Filter rule 1: relevance is "none"
-    if relevance == 'none':
-        return (False, "relevance=none")
-
-    # Filter rule 2: relevance is "indirect" AND impact is "low impact"
-    if relevance == 'indirect' and impact == 'low impact':
-        return (False, "indirect + low impact")
-
-    # Filter rule 3: relevance is "direct" AND impact is "low impact"
-    if relevance == 'direct' and impact == 'low impact':
-        return (False, "direct + low impact")
-
-    # Keep bullet
-    return (True, None)
-
-
 def mark_filtered_bullets(phase2_json: Dict) -> Dict:
     """
     Mark bullets with filter_status without removing them.
@@ -260,8 +284,8 @@ def mark_filtered_bullets(phase2_json: Dict) -> Dict:
     for section_name in bullet_sections:
         if section_name in sections:
             for bullet in sections[section_name]:
-                should_include, filter_reason = _get_filter_status(bullet)
-                if should_include:
+                include, filter_reason = should_include_bullet(bullet, return_reason=True)
+                if include:
                     bullet['filter_status'] = 'included'
                     bullet['filter_reason'] = None
                 else:
@@ -278,14 +302,8 @@ def filter_bullets_for_email3(phase2_json: Dict) -> Dict:
     """
     Apply Email #3 filter to Phase 2 JSON: Remove low-quality bullets.
 
-    Filtering rules:
-    - Remove bullets with relevance = 'none'
-    - Remove bullets with relevance = 'indirect' AND impact = 'low impact'
-    - Remove bullets with relevance = 'direct' AND impact = 'low impact'
-    - Scenarios (bottom_line, upside_scenario, downside_scenario) pass through unchanged
-
-    This function applies the same logic as _should_include_bullet_in_email3() from
-    executive_summary_phase1.py, but operates on full JSON structure.
+    Uses should_include_bullet() as single source of truth for filtering rules.
+    See should_include_bullet() docstring for filtering rules.
 
     Args:
         phase2_json: Phase 1+2 merged JSON with enrichment metadata
@@ -295,7 +313,6 @@ def filter_bullets_for_email3(phase2_json: Dict) -> Dict:
 
     Used by:
     - Phase 3 generation (filter before context integration)
-    - Email #3 display (filter before showing to users)
     """
     import copy
 
@@ -320,11 +337,11 @@ def filter_bullets_for_email3(phase2_json: Dict) -> Dict:
             # Filter bullets - keep only those that pass filter
             sections[section_name] = [
                 b for b in sections[section_name]
-                if _get_filter_status(b)[0]  # [0] is should_include
+                if should_include_bullet(b)  # Uses unified filter logic
             ]
 
-    # Scenarios pass through unchanged (no filtering)
-    # bottom_line, upside_scenario, downside_scenario are dicts, not arrays
+    # Note: Phase 4 generates paragraph sections (bottom_line, upside_scenario, downside_scenario)
+    # from surviving bullets, so they don't exist at this point in the pipeline.
 
     return filtered_json
 
@@ -333,16 +350,21 @@ def merge_filtered_bullets_back(phase3_json: Dict, marked_phase2_json: Dict) -> 
     """
     Merge filtered-out bullets back into Phase 3 JSON for Email #2 display.
 
-    Phase 3 only processes included bullets, so filtered bullets are missing.
-    This function adds them back with their filter_status preserved.
+    Phase 3 only processes included bullets (adds deduplication tags), so filtered
+    bullets are missing from Phase 3 output. This function adds them back with
+    their filter_status preserved.
+
+    NOTE: Phase 3 is now dedup-only - it doesn't generate content_integrated.
+    Both included and filtered bullets use the same content/context fields.
 
     Args:
-        phase3_json: Phase 3 merged JSON (only has included bullets with content_integrated)
+        phase3_json: Phase 3 merged JSON (has deduplication tags for included bullets)
         marked_phase2_json: Phase 2 JSON with all bullets marked via mark_filtered_bullets()
 
     Returns:
-        New JSON with all bullets - included ones have content_integrated,
-        filtered ones have filter_status='filtered_out' and no content_integrated
+        New JSON with all bullets:
+        - Included bullets: Have deduplication tags from Phase 3
+        - Filtered bullets: Have filter_status='filtered_out' from Phase 2
 
     Used by:
     - generate_executive_summary_all_phases() after Phase 3 completes
@@ -384,14 +406,14 @@ def merge_filtered_bullets_back(phase3_json: Dict, marked_phase2_json: Dict) -> 
                     phase3_bullets_by_id[bullet_id] = b
 
         # Rebuild section with ALL bullets from marked_phase2_json
-        # Use Phase 3 version if available (has content_integrated)
-        # Otherwise use marked Phase 2 version (filtered_out, no content_integrated)
+        # Use Phase 3 version if available (has deduplication tags)
+        # Otherwise use marked Phase 2 version (filtered_out, no dedup processing)
         new_bullets = []
         for marked_bullet in marked_sections[section_name]:
             bullet_id = marked_bullet.get('bullet_id')
 
             if bullet_id and bullet_id in phase3_bullets_by_id:
-                # Use Phase 3 version (has content_integrated)
+                # Use Phase 3 version (has deduplication metadata)
                 phase3_bullet = phase3_bullets_by_id[bullet_id]
                 # Preserve filter_status from marked version
                 phase3_bullet['filter_status'] = marked_bullet.get('filter_status', 'included')

@@ -510,20 +510,20 @@ def generate_executive_summary_phase4(
         LOG.warning(f"[{ticker}] ⚠️ Phase 4: No surviving bullets - returning empty paragraphs")
         empty_result = {
             "phase4_bottom_line": {
-                "content": "No material developments in recent articles.",
-                "context": "No relevant filing context available.",
+                "content": "No material developments reported for the target company this period.",
+                "context": "No relevant filing context found for this development.",
                 "source_articles": [],
                 "date_range": ""
             },
             "phase4_upside_scenario": {
-                "content": "No material upside catalysts in recent articles.",
-                "context": "No relevant filing context available.",
+                "content": "No material upside catalysts discussed in recent articles.",
+                "context": "No relevant filing context found for this development.",
                 "source_articles": [],
                 "date_range": ""
             },
             "phase4_downside_scenario": {
-                "content": "No material downside risks in recent articles.",
-                "context": "No relevant filing context available.",
+                "content": "No material downside risks discussed in recent articles.",
+                "context": "No relevant filing context found for this development.",
                 "source_articles": [],
                 "date_range": ""
             }

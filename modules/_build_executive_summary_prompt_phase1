@@ -70,9 +70,9 @@ WHAT YOU DO:
 ✓ Synthesize articles into clear, information-dense bullets
 ✓ Assign bullets to correct sections based on content type
 ✓ Generate filing hints for each bullet (tells Phase 2 where to look in 10-K/10-Q/Transcript)
-✓ Write Bottom Line (≤150 words, article synthesis only)
-✓ Write all other sections per their specific requirements
 ✓ Output valid, parseable JSON
+
+NOTE: Phase 4 generates paragraph sections (bottom_line, upside_scenario, downside_scenario) from surviving bullets. Phase 1 generates ONLY bullet sections.
 
 Phase 2 will later enrich your output with SEC filing data and calculate impact/sentiment tags.
 
@@ -98,12 +98,6 @@ You MUST output valid JSON with this EXACT structure:
 
 {
   "sections": {
-    "bottom_line": {
-      "content": "string (≤150 words)",
-      "source_articles": [0, 2, 5, 8],
-      "date_range": "string (consolidated date range from all inline dates in content)",
-      "word_count": integer
-    },
     "major_developments": [
       {
         "bullet_id": "string (lowercase topic_label with underscores, no special chars)",
@@ -152,16 +146,6 @@ You MUST output valid JSON with this EXACT structure:
         "filing_keywords": ["keyword1", "keyword2", "keyword3"]
       }
     ],
-    "upside_scenario": {
-      "content": "string (80-100 words, single paragraph)",
-      "source_articles": [0, 3, 7],
-      "date_range": "string (consolidated date range from all inline dates in content)"
-    },
-    "downside_scenario": {
-      "content": "string (single paragraph, 3-4 sentences)",
-      "source_articles": [2, 6, 11],
-      "date_range": "string (consolidated date range from all inline dates in content)"
-    },
     "key_variables": [
       {
         "bullet_id": "string",
@@ -183,12 +167,6 @@ Bullet sections (major_developments, financial_performance, risk_factors, wall_s
 - filing_keywords OPTIONAL (0-4 keywords, empty array [] if none applicable)
 - date_range REQUIRED for all bullet sections (empty string "" if no date found)
 
-Scenario sections (upside_scenario, downside_scenario):
-- Single object with content, source_articles, and date_range fields
-- source_articles REQUIRED: Array of 0-indexed article numbers that informed this scenario
-- No bullet_id, topic_label, or filing_hints
-- date_range consolidates all dates from content into a range
-
 Key Variables section:
 - Array of bullet objects
 - Each has: bullet_id, topic_label, content, source_articles
@@ -196,13 +174,8 @@ Key Variables section:
 - NO filing_hints (forward-looking monitoring variables, not enrichable from past filings)
 - NO date_range (forward-looking, not based on dated articles)
 
-Bottom Line section:
-- Single object with content, source_articles, date_range, and word_count fields
-- source_articles REQUIRED: Array of 0-indexed article numbers synthesized in bottom line
-- date_range consolidates all dates from content into a range
-
 CRITICAL JSON REQUIREMENTS:
-1. ALL 10 sections must be present inside "sections" object (even if empty)
+1. ALL 7 sections must be present inside "sections" object (even if empty)
 2. Empty bullet sections = [] (empty array), NOT null, NOT omitted
 3. Empty key_variables = [] (empty array)
 4. All strings must be properly escaped (quotes, newlines, etc.)
@@ -210,16 +183,13 @@ CRITICAL JSON REQUIREMENTS:
 6. Must be parseable by json.loads() in Python
 
 SECTION ORDER (must appear in this exact order):
-1. bottom_line
-2. major_developments
-3. financial_performance
-4. risk_factors
-5. wall_street_sentiment
-6. competitive_industry_dynamics
-7. upcoming_catalysts
-8. upside_scenario
-9. downside_scenario
-10. key_variables
+1. major_developments
+2. financial_performance
+3. risk_factors
+4. wall_street_sentiment
+5. competitive_industry_dynamics
+6. upcoming_catalysts
+7. key_variables
 
 ═══════════════════════════════════════════════════════════════════════════════
 SOURCE ARTICLE TRACKING
@@ -275,12 +245,6 @@ Extraction patterns for date_range field:
 - Consecutive days: Can consolidate as range "Nov 04-08"
 - If no date found: Use empty string ""
 
-For bottom_line, upside_scenario, downside_scenario:
-- Extract ALL article dates
-- Consolidate into a single date range
-- Store in date_range field
-- Format: "Nov 03-08" or "Oct 28, Nov 03-08" or similar
-
 Example of correct date handling:
 {
   "content": "Company reported Q3 earnings beat per Bloomberg",
@@ -306,18 +270,12 @@ Output goes in source_articles array only - never in content text.
 SECTION LENGTH LIMITS
 ═══════════════════════════════════════════════════════════════════════════════
 
-Bottom Line: 150 words (HARD CAP - strict enforcement with word count)
-
 Major Developments: 3-8 bullets (aim for comprehensive coverage)
 Financial/Operational Performance: 2-5 bullets max
 Risk Factors: 0-4 bullets max (may be empty if risks covered elsewhere)
 Wall Street Sentiment: 2-6 bullets (include all analyst views)
 Competitive/Industry Dynamics: 2-8 bullets (comprehensive industry context)
 Upcoming Catalysts: 1-4 bullets max
-
-Upside Scenario: Single paragraph, 3-6 sentences (~80-160 words)
-Downside Scenario: Single paragraph, 3-6 sentences (~80-160 words)
-
 Key Variables: 3-8 bullets max
 
 Individual bullets: No hard limit, but be information-dense - every word should add value. 
@@ -673,37 +631,17 @@ Quiet day criteria:
 Escape hatch JSON:
 {
   "sections": {
-    "bottom_line": {
-      "content": "No material developments reported for the target company this period.",
-      "source_articles": [],
-      "date_range": "[extract from CURRENT DATE header - e.g., 'November 23, 2025' becomes 'Nov 23']",
-      "word_count": [actual count]
-    },
     "major_developments": [],
     "financial_performance": [],
     "risk_factors": [],
     "wall_street_sentiment": [],
     "competitive_industry_dynamics": [],
     "upcoming_catalysts": [],
-    "upside_scenario": {
-      "content": "No new upside catalysts discussed in recent articles.",
-      "source_articles": [],
-      "date_range": ""
-    },
-    "downside_scenario": {
-      "content": "No new downside risks discussed in recent articles.",
-      "source_articles": [],
-      "date_range": ""
-    },
     "key_variables": []
   }
 }
 
-DATE HANDLING FOR 0-ARTICLE CASE:
-- bottom_line.date_range: Extract current date from CURRENT DATE header in user prompt (e.g., "November 23, 2025" → "Nov 23")
-- upside_scenario.date_range: Empty string ""
-- downside_scenario.date_range: Empty string ""
-- All bullet sections are empty arrays, no date_range needed
+NOTE: On quiet days, all bullet sections are empty arrays [].
 
 If 2+ articles with ANY substantive content, proceed with full brief generation.
 
@@ -771,17 +709,14 @@ SPLIT ATTRIBUTION (different claims = different sources):
 Exception: Same fact from multiple sources is fine:
 ✓ "Revenue beat consensus per Bloomberg and Reuters"
 
-DATE FORMAT BY SECTION:
-- Bottom Line: Consolidated at end "(Oct 22-24)" - stored in date_range, appended by post-processing
-- Bullets: Article dates in date_range field only, NOT inline - "per Bloomberg" (no date)
-- Upside/Downside: Consolidated at end "(Oct 28-29)" - stored in date_range, appended by post-processing
+DATE FORMAT FOR BULLETS:
+- Article dates in date_range field only, NOT inline - "per Bloomberg" (no date)
+- Post-processing appends date_range at the end of each bullet
 
 NOTE: Filing dates (per Oct 15 call, per Q3 10-Q) will be added by Phase 2 and should remain inline
 
 ATTRIBUTION DENSITY:
-- Bottom Line: 100% (every claim attributed)
-- Bullets: Every claim attributed
-- Upside/Downside: 100% (every sentence attributed)
+- Every bullet claim must be attributed to a specific source
 
 ATTRIBUTION SPECIFICITY:
 ✓ "per Q3 earnings call", "per Wedbush", "per Bloomberg"
@@ -792,7 +727,6 @@ PRE-SUBMISSION CHECK:
 □ Every implication attributed to who said it
 □ No vague attribution ("reportedly", "per analyst" without firm)
 □ Split attribution when different claims from different sources
-□ Section density requirements met (100% Bottom Line, Bullets, and Upside/Downside)
 □ If you cannot verify source for a claim → Remove the claim or find the source in articles.
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -896,73 +830,10 @@ EXCLUDE ENTIRELY from all sections (do not include even as low impact):
 If article discusses these topics, skip them entirely. Do not create bullets for noise.
 
 ═══════════════════════════════════════════════════════════════════════════════
-BOTTOM LINE - EDITORIAL DISCIPLINE
+EDITORIAL DISCIPLINE - APPLIES TO ALL BULLET CONTENT
 ═══════════════════════════════════════════════════════════════════════════════
 
-Bottom Line is a PARAGRAPH, not bullets. Use consolidated date range at END.
-
-CRITICAL - BOTTOM LINE INFERENCE TIER:
-
-This section uses TIER 0 ONLY: Facts + Attribution. No inference, no framing.
-
-Before writing each sentence, ask:
-□ Did article explicitly state this fact? (If NO → delete)
-□ Can I attribute this to a source? (If NO → delete)
-□ Am I using article's exact verbs? (If NO → change to article's verbs)
-
-FORBIDDEN: "strengthened", "support", "pressure", "created", "positioned"
-ALLOWED: "reached", "increased to", "reported", "per [Source]"
-
-Natural gas example:
-❌ "Gas prices strengthened, supporting economics"
-✅ "Gas prices reached $3.45 per EIA; LNG exports 122 Bcf per report"
-
-If analyst made the connection:
-✅ "Gas prices reached $3.45 per EIA; ClearView Energy analyst stated prices support generator economics per Oct 27 report"
-
-Structure (≤150 words total):
-- Sentence 1-2: What happened (most material development from recent trading days)
-- Sentence 3-4: Key quantified context with BALANCED PERSPECTIVE
-  → If articles include both bullish AND bearish material themes, BOTH must appear
-  → Use "however" structure: "[Development A]; however, [Contrarian signal B]"
-- Sentence 5: Forward-looking monitoring statement (brief)
-
-CRITICAL BALANCE RULE:
-If 3+ bullish items included → MUST add bearish counterpoint if any bearish articles exist
-If 3+ bearish items included → MUST add bullish counterpoint if any bullish articles exist
-Target: Reflect proportional sentiment distribution of articles (~60% bullish / 30% bearish = 3-4 bullish items + 1-2 bearish items)
-
-Lead with developments from most recent trading day, then key context from earlier in coverage period.
-
-ATTRIBUTION FORMAT:
-
-See ATTRIBUTION REQUIREMENTS section (top of prompt) for complete rules.
-
-Bottom Line requirements:
-- 100% attribution requirement (every claim attributed)
-- Inline format: "per [source]" throughout paragraph
-- Check: Count attributions before finalizing - must equal claim count
-- Article dates stored in date_range field (post-processing appends at end)
-
-Example format:
-"Company reported Q3 revenue per Oct 28 earnings call; analysts raised targets per Wedbush; recall announced per NHTSA"
-
-MANDATORY ATTRIBUTION CHECK:
-Before finalizing Bottom Line:
-1. Count major factual claims (typically 8-12 claims in 150-word Bottom Line)
-2. Count attributions (must be 100% of claims)
-3. If below 100%: Add specific sources ("per Bloomberg" not "per reports")
-4. Verify no vague attribution ("per analyst" → "per Wedbush analyst")
-5. Recount - must hit 100% threshold
-
-MANDATORY LENGTH CHECK:
-After writing Bottom Line, count words. If >150 words:
-1. Remove lowest-priority detail (usually: granular peer comparisons, secondary metrics)
-2. Condense monitoring guidance (belongs in Key Variables anyway)
-3. Trim redundant phrasing ("announced that they will" → "will")
-4. Recount - repeat until ≤150 words
-
-EDITORIAL BANS - Never characterize sentiment or tone:
+Never characterize sentiment or tone. State facts with attribution only.
 
 BANNED PHRASES (never use these):
 ✗ "positive developments"
@@ -1052,133 +923,31 @@ Examples of what to exclude:
 ❌ "Affects roughly 10,000 employees" (unless article said this)
 
 ═══════════════════════════════════════════════════════════════════════════════
-UPSIDE/DOWNSIDE SCENARIOS - LOGIC & CONSISTENCY CHECKS
+IMPLICATION DIRECTION CHECK - VERIFY BEFORE ASSIGNING SENTIMENT
 ═══════════════════════════════════════════════════════════════════════════════
 
-CONTENT SUFFICIENCY CHECK - Run this before writing scenarios:
+Before writing bullet content or assigning sentiment, verify cause-effect logic is correct
+for the target company:
 
-Count directional signals:
-- BULLISH: [COMPANY] positive developments (beat, raise, win, upgrade) OR competitor/industry articles explicitly stating benefit to target company
-- BEARISH: [COMPANY] negative developments (miss, cut, recall, investigation, downgrade) OR competitor/industry articles explicitly stating harm to target company
+Scarcity/Supply Constraints:
+✓ CORRECT: "Supply struggling to meet demand creates pricing power per analyst" (bullish for suppliers)
+✗ WRONG: "Supply struggling to meet demand limits growth" (inverted - scarcity helps suppliers)
 
-DO NOT COUNT: Competitor performance without explicit target company impact stated, industry trends without target company connection
+Oversupply/Capacity Additions:
+✓ CORRECT: "Excess capacity creates pricing pressure per report" (bearish for suppliers)
+✗ WRONG: "Capacity additions expand market opportunity" (ignores pricing impact)
 
-SCENARIO OUTPUT BY SIGNAL COUNT:
+Input Costs:
+✓ CORRECT: "Rising input costs pressure margins per analyst" (bearish for buyers)
+✗ WRONG: "Higher gas prices support economics" (if company buys gas, this is wrong)
 
-Upside signals = 0 → "No material upside catalysts discussed in recent articles."
-Upside signals = 1 → Write 1-2 sentences on that signal + "No additional upside catalysts discussed in recent articles."
-Upside signals = 2-3 → Write 3-4 sentence scenario
-Upside signals ≥ 4 → Write 4-6 sentence scenario (full synthesis)
+OPERATIONAL MECHANICS - COST/REVENUE DIRECTION:
 
-Downside signals = 0 → "No material downside risks discussed in recent articles."
-Downside signals = 1 → Write 1-2 sentences on that signal + "No additional downside risks discussed in recent articles."
-Downside signals = 2-3 → Write 3-4 sentence scenario
-Downside signals ≥ 4 → Write 4-6 sentence scenario (full synthesis)
+- Power generators: Buy fuel (gas/coal) → Higher fuel prices = bearish | Sell electricity → Higher power prices = bullish
+- Oil/gas producers: Sell commodities → Higher commodity prices = bullish
+- Airlines/manufacturers: Buy inputs (fuel/steel) → Higher input costs = bearish
 
-CRITICAL: Competitor data from geography where target company has 0% exposure = NOT a signal. Essex California strength ≠ upside for DC-only REIT.
-
-When signals are low (0-1), output minimal scenario. Do not fabricate scenarios from tangentially related competitor/industry data lacking explicit target company connection.
-
-INFERENCE DISCIPLINE: Use TIER 0 ONLY (Facts + Attribution). No unattributed inference.
-
-Before finalizing Upside or Downside scenarios, run these validation checks:
-
-1. IMPLICATION DIRECTION CHECK
-
-   Verify cause-effect logic is correct for the target company:
-
-   Scarcity/Supply Constraints:
-   ✓ CORRECT: "Supply struggling to meet demand creates pricing power per analyst" (bullish for suppliers)
-   ✗ WRONG: "Supply struggling to meet demand limits growth" (inverted - scarcity helps suppliers)
-
-   Oversupply/Capacity Additions:
-   ✓ CORRECT: "Excess capacity creates pricing pressure per report" (bearish for suppliers)
-   ✗ WRONG: "Capacity additions expand market opportunity" (ignores pricing impact)
-
-   Input Costs:
-   ✓ CORRECT: "Rising input costs pressure margins per analyst" (bearish for buyers)
-   ✗ WRONG: "Higher gas prices support economics" (if company buys gas, this is wrong)
-
-2. CROSS-SECTION CONSISTENCY CHECK
-
-   Compare scenario statements with these sections to avoid contradictions:
-
-   □ Bottom Line: If Bottom Line emphasizes strength, Downside can note risks but can't contradict facts
-     - Example: Bottom Line says "Q3 beat consensus" → Downside can say "sustainability concerns" but NOT "Q3 missed"
-
-   □ Major Developments: If Major Dev framed positively, don't flip characterization in scenarios
-     - ✓ ALLOWED: Major Dev "Partnership announced" → Downside "Partnership execution risks per analyst"
-     - ✗ FORBIDDEN: Major Dev "Strategic partnership" → Downside "Risky partnership with undisclosed terms"
-
-   □ Risk Factors: Downside SHOULD expand on risks from this section (consistency expected)
-
-   □ Competitive/Industry Dynamics: If section shows tight markets, Downside can note vulnerability but not claim oversupply
-     - ✓ ALLOWED: Industry shows "tight supply" → Downside "vulnerability if new capacity comes online"
-     - ✗ FORBIDDEN: Industry shows "tight supply" → Downside "oversupply pressures pricing"
-
-3. ATTRIBUTION REQUIREMENT
-
-   Every sentence must cite source - no unattributed conclusions:
-
-  ✗ WRONG: "Analyst raised concerns about demand"
-  ✓ CORRECT: "UBS analyst Lloyd Walmsley raised concerns about post-tax-credit demand sustainability per Oct 24 report"
-
-  ✗ WRONG: "Positions company for growth" (who concluded this?)
-  ✓ CORRECT: "CEO Stephen Hemsley stated acquisition positions company for Medicare Advantage growth per Oct 28 earnings call"
-
-  ✗ WRONG: "Could impact margins" (who says? how much?)
-  ✓ CORRECT: "Goldman Sachs analyst projected margin impact of 200-300 bps per research note"
-
-   Required formats:
-   ✓ "[Analyst name] from [Firm] stated..." - "Dan Ives from Wedbush stated..."
-   ✓ "[Author name] raised concerns per [Publication]..." - "Liam Denning raised concerns per Bloomberg Opinion..."
-   ✓ "Per [Named Source], analysts projected..." - "Per Morgan Stanley research, analysts projected..."
-   ✓ "[Executive name with title] stated..." - "CFO Vaibhav Taneja stated..."
-
-   BANNED VAGUE PHRASES:
-   ✗ "per analyst" (which analyst? which firm?)
-   ✗ "per management" (which executive? which call/release?)
-   ✗ "per report" (which publication? which author?)
-   ✗ "per sources" (name the sources)
-   ✗ "per articles" (which specific articles?)
-
-UPSIDE SCENARIO: Single paragraph, 3-6 sentences (~80-160 words)
-
-See ATTRIBUTION REQUIREMENTS section (top of prompt) for complete rules.
-
-- Synthesize bullish narrative from articles
-- Base on: analyst bull cases, management optimism, positive catalysts discussed
-- Include analyst price targets if mentioned
-- Format as coherent narrative (not bullet points)
-- Include quantification when articles provide: price targets, percentage changes, dollar amounts, margins, quantities
-
-Requirements:
-□ Every sentence has attribution (100% requirement)
-□ Named analyst + firm OR named publication (not "analyst stated" or "per reports")
-□ Split attribution: Different claims = different sources (see ATTRIBUTION REQUIREMENTS)
-□ Coverage check: Include all high-impact bullish developments
-
-Format: Paragraph with consolidated date at end
-
-DOWNSIDE SCENARIO: Single paragraph, 3-6 sentences (~80-160 words)
-
-See ATTRIBUTION REQUIREMENTS section (top of prompt) for complete rules.
-
-- Synthesize bearish narrative from articles
-- Base on: analyst concerns, risks flagged, negative developments discussed
-- Include analyst bear targets if mentioned
-- Format as coherent narrative (not bullet points)
-- Include quantification when articles provide: price targets, percentage changes, dollar amounts, margins, quantities
-
-Requirements:
-□ Every sentence has attribution (100% requirement)
-□ Named analyst + firm OR named publication (not "analyst stated" or "per reports")
-□ Split attribution: Different claims = different sources (see ATTRIBUTION REQUIREMENTS)
-□ Coverage check: Include all high-impact bearish developments
-
-Format: Paragraph with consolidated date at end
-
-If articles don't explicitly frame bull/bear scenarios, synthesize from facts and views articles presented, maintaining strict attribution to sources for all claims.
+Do not reverse the direction of impact based on assumptions.
 
 ═══════════════════════════════════════════════════════════════════════════════
 LEGAL COMPLIANCE - MANDATORY LANGUAGE RESTRICTIONS
@@ -1442,7 +1211,7 @@ Examples:
 
 OPERATIONAL MECHANICS - COST/REVENUE DIRECTION:
 
-Before assigning sentiment or writing scenarios, verify cause-effect relationships:
+Before assigning bullets to sections, verify cause-effect relationships:
 - Power generators: Buy fuel (gas/coal) → Higher fuel prices = bearish | Sell electricity → Higher power prices = bullish
 - Oil/gas producers: Sell commodities → Higher commodity prices = bullish
 - Airlines/manufacturers: Buy inputs (fuel/steel) → Higher input costs = bearish
@@ -1629,8 +1398,6 @@ SECTION ASSIGNMENT LOGIC - WHERE BULLETS BELONG - NO DUPLICATION
 ═══════════════════════════════════════════════════════════════════════════════
 
 CRITICAL: Each theme appears in EXACTLY ONE bullet section. No duplication. No exceptions.
-
-(Bottom Line, Upside/Downside have separate rules - not counted in this limit)
 
 Bullets must be assigned to the correct section based on content type, not importance.
 
@@ -2546,13 +2313,11 @@ Before finalizing output, verify these critical requirements:
 
 1. JSON STRUCTURE
 □ Valid JSON (parseable by json.loads())
-□ All 10 sections present in "sections" object
+□ All 7 bullet sections present in "sections" object
 □ Empty bullet sections = [] (empty array)
-□ Bottom Line has word_count field
 □ All filing_hints use correct section names (ALL CAPS, exact match)
 
 2. SECTION COMPLETENESS
-□ Bottom Line ≤150 words (count them)
 □ Major Developments: 3-6 bullets, each passes "Remove the target company - still news?" test
 □ Financial Performance: 2-4 bullets, [COMPANY] articles only
 □ Risk Factors: 0-4 bullets (may be empty if risks covered elsewhere per hierarchy)
@@ -2565,7 +2330,6 @@ Before finalizing output, verify these critical requirements:
 □ Every claim traceable to specific source (article + date)
 □ Every implication/connection attributed to author ("CEO stated...", "Wedbush analyst noted...")
 □ No phrases like "positions company for X" without attribution
-□ Upside/Downside scenarios cite specific analysts/sources for conclusions
 
 4. ARTICLE-FIRST COMPLIANCE
 □ Every bullet triggered by article (no bullets from filing discussion alone)
@@ -2575,8 +2339,8 @@ Before finalizing output, verify these critical requirements:
 
 5. INFERENCE BOUNDARIES
 □ Tier 0 (bullet content): Only direct statements from articles with attribution
-□ Tier 1 (scenarios): Single-step logical connections only (no multi-hop chains)
-□ Tier 2 (synthesis): Combined only same event/framework articles
+□ Tier 1 (bullet implications): Single-step logical connections only (no multi-hop chains)
+□ Tier 2 (cross-bullet synthesis): Combined only same event/framework articles
 □ No multi-hop causal chains (X → Y → Z forbidden)
 
 6. LANGUAGE PRESERVATION
@@ -2593,7 +2357,6 @@ Before finalizing output, verify these critical requirements:
 8. LEGAL COMPLIANCE
 □ No investment advice ("buy", "sell", "we recommend", "you should")
 □ All recommendations attributed to analysts/sources
-□ Scenarios framed as "per [authors]" not personal recommendations
 
 9. TEMPORAL LOGIC
 □ DATES: For any sentence with 2+ dates, verify chronological order
@@ -2619,12 +2382,6 @@ NORMAL DAY EXAMPLE (20+ articles, full brief):
 
 {
   "sections": {
-    "bottom_line": {
-      "content": "Tesla delivered 462,890 vehicles in Q3, exceeding consensus estimates of 455,000, with production reaching 469,796 units per company report October 22. Multiple analysts raised price targets ahead of Q3 earnings, with Wedbush lifting target to $600 citing AI transformation leadership. Company launched stripped-down Model 3 at $36,990 and Model Y at $39,990 in early October to stimulate demand following September 30 federal tax credit expiration. UBS maintained Sell rating citing concerns about sustainable demand post-credit, while Barclays noted shares increasingly disconnected from fundamentals with 2025 delivery forecast 1.95M units below Bloomberg consensus 2.08M. Q3 earnings scheduled October 22 after market close with focus on Q4 guidance, margin trajectory, and robotaxi expansion timeline.",
-      "source_articles": [0, 1, 3, 5, 8, 12, 15],
-      "date_range": "Oct 18-22",
-      "word_count": 118
-    },
     "major_developments": [
       {
         "bullet_id": "q3_deliveries_beat",
@@ -2658,21 +2415,11 @@ NORMAL DAY EXAMPLE (20+ articles, full brief):
     "wall_street_sentiment": [...],
     "competitive_industry_dynamics": [...],
     "upcoming_catalysts": [...],
-    "upside_scenario": {
-      "content": "Multiple analysts raised price targets ahead of Q3 earnings, with Wedbush stating Tesla is at forefront of AI-driven transformation...",
-      "source_articles": [1, 5, 12],
-      "date_range": "Oct 18-22"
-    },
-    "downside_scenario": {
-      "content": "Bearish analysts warned Q3 delivery strength may represent local peak...",
-      "source_articles": [8, 15],
-      "date_range": "Oct 20-22"
-    },
     "key_variables": [...]
   }
 }
 
-NOTE: For quiet days (0-1 non-material articles), use minimal output with empty arrays [] for all bullet sections and brief statements in upside_scenario/downside_scenario noting no new catalysts/risks discussed.
+NOTE: For quiet days (0-1 non-material articles), use minimal output with empty arrays [] for all bullet sections.
 
 ═══════════════════════════════════════════════════════════════════════════════
 EDGE CASES

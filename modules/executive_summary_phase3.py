@@ -1,17 +1,12 @@
 """
-Executive Summary Phase 3 - Context Integration + Length Enforcement
+Executive Summary Phase 3 - Deduplication Only
 
-NEW (Nov 2025): Phase 3 now returns JSON (not markdown) with integrated content only.
-Phase 3 is purely mechanical: weaves Phase 2 context into Phase 1 content and enforces length limits.
+NEW (Dec 2025): Phase 3 is dedup-only. It passes through content/context unchanged.
+Only merges the deduplication field (status, absorbs/absorbed_by, shared_theme).
 
 Key functions:
-- generate_executive_summary_phase3(): Main entry point - returns merged JSON with integrated content
-- merge_phase3_with_phase2(): Merges Phase 3 integrated content with Phase 2 metadata using bullet_id
-
-DEPRECATED functions (markdown-based, no longer used):
-- add_date_ranges_to_phase3_markdown()
-- parse_phase3_markdown_to_sections()
-- save_editorial_summary()
+- generate_executive_summary_phase3(): Main entry point - returns merged JSON with dedup metadata
+- merge_phase3_with_phase2(): Merges Phase 3 dedup metadata with Phase 2 JSON using bullet_id
 """
 
 import json

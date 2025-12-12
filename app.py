@@ -591,9 +591,10 @@ def log_cost_summary(ticker: str, company_name: str = ""):
         "executive_summary_phase1_5": ("🔍 Executive Summary - Phase 1.5", 19),
         "executive_summary_phase2": ("📄 Executive Summary - Phase 2", 20),
         "executive_summary_phase3": ("📝 Executive Summary - Phase 3", 21),
+        "executive_summary_phase4": ("✍️ Executive Summary - Phase 4", 22),
         # Other
-        "research_summary": ("📋 Research Summary (Transcript/PR)", 22),
-        "ticker_metadata_generation": ("🏷️ Ticker Metadata Generation", 23)
+        "research_summary": ("📋 Research Summary (Transcript/PR)", 23),
+        "ticker_metadata_generation": ("🏷️ Ticker Metadata Generation", 24)
     }
 
     # Sort by display order
@@ -2775,21 +2776,23 @@ def map_company_release_to_article_dict(release_row: Dict) -> Dict | None:
         return None
 
 @with_deadlock_retry()
-def update_executive_summary_with_phase3(
+def update_executive_summary_json(
     ticker: str,
-    phase3_merged_json: Dict,
-    phase3_model: str = None
+    summary_json: Dict,
+    phase: str = 'phase3',
+    model: str = None
 ) -> bool:
     """
-    Update existing executive summary with Phase 3 integrated content.
+    Update existing executive summary with new JSON content.
 
-    Overwrites summary_text and summary_json with Phase 3 merged JSON (Phase 1+2+3).
-    Updates generation_phase to 'phase3' and records Phase 3 model for tracking.
+    Used after Phase 3 (to save Phase 1+2+3) and after Phase 4 (to save Phase 1+2+3+4).
+    Overwrites summary_text and summary_json fields in database.
 
     Args:
         ticker: Stock ticker
-        phase3_merged_json: Complete merged JSON from Phase 1+2+3
-        phase3_model: Model used for Phase 3 (e.g., 'claude-sonnet-4-5', 'gemini-2.5-pro')
+        summary_json: Complete merged JSON to save
+        phase: Phase name for tracking ('phase3' or 'phase4')
+        model: Model used for this phase (e.g., 'claude-sonnet-4-5', 'gemini-2.5-pro')
 
     Returns:
         bool: True if update successful, False otherwise
@@ -2799,24 +2802,26 @@ def update_executive_summary_with_phase3(
             UPDATE executive_summaries
             SET summary_text = %s,
                 summary_json = %s,
-                generation_phase = 'phase3',
-                ai_models = jsonb_set(COALESCE(ai_models, '{}'::jsonb), '{phase3}', %s),
+                generation_phase = %s,
+                ai_models = jsonb_set(COALESCE(ai_models, '{}'::jsonb), %s, %s),
                 generated_at = NOW()
             WHERE ticker = %s AND summary_date = CURRENT_DATE
         """, (
-            json.dumps(phase3_merged_json),  # summary_text (JSON string)
-            json.dumps(phase3_merged_json),  # summary_json (JSONB)
-            json.dumps(phase3_model),        # phase3 model (as JSON string)
+            json.dumps(summary_json),   # summary_text (JSON string)
+            json.dumps(summary_json),   # summary_json (JSONB)
+            phase,                      # generation_phase ('phase3' or 'phase4')
+            '{' + phase + '}',          # JSON path for ai_models ('{phase3}' or '{phase4}')
+            json.dumps(model),          # model name as JSON string
             ticker
         ))
 
         rows_updated = cur.rowcount
 
         if rows_updated > 0:
-            LOG.info(f"✅ Updated executive summary for {ticker} on CURRENT_DATE with Phase 3 content")
+            LOG.info(f"✅ Updated executive summary for {ticker} with {phase} content")
             return True
         else:
-            LOG.warning(f"⚠️ No executive summary found for {ticker} on CURRENT_DATE to update with Phase 3")
+            LOG.warning(f"⚠️ No executive summary found for {ticker} on CURRENT_DATE to update")
             return False
 
 # ------------------------------------------------------------------------------
@@ -13118,10 +13123,11 @@ async def generate_executive_summary_all_phases(
 
         # Update database with Phase 3 content (includes all bullets with filter_status)
         phase3_model = phase3_usage.get("model", "") if phase3_usage else None
-        success = update_executive_summary_with_phase3(
+        success = update_executive_summary_json(
             ticker=ticker,
-            phase3_merged_json=phase3_merged_json,
-            phase3_model=phase3_model
+            summary_json=phase3_merged_json,
+            phase='phase3',
+            model=phase3_model
         )
 
         if not success:
@@ -13133,42 +13139,65 @@ async def generate_executive_summary_all_phases(
                 "articles_by_ticker": articles_by_ticker
             }
 
-        LOG.info(f"[{ticker}] ✅ Phase 3 complete, all phases saved to database")
+        LOG.info(f"[{ticker}] ✅ Phase 3 complete and saved to database")
 
         # =====================================================================
-        # PHASE 4: Generate paragraphs from surviving bullets (A/B Testing)
+        # PHASE 4: Generate paragraphs from surviving bullets (MANDATORY)
+        # Phase 4 is the ONLY source for paragraph sections (bottom_line, upside, downside)
         # =====================================================================
         LOG.info(f"[{ticker}] 📝 Running Phase 4 (paragraph generation from surviving bullets)...")
 
-        try:
-            from modules.executive_summary_phase4 import generate_executive_summary_phase4
+        from modules.executive_summary_phase4 import generate_executive_summary_phase4
 
-            phase4_result, phase4_usage = generate_executive_summary_phase4(
-                ticker=ticker,
-                phase3_json=phase3_merged_json,
-                anthropic_api_key=ANTHROPIC_API_KEY,
-                gemini_api_key=GEMINI_API_KEY,
-                primary_model='claude'  # Claude Sonnet 4.5 primary
-            )
+        phase4_result, phase4_usage = generate_executive_summary_phase4(
+            ticker=ticker,
+            phase3_json=phase3_merged_json,
+            anthropic_api_key=ANTHROPIC_API_KEY,
+            gemini_api_key=GEMINI_API_KEY,
+            primary_model='claude'  # Claude Sonnet 4.5 primary
+        )
 
-            # Track Phase 4 cost
-            if phase4_usage:
-                phase4_model = phase4_usage.get("model", "")
-                if "claude" in phase4_model.lower():
-                    calculate_claude_api_cost(phase4_usage, "executive_summary_phase4", model_name=phase4_model)
-                elif "gemini" in phase4_model.lower():
-                    calculate_gemini_api_cost(phase4_usage, "executive_summary_phase4", model="pro", model_name=phase4_model)
+        # Phase 4 is mandatory - fail if it doesn't return a result
+        if not phase4_result:
+            LOG.error(f"[{ticker}] ❌ Phase 4 generation failed - no paragraphs generated")
+            return {
+                "success": False,
+                "error": "Phase 4 generation failed - no paragraphs",
+                "phase3_json": phase3_merged_json,
+                "articles_by_ticker": articles_by_ticker
+            }
 
-            # Store Phase 4 results in phase3_merged_json for Email #2 A/B comparison
-            if phase4_result:
-                phase3_merged_json['phase4'] = phase4_result
-                LOG.info(f"[{ticker}] ✅ Phase 4 complete - paragraphs generated from surviving bullets")
-            else:
-                LOG.warning(f"[{ticker}] ⚠️ Phase 4 returned no result - continuing without Phase 4 paragraphs")
+        # Track Phase 4 cost
+        if phase4_usage:
+            phase4_model = phase4_usage.get("model", "")
+            if "claude" in phase4_model.lower():
+                calculate_claude_api_cost(phase4_usage, "executive_summary_phase4", model_name=phase4_model)
+            elif "gemini" in phase4_model.lower():
+                calculate_gemini_api_cost(phase4_usage, "executive_summary_phase4", model="pro", model_name=phase4_model)
 
-        except Exception as phase4_error:
-            LOG.error(f"[{ticker}] ⚠️ Phase 4 failed (non-fatal): {phase4_error}")
-            # Phase 4 failure is non-fatal - continue with Phase 1 paragraphs only
+        # Add Phase 4 results to JSON
+        phase3_merged_json['phase4'] = phase4_result
+        LOG.info(f"[{ticker}] ✅ Phase 4 complete - paragraphs generated from surviving bullets")
+
+        # Save Phase 4 to database (overwrites Phase 3 save with complete JSON)
+        phase4_model = phase4_usage.get("model", "") if phase4_usage else None
+        success = update_executive_summary_json(
+            ticker=ticker,
+            summary_json=phase3_merged_json,
+            phase='phase4',
+            model=phase4_model
+        )
+
+        if not success:
+            LOG.error(f"[{ticker}] ❌ Failed to save Phase 4 to database")
+            return {
+                "success": False,
+                "error": "Failed to save Phase 4 to database",
+                "phase3_json": phase3_merged_json,
+                "articles_by_ticker": articles_by_ticker
+            }
+
+        LOG.info(f"[{ticker}] ✅ Phase 4 saved to database - all phases complete")
 
         return {
             "success": True,
@@ -15774,7 +15803,7 @@ def generate_email_html_core(
     try:
         json_output = json.loads(executive_summary_text)
 
-        # Apply deduplication - removes duplicate bullets and uses proposed_content/context for primaries
+        # Apply deduplication - removes duplicate bullets and merges source_articles for primaries
         json_output = apply_deduplication(json_output)
 
         sections = convert_phase1_to_sections_dict(json_output)
@@ -17839,48 +17868,58 @@ async def process_regenerate_email_phase(job: dict):
 
                     # Update database with Phase 3 content
                     phase3_model = phase3_usage.get("model", "") if phase3_usage else None
-                    success = update_executive_summary_with_phase3(
+                    success = update_executive_summary_json(
                         ticker=ticker,
-                        phase3_merged_json=phase3_merged_json,
-                        phase3_model=phase3_model
+                        summary_json=phase3_merged_json,
+                        phase='phase3',
+                        model=phase3_model
                     )
 
                     if success:
                         LOG.info(f"✅ [{ticker}] [JOB {job_id}] Phase 3 content saved")
 
                         # ============================================================
-                        # PHASE 4: Paragraph Generation (A/B Testing)
+                        # PHASE 4: Paragraph Generation (MANDATORY)
                         # ============================================================
                         LOG.info(f"[{ticker}] 📝 [JOB {job_id}] Running Phase 4...")
 
-                        try:
-                            from modules.executive_summary_phase4 import generate_executive_summary_phase4
+                        from modules.executive_summary_phase4 import generate_executive_summary_phase4
 
-                            phase4_result, phase4_usage = generate_executive_summary_phase4(
-                                ticker=ticker,
-                                phase3_json=phase3_merged_json,
-                                anthropic_api_key=ANTHROPIC_API_KEY,
-                                gemini_api_key=GEMINI_API_KEY,
-                                primary_model='claude'
-                            )
+                        phase4_result, phase4_usage = generate_executive_summary_phase4(
+                            ticker=ticker,
+                            phase3_json=phase3_merged_json,
+                            anthropic_api_key=ANTHROPIC_API_KEY,
+                            gemini_api_key=GEMINI_API_KEY,
+                            primary_model='claude'
+                        )
 
-                            # Track Phase 4 cost
-                            if phase4_usage:
-                                phase4_model = phase4_usage.get("model", "")
-                                if "claude" in phase4_model.lower():
-                                    calculate_claude_api_cost(phase4_usage, "executive_summary_phase4", model_name=phase4_model)
-                                elif "gemini" in phase4_model.lower():
-                                    calculate_gemini_api_cost(phase4_usage, "executive_summary_phase4", model="pro", model_name=phase4_model)
+                        # Track Phase 4 cost
+                        if phase4_usage:
+                            phase4_model = phase4_usage.get("model", "")
+                            if "claude" in phase4_model.lower():
+                                calculate_claude_api_cost(phase4_usage, "executive_summary_phase4", model_name=phase4_model)
+                            elif "gemini" in phase4_model.lower():
+                                calculate_gemini_api_cost(phase4_usage, "executive_summary_phase4", model="pro", model_name=phase4_model)
 
-                            # Attach Phase 4 for Email #2 A/B display
-                            if phase4_result:
-                                phase3_merged_json['phase4'] = phase4_result
-                                LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 4 complete")
-                            else:
-                                LOG.warning(f"[{ticker}] ⚠️ [JOB {job_id}] Phase 4 returned no result")
+                        # Phase 4 is mandatory - fail if it doesn't return a result
+                        if not phase4_result:
+                            LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Phase 4 generation failed - no paragraphs generated")
+                            raise RuntimeError(f"Phase 4 generation failed for {ticker} - no paragraphs")
 
-                        except Exception as phase4_error:
-                            LOG.error(f"[{ticker}] ⚠️ [JOB {job_id}] Phase 4 failed (non-fatal): {phase4_error}")
+                        # Add Phase 4 results to JSON
+                        phase3_merged_json['phase4'] = phase4_result
+                        LOG.info(f"[{ticker}] ✅ [JOB {job_id}] Phase 4 complete")
+
+                        # Save Phase 4 to database (overwrites Phase 3 save with complete JSON)
+                        phase4_model = phase4_usage.get("model", "") if phase4_usage else None
+                        phase4_save_success = update_executive_summary_json(
+                            ticker=ticker,
+                            summary_json=phase3_merged_json,
+                            phase='phase4',
+                            model=phase4_model
+                        )
+                        if phase4_save_success:
+                            LOG.info(f"✅ [{ticker}] [JOB {job_id}] Phase 4 content saved to database")
 
                         # ============================================================
                         # EMAIL #2: Content QA (5-10s)

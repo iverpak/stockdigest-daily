@@ -216,6 +216,33 @@ CRITICAL: When signals are low (0-1), output minimal scenario. Do not fabricate
 scenarios from tangentially related data. Use escape hatch phrases VERBATIM as written above.
 
 ===============================================================================
+IMPLICATION DIRECTION CHECK - VERIFY BEFORE WRITING SCENARIOS
+===============================================================================
+
+Before writing Bottom Line, Upside Scenario, or Downside Scenario, verify cause-effect
+logic is correct for the target company:
+
+Scarcity/Supply Constraints:
+✓ CORRECT: "Supply struggling to meet demand creates pricing power per analyst" (bullish for suppliers)
+✗ WRONG: "Supply struggling to meet demand limits growth" (inverted - scarcity helps suppliers)
+
+Oversupply/Capacity Additions:
+✓ CORRECT: "Excess capacity creates pricing pressure per report" (bearish for suppliers)
+✗ WRONG: "Capacity additions expand market opportunity" (ignores pricing impact)
+
+Input Costs:
+✓ CORRECT: "Rising input costs pressure margins per analyst" (bearish for buyers)
+✗ WRONG: "Higher gas prices support economics" (if company buys gas, this is wrong)
+
+OPERATIONAL MECHANICS - COST/REVENUE DIRECTION:
+
+- Power generators: Buy fuel (gas/coal) → Higher fuel prices = bearish | Sell electricity → Higher power prices = bullish
+- Oil/gas producers: Sell commodities → Higher commodity prices = bullish
+- Airlines/manufacturers: Buy inputs (fuel/steel) → Higher input costs = bearish
+
+Do not reverse the direction of impact based on assumptions.
+
+===============================================================================
 BOTTOM LINE - EDITORIAL DISCIPLINE (<=150 words)
 ===============================================================================
 

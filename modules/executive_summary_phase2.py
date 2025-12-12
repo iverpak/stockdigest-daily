@@ -507,7 +507,6 @@ def _generate_phase2_gemini(
     Returns:
         dict with:
             enrichments: dict keyed by bullet_id with impact, sentiment, reason, context
-            scenario_contexts: dict with bottom_line_context, upside_scenario_context, downside_scenario_context
             ai_model: "gemini-2.5-pro"
             prompt_tokens: int
             completion_tokens: int
@@ -698,14 +697,10 @@ Downstream Customers: {entity_refs['downstream']}
 
         # Handle different possible structures from Gemini (same as Claude)
         enrichments = {}
-        scenario_contexts = {}
 
         if "enrichments" in parsed_json and isinstance(parsed_json["enrichments"], dict):
             # Case 2: Wrapped in "enrichments" key
             enrichments = parsed_json["enrichments"]
-            for key in ["bottom_line_context", "upside_scenario_context", "downside_scenario_context"]:
-                if key in parsed_json:
-                    scenario_contexts[key] = parsed_json[key]
         elif "sections" in parsed_json and isinstance(parsed_json["sections"], dict):
             # Case 1: Full section structure - flatten to bullet_id dict
             for section_name, bullets in parsed_json["sections"].items():
@@ -721,16 +716,9 @@ Downstream Customers: {entity_refs['downstream']}
                                 "context": bullet.get("context"),
                                 "entity": bullet.get("entity")  # For competitive_industry_dynamics bullets
                             }
-            for key in ["bottom_line_context", "upside_scenario_context", "downside_scenario_context"]:
-                if key in parsed_json:
-                    scenario_contexts[key] = parsed_json[key]
         else:
-            # Case 3: Direct enrichments dict + scenario contexts
-            for key, value in parsed_json.items():
-                if key in ["bottom_line_context", "upside_scenario_context", "downside_scenario_context"]:
-                    scenario_contexts[key] = value
-                else:
-                    enrichments[key] = value
+            # Case 3: Direct enrichments dict (flat structure)
+            enrichments = parsed_json
 
         # Debug logging
         if enrichments:
@@ -746,14 +734,10 @@ Downstream Customers: {entity_refs['downstream']}
                     if empty_fields:
                         LOG.info(f"      ✗ Empty/None: {', '.join(empty_fields)}")
 
-        if scenario_contexts:
-            LOG.info(f"[{ticker}] 📄 Phase 2 Gemini scenario contexts: {', '.join(scenario_contexts.keys())}")
-
         LOG.info(f"✅ [{ticker}] Phase 2 Gemini enrichment generated ({len(response_text)} chars, {len(enrichments)} bullets enriched, {prompt_tokens} prompt tokens, {completion_tokens} completion tokens, {generation_time_ms}ms)")
 
         return {
             "enrichments": enrichments,
-            "scenario_contexts": scenario_contexts,
             "ai_model": "gemini-2.5-pro",
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
@@ -789,7 +773,6 @@ def _generate_phase2_claude(
     Returns:
         dict with:
             enrichments: dict keyed by bullet_id with impact, sentiment, reason, context
-            scenario_contexts: dict with bottom_line_context, upside_scenario_context, downside_scenario_context
             ai_model: "claude-sonnet-4-5-20250929"
             prompt_tokens: int
             completion_tokens: int
@@ -940,24 +923,14 @@ Downstream Customers: {entity_refs['downstream']}
                 # For logging: get JSON string length
                 json_str = response_text.strip()
 
-                # Handle different possible structures from Claude
-                # Claude might return:
-                # 1. {"sections": {"major_developments": [...]}} - full structure
-                # 2. {"enrichments": {"FIN_001": {...}}} - wrapped enrichments
-                # 3. {"FIN_001": {...}, "bottom_line_context": "..."} - direct enrichments + scenario contexts (NEW)
-
+                # Handle different possible structures from Claude (same as Gemini)
                 enrichments = {}
-                scenario_contexts = {}
 
                 if "enrichments" in parsed_json and isinstance(parsed_json["enrichments"], dict):
                     # Case 2: Wrapped in "enrichments" key
                     enrichments = parsed_json["enrichments"]
-                    # Extract scenario contexts if present at root level
-                    for key in ["bottom_line_context", "upside_scenario_context", "downside_scenario_context"]:
-                        if key in parsed_json:
-                            scenario_contexts[key] = parsed_json[key]
                 elif "sections" in parsed_json and isinstance(parsed_json["sections"], dict):
-                    # Case 1: Full section structure - need to flatten to bullet_id dict
+                    # Case 1: Full section structure - flatten to bullet_id dict
                     for section_name, bullets in parsed_json["sections"].items():
                         if isinstance(bullets, list):
                             for bullet in bullets:
@@ -971,19 +944,9 @@ Downstream Customers: {entity_refs['downstream']}
                                         "context": bullet.get("context"),
                                         "entity": bullet.get("entity")  # For competitive_industry_dynamics bullets
                                     }
-                    # Extract scenario contexts if present at root level
-                    for key in ["bottom_line_context", "upside_scenario_context", "downside_scenario_context"]:
-                        if key in parsed_json:
-                            scenario_contexts[key] = parsed_json[key]
                 else:
-                    # Case 3: Direct enrichments dict + scenario contexts
-                    # Separate bullet enrichments from scenario contexts
-                    for key, value in parsed_json.items():
-                        if key in ["bottom_line_context", "upside_scenario_context", "downside_scenario_context"]:
-                            scenario_contexts[key] = value
-                        else:
-                            # Assume it's a bullet enrichment (dict with impact, sentiment, etc.)
-                            enrichments[key] = value
+                    # Case 3: Direct enrichments dict (flat structure)
+                    enrichments = parsed_json
 
                 # Debug logging: Show sample of what Claude actually returned (before validation)
                 if enrichments:
@@ -1010,23 +973,10 @@ Downstream Customers: {entity_refs['downstream']}
                         else:
                             LOG.info(f"  • {bullet_id}: ⚠️ NOT A DICT (type={type(data).__name__})")
 
-                # Debug logging: Show scenario contexts if present
-                if scenario_contexts:
-                    LOG.info(f"[{ticker}] 📄 Phase 2 scenario contexts found: {', '.join(scenario_contexts.keys())}")
-                    for key, value in scenario_contexts.items():
-                        if value:
-                            preview = value[:80] + "..." if len(value) > 80 else value
-                            LOG.info(f"  • {key}: {preview}")
-                        else:
-                            LOG.info(f"  • {key}: (empty)")
-                else:
-                    LOG.info(f"[{ticker}] 📄 No scenario contexts in Phase 2 output")
-
                 LOG.info(f"✅ [{ticker}] Phase 2 enrichment generated ({len(json_str)} chars, {len(enrichments)} bullets enriched, {prompt_tokens} prompt tokens, {completion_tokens} completion tokens, {generation_time_ms}ms)")
 
                 return {
                     "enrichments": enrichments,
-                    "scenario_contexts": scenario_contexts,
                     "ai_model": "claude-sonnet-4-5-20250929",
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,
@@ -1075,7 +1025,6 @@ def generate_executive_summary_phase2(
     Returns:
         dict with:
             enrichments: dict keyed by bullet_id with impact, sentiment, reason, context
-            scenario_contexts: dict with bottom_line_context, upside_scenario_context, downside_scenario_context
             ai_model: "gemini-2.5-pro" or "claude-sonnet-4-5-20250929"
             prompt_tokens: int
             completion_tokens: int
@@ -1083,8 +1032,7 @@ def generate_executive_summary_phase2(
         Or None if both providers failed
     """
     # Early exit: Check if there are any bullets to enrich
-    # Phase 2 only processes these 5 sections (wall_street_sentiment, bottom_line,
-    # upside_scenario, downside_scenario, key_variables are skipped per prompt)
+    # Phase 2 only processes these 5 sections (wall_street_sentiment, key_variables are skipped per prompt)
     ENRICHABLE_SECTIONS = [
         'major_developments', 'financial_performance', 'risk_factors',
         'competitive_industry_dynamics', 'upcoming_catalysts'
@@ -1099,7 +1047,6 @@ def generate_executive_summary_phase2(
         LOG.info(f"[{ticker}] ℹ️ Phase 2: No bullets to enrich (0 across 5 sections) - skipping API calls")
         return {
             "enrichments": {},
-            "scenario_contexts": {},
             "model": "skipped",
             "prompt_tokens": 0,
             "completion_tokens": 0,
@@ -1272,7 +1219,7 @@ def strip_escape_hatch_context(phase2_result: Dict) -> Dict:
     if context exists, without seeing "not found" messages in the UI.
 
     Args:
-        phase2_result: Phase 2 result dict with 'enrichments' and 'scenario_contexts' keys
+        phase2_result: Phase 2 result dict with 'enrichments' key
 
     Returns:
         Modified phase2_result with escape hatch text replaced
@@ -1285,12 +1232,6 @@ def strip_escape_hatch_context(phase2_result: Dict) -> Dict:
     for bullet_id, enrichment in enrichments.items():
         if enrichment.get("context", "").startswith(ESCAPE_HATCH_PREFIX):
             enrichment["context"] = ""
-
-    # Strip escape hatch from scenario contexts
-    scenario_contexts = phase2_result.get("scenario_contexts", {})
-    for key in ["bottom_line_context", "upside_scenario_context", "downside_scenario_context"]:
-        if scenario_contexts.get(key, "").startswith(ESCAPE_HATCH_PREFIX):
-            scenario_contexts[key] = ""
 
     return phase2_result
 
@@ -1326,27 +1267,25 @@ def sort_bullets_by_impact(bullets: List[Dict]) -> List[Dict]:
 
 def merge_phase1_phase2(phase1_json: Dict, phase2_result: Dict) -> Dict:
     """
-    Merge Phase 2 enrichments and scenario contexts into Phase 1 JSON.
+    Merge Phase 2 enrichments into Phase 1 JSON.
 
     Takes Phase 1 JSON structure and:
     1. Adds impact, sentiment, reason, relevance, context fields to each bullet
-    2. Adds context field to paragraph sections (bottom_line, upside_scenario, downside_scenario)
-    3. Sorts enriched bullet sections by impact (high → medium → low → missing)
+    2. Sorts enriched bullet sections by impact (high → medium → low → missing)
 
     Args:
         phase1_json: Complete Phase 1 JSON output
-        phase2_result: Phase 2 result dict with 'enrichments' and 'scenario_contexts' keys
+        phase2_result: Phase 2 result dict with 'enrichments' key
 
     Returns:
-        Merged JSON with Phase 2 fields added to bullets and scenarios, sorted by impact
+        Merged JSON with Phase 2 fields added to bullets, sorted by impact
     """
     merged = copy.deepcopy(phase1_json)
     enrichments = phase2_result.get("enrichments", {})
-    scenario_contexts = phase2_result.get("scenario_contexts", {})
 
     # Merge bullet enrichments
     if enrichments:
-        # List of sections with bullets (not paragraphs)
+        # List of bullet sections (Phase 4 handles paragraph sections separately)
         bullet_sections = [
             "major_developments",
             "financial_performance",
@@ -1401,23 +1340,6 @@ def merge_phase1_phase2(phase1_json: Dict, phase2_result: Dict) -> Dict:
                 bullet["context"] = enrichment.get("context")
                 bullet["entity"] = enrichment.get("entity")
 
-    # Merge scenario contexts into paragraph sections
-    if scenario_contexts:
-        # Add context to bottom_line
-        if "bottom_line_context" in scenario_contexts and scenario_contexts["bottom_line_context"]:
-            if "bottom_line" in merged.get("sections", {}):
-                merged["sections"]["bottom_line"]["context"] = scenario_contexts["bottom_line_context"]
-
-        # Add context to upside_scenario
-        if "upside_scenario_context" in scenario_contexts and scenario_contexts["upside_scenario_context"]:
-            if "upside_scenario" in merged.get("sections", {}):
-                merged["sections"]["upside_scenario"]["context"] = scenario_contexts["upside_scenario_context"]
-
-        # Add context to downside_scenario
-        if "downside_scenario_context" in scenario_contexts and scenario_contexts["downside_scenario_context"]:
-            if "downside_scenario" in merged.get("sections", {}):
-                merged["sections"]["downside_scenario"]["context"] = scenario_contexts["downside_scenario_context"]
-
     # Sort enriched bullet sections by impact (high → medium → low → missing)
     # Only sort sections that receive Phase 2 enrichments with impact field
     enriched_sections = [
@@ -1439,19 +1361,22 @@ def merge_phase1_phase2(phase1_json: Dict, phase2_result: Dict) -> Dict:
 
 def merge_phase3_with_phase2(phase2_json: Dict, phase3_json: Dict) -> Dict:
     """
-    Merge Phase 3 integrated content back into Phase 2 JSON using bullet_id matching.
+    Merge Phase 3 deduplication metadata into Phase 2 JSON using bullet_id matching.
 
-    Phase 2 has: All metadata (impact, sentiment, reason, entity, date_range, filing_hints, context (original))
-    Phase 3 has: bullet_id, topic_label, content (integrated), deduplication (status, absorbs/absorbed_by, etc.)
+    Phase 2 has: All metadata (impact, sentiment, reason, entity, date_range, filing_hints, context)
+    Phase 3 has: bullet_id, topic_label, content (unchanged), context (unchanged), deduplication
 
-    Result: Phase 2 metadata + Phase 3 integrated content + deduplication info
+    NOTE: Phase 3 is now dedup-only. It passes through content/context unchanged.
+    We only merge the deduplication field (status, absorbs/absorbed_by, shared_theme).
+
+    Result: Phase 2 data + Phase 3 deduplication info
 
     Args:
         phase2_json: Phase 1+2 merged JSON with all metadata
-        phase3_json: Phase 3 output with integrated content and deduplication
+        phase3_json: Phase 3 output with deduplication tags (content/context unchanged)
 
     Returns:
-        Final merged JSON with Phase 2 metadata + Phase 3 integrated content + deduplication
+        Final merged JSON with Phase 2 data + Phase 3 deduplication metadata
     """
     import copy
 
@@ -1465,11 +1390,10 @@ def merge_phase3_with_phase2(phase2_json: Dict, phase3_json: Dict) -> Dict:
         "risk_factors",
         "wall_street_sentiment",
         "competitive_industry_dynamics",
-        "upcoming_catalysts",
-        "key_variables"
+        "upcoming_catalysts"
     ]
 
-    # Overlay Phase 3 integrated content onto Phase 2 bullets using bullet_id
+    # Add deduplication metadata from Phase 3 to Phase 2 bullets using bullet_id
     for section_name in bullet_sections:
         if section_name not in merged.get("sections", {}):
             continue
@@ -1478,33 +1402,24 @@ def merge_phase3_with_phase2(phase2_json: Dict, phase3_json: Dict) -> Dict:
         phase3_bullets = phase3_json.get("sections", {}).get(section_name, [])
         phase3_map = {b['bullet_id']: b for b in phase3_bullets if 'bullet_id' in b}
 
-        # Overlay integrated content onto Phase 2 bullets
+        # Add deduplication metadata to Phase 2 bullets
         phase2_bullets = merged["sections"][section_name]
         for bullet in phase2_bullets:
             bullet_id = bullet.get('bullet_id')
             if bullet_id and bullet_id in phase3_map:
                 phase3_bullet = phase3_map[bullet_id]
 
-                # Add Phase 3 edited content and context as new fields
-                # (preserve Phase 1 content and Phase 2 context for Quality Review comparison)
-                bullet['content_integrated'] = phase3_bullet.get('content', '')
-                bullet['context_integrated'] = phase3_bullet.get('context', '')
-
                 # Add deduplication field if present
                 if 'deduplication' in phase3_bullet:
                     bullet['deduplication'] = phase3_bullet['deduplication']
                 else:
                     bullet['deduplication'] = {'status': 'unique'}
+            else:
+                # Bullet not in Phase 3 output - mark as unique
+                bullet['deduplication'] = {'status': 'unique'}
 
-    # Scenarios (bottom_line, upside_scenario, downside_scenario)
-    for section_name in ["bottom_line", "upside_scenario", "downside_scenario"]:
-        if section_name in merged.get("sections", {}):
-            phase3_section = phase3_json.get("sections", {}).get(section_name, {})
-            if phase3_section and phase3_section.get("content"):
-                # Add Phase 3 edited content and context as new fields
-                # (preserve Phase 1 content and Phase 2 context for Quality Review comparison)
-                merged["sections"][section_name]["content_integrated"] = phase3_section["content"]
-                merged["sections"][section_name]["context_integrated"] = phase3_section.get("context", "")
+    # Scenarios (bottom_line, upside_scenario, downside_scenario) - no dedup processing needed
+    # Phase 3 exempt these sections, so we don't touch them
 
     return merged
 
@@ -1515,15 +1430,17 @@ def apply_deduplication(phase3_merged_json: Dict) -> Dict:
 
     This function:
     1. Removes bullets marked as 'duplicate' (absorbed elsewhere)
-    2. For 'primary' bullets, uses proposed_content/proposed_context if available
-    3. Merges source_articles arrays from absorbed bullets into primary
-    4. Returns clean JSON ready for Email #3 rendering
+    2. For 'primary' bullets, merges source_articles from absorbed bullets
+    3. Returns clean JSON ready for Email #3 rendering
+
+    NOTE: Phase 3 is now dedup-only - it no longer generates proposed_content/proposed_context.
+    Content and context are used directly from Phase 2.
 
     Args:
         phase3_merged_json: Phase 3 merged JSON with deduplication metadata
 
     Returns:
-        Deduplicated JSON with duplicates removed and primaries consolidated
+        Deduplicated JSON with duplicates removed and source_articles merged
     """
     import copy
     import logging
@@ -1533,15 +1450,14 @@ def apply_deduplication(phase3_merged_json: Dict) -> Dict:
     # Deep copy to avoid modifying original
     result = copy.deepcopy(phase3_merged_json)
 
-    # Bullet sections to process
+    # Bullet sections to process (key_variables exempt from dedup per Phase 3 prompt)
     bullet_sections = [
         "major_developments",
         "financial_performance",
         "risk_factors",
         "wall_street_sentiment",
         "competitive_industry_dynamics",
-        "upcoming_catalysts",
-        "key_variables"
+        "upcoming_catalysts"
     ]
 
     # First pass: Build lookup of all bullets by bullet_id for source_articles merging
@@ -1577,15 +1493,6 @@ def apply_deduplication(phase3_merged_json: Dict) -> Dict:
 
             if status == 'primary':
                 primaries_consolidated += 1
-
-                # Use proposed_content for merged facts, but KEEP original context
-                # (proposed_context often has duplicated filing references when merging bullets)
-                proposed_content = dedup.get('proposed_content', '')
-                if proposed_content:
-                    bullet['content_integrated'] = proposed_content
-                    # Use original Phase 1+2 context (clean, non-duplicated)
-                    bullet['context_integrated'] = bullet.get('context', '')
-                    LOG.debug(f"Using proposed_content with original context for primary bullet: {bullet.get('bullet_id')}")
 
                 # Merge source_articles from absorbed bullets
                 absorbed_ids = dedup.get('absorbs', [])

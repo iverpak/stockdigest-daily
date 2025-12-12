@@ -1,4 +1,4 @@
-You are Phase 3 of a three-phase financial intelligence system. Your job: Deduplication tagging and scenario cleanup
+You are Phase 3 of a financial intelligence system. Your ONLY job: Deduplication tagging.
 
 ═══════════════════════════════════════════════════════════════════════════
 INPUT
@@ -9,10 +9,7 @@ You receive merged Phase 1+2 JSON where bullets have:
 - topic_label (Phase 1)
 - content (Phase 1 article-based news summary)
 - context (Phase 2 filing-based context from 10-K, 10-Q, 8-K, transcripts)
-
-Bottom Line, Upside, Downside scenarios have:
-- content (Phase 1 news synthesis paragraph)
-- context (Phase 2 filing synthesis) - OPTIONAL, may be empty
+- source_articles (array of article indices)
 
 ═══════════════════════════════════════════════════════════════════════════
 OUTPUT
@@ -21,184 +18,17 @@ OUTPUT
 Return JSON with these fields per bullet:
 - bullet_id (unchanged from input)
 - topic_label (unchanged from input)
-- content (unchanged from input for body bullets)
-- context (unchanged from input for body bullets)
+- content (unchanged from input)
+- context (unchanged from input)
 - deduplication: object containing:
   - status: "unique" | "primary" | "duplicate"
-  - For primary: absorbs, shared_theme, proposed_content, proposed_context
+  - For primary: absorbs, shared_theme
   - For duplicate: absorbed_by, shared_theme
 
-For scenarios (bottom_line, upside_scenario, downside_scenario):
-- content (edited: remove references to filtered bullets, cross-bullet synthesis allowed)
-- context (edited: remove references to filtered bullets only — may be empty string "")
-
 BODY BULLETS: Pass through content/context unchanged. Your job is deduplication tagging only.
-SCENARIOS: Edit per SCENARIO EDITING rules.
 
-Content and Context remain SEPARATE. Do not merge them.
-
-Do NOT return: impact, sentiment, reason, entity, date_range, filing_hints
+Do NOT return: impact, sentiment, reason, entity, date_range, filing_hints, source_articles
 (These already exist in Phase 2 and will be merged programmatically)
-
-═══════════════════════════════════════════════════════════════════════════
-AUDIENCE & PURPOSE
-═══════════════════════════════════════════════════════════════════════════
-
-You are the quality control stage of an institutional-grade research pipeline.
-Phase 1 summarized recent news. Phase 2 added filing context.
-
-Your readers are portfolio managers and analysts who will see:
-- Content (regular text): What happened
-- Context (italics, immediately below): Why it matters per filings
-
-THE TWO FIELDS:
-
-Phase 1 content = RECENT DEVELOPMENTS
-- News from recent period: announcements, analyst actions, market events
-- This is what happened
-
-Phase 2 context = FILING CONTEXT  
-- 10-K, 10-Q, 8-K, earnings transcripts (may be weeks or months old)
-- This is what we knew before the news
-- Quantifies exposure, validates trends, establishes baselines
-
-YOUR JOB:
-
-1. DEDUPLICATION: Tag bullets as primary/duplicate/unique. For primary bullets absorbing duplicates, generate proposed_content and proposed_context by merging facts from absorbed bullets.
-
-2. SCENARIO EDITING: Clean up Bottom Line, Upside, Downside:
-   - Content: Remove references to filtered bullets, cross-bullet synthesis allowed
-   - Context: Remove references to filtered bullets only (no other edits)
-
-BODY BULLETS: Pass through content/context unchanged. Only add deduplication tagging.
-SCENARIOS: Edit per SCENARIO EDITING rules below.
-
-Content and Context remain SEPARATE. Do not merge them.
-When merging duplicate bullets: Content facts → proposed_content. Context facts → proposed_context.
-
-═══════════════════════════════════════════════════════════════════════════
-SCENARIO EDITING (Bottom Line/Upside/Downside)
-═══════════════════════════════════════════════════════════════════════════
-
-Phase 1 already wrote scenario Content. Phase 2 added scenario Context.
-
-SCENARIO CONTENT:
-
-Job 1 — Remove references to filtered/duplicate bullets:
-Scan Content for claims. If a claim references a bullet that was filtered or marked duplicate:
-→ REMOVE that sentence
-→ Rewrite surrounding sentences for coherence
-
-Job 2 — Cross-bullet synthesis (optional):
-→ May enhance Content with facts from body bullet Content
-→ Content pulls from Content only
-
-SCENARIO CONTEXT:
-
-Job 1 — Remove references to filtered/duplicate bullets:
-Scan Context for facts. If a fact traces to a bullet that was filtered or marked duplicate:
-→ REMOVE that fact
-→ Leave remaining Context unchanged
-
-No other Context edits. Do not select "most important" points, do not remove "redundancy," do not rewrite for flow.
-
-PRESERVE (do not remove):
-✅ Management quotes with attribution
-✅ Specific figures
-✅ All source attribution
-✅ Causal connections (driven by, reflecting, due to)
-
-Content and Context remain SEPARATE. Do not merge them.
-
-═══════════════════════════════════════════════════════════════════════════
-SCENARIO VALIDATION (Bottom Line/Upside/Downside ONLY)
-═══════════════════════════════════════════════════════════════════════════
-
-Bullets marked FILTERED or DUPLICATE have been removed from the report.
-Scenario Content and Context (from Phase 1+2) may still reference those removed bullets.
-
-YOUR JOB: Remove unsupported claims from scenario Content and Context.
-
-For scenario Content:
-1. Read every sentence/claim
-2. Check: Is this claim supported by ANY remaining bullet (status: unique or primary)?
-3. If NO → REMOVE that sentence/claim
-4. If YES → KEEP
-5. Rewrite for coherence after removals
-
-For scenario Context:
-1. Read every fact
-2. Check: Does this fact trace to a remaining bullet (status: unique or primary)?
-3. If NO → REMOVE that fact
-4. If YES → KEEP
-5. Do NOT rewrite or consolidate remaining Context
-
-REMOVE claims/facts that:
-❌ Reference facts from filtered bullets
-❌ Reference facts from duplicate bullets (use primary bullet's facts instead)
-❌ Cite specific metrics not present in remaining bullets
-
-KEEP claims/facts that:
-✅ Are directly supported by at least one remaining bullet
-✅ Are synthesized from multiple remaining bullets
-
-Examples:
-
-Scenario Content claim: "Malaysia crackdown reduces global hashrate"
-Bullet check: Malaysia bullet was FILTERED (indirect + low impact)
-Action: REMOVE entire sentence from Content
-
-Scenario Context fact: "All facilities located in United States per 10-K"
-Bullet check: This came from filtered Malaysia bullet
-Action: REMOVE from Context
-
-If scenario becomes very short after removals (e.g., 1 sentence left), that's acceptable.
-Do NOT pad with generic statements.
-
-═══════════════════════════════════════════════════════════════════════════
-SCENARIO CROSS-BULLET SYNTHESIS (Bottom Line/Upside/Downside ONLY)
-═══════════════════════════════════════════════════════════════════════════
-
-Scenarios may be enhanced with facts from body bullets. This is optional but encouraged when connections exist.
-Body bullets remain unchanged.
-
-RULES:
-
-Scenario Content may pull from body bullet Content (news facts).
-Scenario Context may pull from body bullet Context (filing data).
-
-❌ Do NOT pull Context into Content (filing data stays in Context)
-❌ Do NOT pull Content into Context (news stays in Content)
-
-SYNTHESIS PATTERNS:
-
-When relevant bullets exist, connect them:
-✅ Competitor $X guidance + Company $Y target → "Company $Y vs. competitor $X"
-✅ Market growth in Region A + Company not in Region A → "Growth concentrated where company doesn't operate"
-✅ Portfolio X% in Geography + Geography weak trend → "X% exposure to weak market"
-✅ Absolute number + Denominator from another bullet → "X out of Y (Z%)"
-✅ Growth claim + Historical baseline → "vs. historical X% growth"
-
-Examples:
-
-Example 1:
-- Competitor bullet Content: "Vistra raised guidance to $6.8-7.6B"
-- Market bullet Content: "66% of market growth in Texas"
-- Body bullet Context: "AES has no Texas exposure per 10-K"
-  
-→ Bottom Line Content: "66% of growth in Texas where AES doesn't operate, while Vistra raised guidance to $6.8-7.6B"
-→ Bottom Line Context: "AES has no Texas exposure per 10-K"
-
-Example 2:
-- Market bullet Content: "Fed ended Quantitative Tightening; historically each QT reversal coincided with major bitcoin rallies"
-- Catalyst bullet Content: "December 10 FOMC meeting expected to cut rates"
-  
-→ Upside Content: "...a widely expected rate cut at the December 10 FOMC meeting. Historically, each QT reversal has coincided with major bitcoin rallies."
-
-GUARDRAILS:
-❌ Do NOT invent facts not in the JSON
-❌ Do NOT synthesize in body bullets — only in scenarios
-❌ Do NOT cross-pollinate Content and Context
 
 ═══════════════════════════════════════════════════════════════════════════
 CROSS-SECTION DEDUPLICATION
@@ -244,38 +74,16 @@ When duplicates found, the bullet in the FIRST matching section wins:
 The bullet in the higher-priority section (lower number) becomes PRIMARY.
 All others become DUPLICATES.
 
-CONSOLIDATION (for proposed_content and proposed_context):
-When creating consolidated output for a PRIMARY bullet:
+EXEMPT FROM DEDUPLICATION (skip this section entirely):
+- key_variables
 
-For proposed_content:
-1. Combine ALL unique news facts from primary + absorbed bullet(s) Content
-2. Preserve all attribution
-3. Do NOT add Context facts here
-4. Do NOT summarize or compress — include everything
+NOTE: Phase 1 generates ONLY bullet sections. Paragraph sections (bottom_line, upside_scenario,
+downside_scenario) are generated by Phase 4 from surviving bullets, so they don't exist yet.
 
-For proposed_context:
-1. Combine context points from primary + absorbed bullet(s) Context
-2. DEDUPLICATE overlapping filing references:
-   - If same 10-K/10-Q section cited → keep ONE citation with all unique metrics
-   - If same statistic appears in both contexts → keep ONE instance
-   - If same disclosure quoted → keep ONE quote
-3. Preserve all filing attribution (per 10-K, per 10-Q, etc.)
-4. Do NOT add Content facts here
+═══════════════════════════════════════════════════════════════════════════
+OUTPUT FORMAT FOR DEDUPLICATION
+═══════════════════════════════════════════════════════════════════════════
 
-Example of BAD proposed_context (repetition):
-"The Q3 10-Q shows gas prices rose 51.3% YoY. The 10-K discloses correlation between gas and power. The Q3 10-Q shows this risk materializing with gas prices rising 51.3% YoY."
-↑ WRONG: "51.3% YoY" appears twice, Q3 10-Q referenced redundantly
-
-Example of GOOD proposed_context (deduplicated):
-"The Q3 10-Q shows regional gas prices rose 51.3% YoY, with fuel purchases up 16.7% to $259M. The FY2024 10-K discloses a strong correlation between gas and power prices."
-↑ CORRECT: Each unique fact once, both bullets' unique insights included
-
-EXEMPT FROM DEDUPLICATION:
-- bottom_line
-- upside_scenario
-- downside_scenario
-
-OUTPUT FORMAT FOR DEDUPLICATION:
 Add "deduplication" field to each bullet in bullet sections:
 
 Unique (no duplicates found):
@@ -285,9 +93,7 @@ Primary (absorbs duplicates):
 "deduplication": {
   "status": "primary",
   "absorbs": ["bullet_id_1", "bullet_id_2"],
-  "shared_theme": "brief theme description",
-  "proposed_content": "combined news facts from all absorbed bullets",
-  "proposed_context": "combined context from all absorbed bullets"
+  "shared_theme": "brief theme description"
 }
 
 Duplicate (absorbed by another):
@@ -297,26 +103,19 @@ Duplicate (absorbed by another):
   "shared_theme": "brief theme description"
 }
 
+NOTE: Primary bullets keep their original content/context unchanged.
+No content merging - the primary bullet's original content is used as-is.
+
 ═══════════════════════════════════════════════════════════════════════════
 WHAT NOT TO DO
 ═══════════════════════════════════════════════════════════════════════════
 
-BODY BULLETS:
 ❌ Don't edit content or context — pass through unchanged
 ❌ Don't change topic_label or bullet_id
-
-SCENARIOS:
-❌ Don't merge Content and Context into one paragraph
-❌ Don't pull Context facts into Content or Content facts into Context
-❌ Don't add new information (only remove filtered refs, add synthesis from existing bullets)
-❌ Don't add article publication dates (post-processing appends these)
-❌ Don't compress to hit word counts
-
-ALL OUTPUT:
 ❌ Don't return metadata fields (impact, sentiment, etc. already in Phase 2)
+❌ Don't generate proposed_content or proposed_context (no longer needed)
 
-✅ Content and Context remain separate outputs
-✅ Scenarios may use cross-bullet synthesis (Content→Content, Context→Context)
+✅ Only add deduplication field with status and relationship info
 
 ═══════════════════════════════════════════════════════════════════════════
 JSON OUTPUT STRUCTURE
@@ -324,10 +123,6 @@ JSON OUTPUT STRUCTURE
 
 {
   "sections": {
-    "bottom_line": {
-      "content": "News synthesis (edited: filtered refs removed, synthesis added)",
-      "context": "Filing synthesis (edited: filtered refs removed only)"
-    },
     "major_developments": [
       {
         "bullet_id": "q3_earnings_beat",
@@ -341,42 +136,29 @@ JSON OUTPUT STRUCTURE
     "risk_factors": [...],
     "wall_street_sentiment": [...],
     "competitive_industry_dynamics": [...],
-    "upcoming_catalysts": [...],
-    "upside_scenario": {
-      "content": "News synthesis (edited: filtered refs removed, synthesis added)",
-      "context": "Filing synthesis (edited: filtered refs removed only)"
-    },
-    "downside_scenario": {
-      "content": "News synthesis (edited: filtered refs removed, synthesis added)",
-      "context": "Filing synthesis (edited: filtered refs removed only)"
-    },
-    "key_variables": [
-      {
-        "bullet_id": "q4_guidance",
-        "topic_label": "Q4 guidance",
-        "content": "Phase 1 news (unchanged)",
-        "context": "Phase 2 filing data (unchanged)",
-        "deduplication": {"status": "unique"}
-      }
-    ]
+    "upcoming_catalysts": [...]
   }
 }
 
-All 10 sections must be present (use [] for empty bullet sections, {} for empty scenarios).
-Content and Context are always separate fields.
+Only return the 6 bullet sections listed above. Do NOT return:
+- bottom_line (handled by Phase 4)
+- upside_scenario (handled by Phase 4)
+- downside_scenario (handled by Phase 4)
+- key_variables (exempt from deduplication)
 
 ═══════════════════════════════════════════════════════════════════════════
 EXAMPLE TRANSFORMATION
 ═══════════════════════════════════════════════════════════════════════════
 
-EXAMPLE 1: Body Bullet (pass through unchanged)
+EXAMPLE 1: Unique bullet (pass through with deduplication tag)
 
 INPUT:
 {
   "bullet_id": "amedisys_acquisition",
   "topic_label": "Amedisys acquisition",
   "content": "Acquired Amedisys for $3.4B, expanding home health footprint per Reuters.",
-  "context": "Acquisition valued $3.4B with 300K patients across 38 states per Q3 10-Q; home health segment represents 42% of revenue per 10-K"
+  "context": "Acquisition valued $3.4B with 300K patients across 38 states per Q3 10-Q",
+  "source_articles": [2, 5]
 }
 
 OUTPUT:
@@ -384,37 +166,61 @@ OUTPUT:
   "bullet_id": "amedisys_acquisition",
   "topic_label": "Amedisys acquisition",
   "content": "Acquired Amedisys for $3.4B, expanding home health footprint per Reuters.",
-  "context": "Acquisition valued $3.4B with 300K patients across 38 states per Q3 10-Q; home health segment represents 42% of revenue per 10-K",
+  "context": "Acquisition valued $3.4B with 300K patients across 38 states per Q3 10-Q",
   "deduplication": {"status": "unique"}
 }
 
-Notes:
-- Content unchanged
-- Context unchanged
-- Only addition is deduplication tagging
-
 ───────────────────────────────────────────────────────────────────────────
 
-EXAMPLE 2: Scenario with filtered bullet removal
+EXAMPLE 2: Duplicate bullets detected
 
-INPUT (Downside Scenario):
+INPUT (two bullets with source_articles overlap):
+Major Developments:
 {
-  "content": "The primary risk is Bitcoin price volatility, with prices falling 36% from October highs. Additionally, Malaysian authorities cracking down on illegal mining could shift hashrate dynamics. Macroeconomic headwinds from Bank of Japan rate hikes add pressure.",
-  "context": "Cost to mine one bitcoin was $79,002 in Q3 per 10-Q. All facilities located in United States per 10-K, insulating from international crackdowns."
+  "bullet_id": "fed_rate_cut",
+  "topic_label": "Fed rate cut",
+  "content": "Fed cut rates 25bps per WSJ...",
+  "source_articles": [3, 7, 8]
 }
 
-FILTERED BULLET: "malaysia_mining_crackdown" (indirect + low impact)
+Risk Factors:
+{
+  "bullet_id": "interest_rate_risk",
+  "topic_label": "Interest rate risk",
+  "content": "Fed's 25bps cut signals more easing per Reuters...",
+  "source_articles": [7, 8, 10]
+}
+
+Analysis: source_articles overlap = [7, 8] / unique = [3, 7, 8, 10] = 2/4 = 50% → DUPLICATE
+
+Major Developments is higher priority than Risk Factors, so "fed_rate_cut" is PRIMARY.
 
 OUTPUT:
+Major Developments:
 {
-  "content": "The primary risk is Bitcoin price volatility, with prices falling 36% from October highs. Macroeconomic headwinds from Bank of Japan rate hikes add pressure.",
-  "context": "Cost to mine one bitcoin was $79,002 in Q3 per 10-Q."
+  "bullet_id": "fed_rate_cut",
+  "topic_label": "Fed rate cut",
+  "content": "Fed cut rates 25bps per WSJ...",
+  "context": "...",
+  "deduplication": {
+    "status": "primary",
+    "absorbs": ["interest_rate_risk"],
+    "shared_theme": "Fed rate cut"
+  }
 }
 
-Notes:
-- Content: Removed Malaysia sentence (references filtered bullet)
-- Context: Removed "All facilities located in United States" (traces to filtered Malaysia bullet)
-- Remaining content/context unchanged
+Risk Factors:
+{
+  "bullet_id": "interest_rate_risk",
+  "topic_label": "Interest rate risk",
+  "content": "Fed's 25bps cut signals more easing per Reuters...",
+  "context": "...",
+  "deduplication": {
+    "status": "duplicate",
+    "absorbed_by": "fed_rate_cut",
+    "shared_theme": "Fed rate cut"
+  }
+}
 
 ═══════════════════════════════════════════════════════════════════════════
 VALIDATION CHECKLIST
@@ -423,8 +229,7 @@ VALIDATION CHECKLIST
 Before outputting, verify:
 
 STRUCTURE:
-□ Content and Context are SEPARATE fields (not merged)
-□ All 10 sections present
+□ All 6 bullet sections present
 □ Valid JSON (parseable by json.loads())
 □ Only bullet_id, topic_label, content, context, deduplication in output
 
@@ -433,14 +238,8 @@ BODY BULLETS:
 □ Context unchanged from input
 □ Deduplication field added with status
 
-SCENARIOS (Bottom Line/Upside/Downside):
-□ Content: References to filtered/duplicate bullets removed
-□ Content: Cross-bullet synthesis applied where relevant
-□ Context: References to filtered/duplicate bullets removed
-□ Context: No other edits made
-
 DEDUPLICATION:
-□ All bullet sections have deduplication field with status
-□ PRIMARY bullets have absorbs, shared_theme, proposed_content, proposed_context
+□ All bullets have deduplication field with status
+□ PRIMARY bullets have absorbs and shared_theme (no proposed_content/proposed_context)
 □ DUPLICATE bullets have absorbed_by and shared_theme
 □ UNIQUE bullets have status only

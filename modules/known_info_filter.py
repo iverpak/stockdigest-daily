@@ -1191,20 +1191,9 @@ def _merge_original_content(ai_response: Dict, phase1_json: Dict) -> Dict:
                 if isinstance(bullet, dict):
                     bullet_id = bullet.get('bullet_id', '')
                     if bullet_id:
-                        # Store content - could be 'content' or 'content_integrated'
-                        content = bullet.get('content_integrated') or bullet.get('content', '')
+                        # Store content (Phase 3 no longer generates content_integrated)
+                        content = bullet.get('content', '')
                         phase1_bullets[bullet_id] = content
-
-    # Paragraph sections are objects with 'content' directly
-    paragraph_section_names = ['bottom_line', 'upside_scenario', 'downside_scenario']
-
-    # Build lookup for Phase 1 paragraphs by section name
-    phase1_paragraphs = {}
-    for section_name in paragraph_section_names:
-        section_data = sections.get(section_name, {})
-        if isinstance(section_data, dict):
-            content = section_data.get('content_integrated') or section_data.get('content', '')
-            phase1_paragraphs[section_name] = content
 
     # Merge into AI response bullets
     for bullet in ai_response.get('bullets', []):
@@ -1214,13 +1203,8 @@ def _merge_original_content(ai_response: Dict, phase1_json: Dict) -> Dict:
         elif not bullet.get('original_content'):
             bullet['original_content'] = ''
 
-    # Merge into AI response paragraphs
-    for paragraph in ai_response.get('paragraphs', []):
-        section = paragraph.get('section', '')
-        if section and section in phase1_paragraphs:
-            paragraph['original_content'] = phase1_paragraphs[section]
-        elif not paragraph.get('original_content'):
-            paragraph['original_content'] = ''
+    # Note: Phase 1 no longer generates paragraph sections (bottom_line, upside_scenario, downside_scenario)
+    # Phase 4 generates these from surviving bullets
 
     return ai_response
 
@@ -1229,13 +1213,14 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
     """
     Apply Phase 1.5 filter results to Phase 1 JSON.
 
-    This modifies the Phase 1 JSON to remove stale information before Phase 2 enrichment.
+    This marks stale bullets with filter_status='filtered_out' and filter_reason='stale'
+    instead of removing them, allowing them to appear in Email #2 QA display.
 
-    Two-step filtering actions:
-    - REMOVE: Delete bullet entirely OR clear paragraph content (≥2/3 stale)
-    - KEEP: Use original content unchanged (exempt, <2/3 stale, or 100% new)
+    Filtering actions:
+    - REMOVE: Mark bullet with filter_status='filtered_out', filter_reason='stale'
+    - KEEP: Mark bullet with filter_status='included', filter_reason=None
 
-    Exempt sections (action=KEEP, exempt=true) always use original content unchanged.
+    All bullets are preserved in the JSON for QA visibility.
 
     Args:
         phase1_json: Original Phase 1 JSON with structure:
@@ -1253,7 +1238,7 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
             }
 
     Returns:
-        Modified Phase 1 JSON ready for Phase 2 (deep copy, original unchanged)
+        Modified Phase 1 JSON with filter_status/filter_reason on all bullets (deep copy)
     """
     import copy
 
@@ -1288,7 +1273,7 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
         'upcoming_catalysts', 'key_variables'
     ]
 
-    removed_count = 0
+    stale_count = 0
     kept_count = 0
 
     for section_name in bullet_section_names:
@@ -1296,17 +1281,15 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
         if not isinstance(section_data, list):
             continue
 
-        # Filter bullets - keep only those not marked REMOVE
-        new_bullets = []
         for bullet in section_data:
             if not isinstance(bullet, dict):
-                new_bullets.append(bullet)
                 continue
 
             bullet_id = bullet.get('bullet_id', '')
             if bullet_id not in bullet_actions:
-                # No filter action for this bullet - keep unchanged
-                new_bullets.append(bullet)
+                # No filter action for this bullet - mark as included
+                bullet['filter_status'] = 'included'
+                bullet['filter_reason'] = None
                 kept_count += 1
                 continue
 
@@ -1314,17 +1297,18 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
             action = action_info['action']
 
             if action == 'REMOVE':
-                # Skip this bullet entirely
-                removed_count += 1
-                continue
+                # Mark as filtered due to staleness (but keep in JSON)
+                bullet['filter_status'] = 'filtered_out'
+                bullet['filter_reason'] = 'stale'
+                stale_count += 1
             else:
-                # KEEP - use original unchanged
-                new_bullets.append(bullet)
+                # KEEP - mark as included
+                bullet['filter_status'] = 'included'
+                bullet['filter_reason'] = None
                 kept_count += 1
 
-        sections[section_name] = new_bullets
-
     # Process paragraph sections (scenarios are always exempt, so always KEEP)
+    # Paragraphs don't get filter_status since Phase 4 regenerates them
     paragraph_section_names = ['bottom_line', 'upside_scenario', 'downside_scenario']
 
     for section_name in paragraph_section_names:
@@ -1332,26 +1316,10 @@ def apply_filter_to_phase1(phase1_json: Dict, filter_result: Dict) -> Dict:
         if not isinstance(section_data, dict):
             continue
 
-        if section_name not in paragraph_actions:
-            # No filter action for this paragraph - keep unchanged
-            kept_count += 1
-            continue
+        # Paragraphs are exempt from staleness filtering
+        # Phase 4 will regenerate them from surviving bullets
 
-        action_info = paragraph_actions[section_name]
-        action = action_info['action']
-
-        if action == 'REMOVE':
-            # For paragraphs, clear the content (shouldn't happen for exempt sections)
-            if 'content_integrated' in section_data:
-                section_data['content_integrated'] = ''
-            else:
-                section_data['content'] = ''
-            removed_count += 1
-        else:
-            # KEEP - leave unchanged
-            kept_count += 1
-
-    LOG.info(f"Phase 1.5 apply_filter: {kept_count} kept, {removed_count} removed")
+    LOG.info(f"Phase 1.5 apply_filter: {kept_count} kept, {stale_count} marked stale (all preserved)")
 
     return result
 

@@ -220,14 +220,17 @@ def add_dates_to_email_sections(
                 formatted_item['formatted'] += f" — <em>{context_suffix}</em>"
 
     # Handle Bottom Line, Upside, Downside (paragraphs, not bullets - no bullet_id)
-    for section_key, json_key in [
-        ("bottom_line", "bottom_line"),
-        ("upside_scenario", "upside_scenario"),
-        ("downside_scenario", "downside_scenario")
+    # Phase 4 stores these in merged_json['phase4']['phase4_bottom_line'], etc.
+    phase4_data = merged_json.get('phase4', {})
+    for section_key, phase4_key in [
+        ("bottom_line", "phase4_bottom_line"),
+        ("upside_scenario", "phase4_upside_scenario"),
+        ("downside_scenario", "phase4_downside_scenario")
     ]:
         if section_key in sections and sections[section_key]:
             item = sections[section_key][0]
-            date_range = merged_json['sections'].get(json_key, {}).get('date_range', '')
+            # Look in phase4 key where Phase 4 stores date_range
+            date_range = phase4_data.get(phase4_key, {}).get('date_range', '')
 
             # Handle new dict format with context_suffix
             if isinstance(item, dict):

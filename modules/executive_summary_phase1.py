@@ -24,6 +24,29 @@ from modules.executive_summary_utils import should_include_bullet
 
 LOG = logging.getLogger(__name__)
 
+# Escape hatch prefix for context fields (matches strip_escape_hatch_context in phase2)
+ESCAPE_HATCH_PREFIX = "No relevant filing context found"
+
+
+def _strip_escape_hatch(context: str) -> str:
+    """
+    Return empty string if context is escape hatch phrase.
+
+    Used for Phase 4 paragraph contexts (bottom_line, upside, downside).
+    Matches the pattern used in strip_escape_hatch_context() for bullet contexts.
+
+    Args:
+        context: Context string from Phase 4 output
+
+    Returns:
+        Empty string if escape hatch, otherwise original context
+    """
+    if not context:
+        return ""
+    if context.startswith(ESCAPE_HATCH_PREFIX):
+        return ""
+    return context
+
 
 # Phase 1 System Prompt (embedded from modules/_build_executive_summary_prompt_phase1)
 def get_phase1_system_prompt(ticker: str) -> str:
@@ -790,7 +813,7 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[Dict]]:
     if phase4_bl and phase4_bl.get("content"):
         sections["bottom_line"] = [{
             'formatted': phase4_bl["content"],
-            'context_suffix': phase4_bl.get("context", "")
+            'context_suffix': _strip_escape_hatch(phase4_bl.get("context", ""))
         }]
 
     # Helper function to format bullets (simple, no metadata)
@@ -853,7 +876,7 @@ def convert_phase1_to_sections_dict(phase1_json: Dict) -> Dict[str, List[Dict]]:
         if phase4_scenario and phase4_scenario.get("content"):
             sections[sections_key] = [{
                 'formatted': phase4_scenario["content"],
-                'context_suffix': phase4_scenario.get("context", "")
+                'context_suffix': _strip_escape_hatch(phase4_scenario.get("context", ""))
             }]
 
     # Add dates to all sections using bullet_id matching
@@ -921,7 +944,7 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
     phase4_bl = phase4.get('phase4_bottom_line', {})
     if phase4_bl and phase4_bl.get("content"):
         content = phase4_bl.get("content", "")
-        context = phase4_bl.get("context", "")
+        context = _strip_escape_hatch(phase4_bl.get("context", ""))
         source_articles = phase4_bl.get("source_articles", [])
         result = content
         if context:
@@ -1106,7 +1129,7 @@ def convert_phase3_to_email2_sections(phase3_json: Dict) -> Dict[str, List[Dict]
         phase4_scenario = phase4.get(phase4_key, {})
         if phase4_scenario and phase4_scenario.get("content"):
             content = phase4_scenario.get("content", "")
-            context = phase4_scenario.get("context", "")
+            context = _strip_escape_hatch(phase4_scenario.get("context", ""))
             source_articles = phase4_scenario.get("source_articles", [])
             result = content
             if context:

@@ -396,7 +396,7 @@ PHASE B: CONTEXT SYNTHESIS
 ===============================================================================
 
 ===============================================================================
-CONTEXT SYNTHESIS RULES (50-75 words per section)
+CONTEXT SYNTHESIS RULES (HARD LIMIT: 50-75 words per section)
 ===============================================================================
 
 For each paragraph section (bottom_line, upside_scenario, downside_scenario):
@@ -430,7 +430,7 @@ STEP 2: Review bullet context fields (priority order)
 - THEN: Context fields of other surviving bullets (if needed for coverage)
 - Each bullet has a `context` field (40-50 words from Phase 2)
 
-STEP 3: Select 2-3 most relevant contexts
+STEP 3: Select 2-3 most relevant contexts (budget: ~20-25 words each = 50-75 total)
 - Ask: "Which bullet contexts would add the most valuable
   quantification/materiality/explanation for what my content discussed?"
 - Prioritize contexts that enrich the narrative in content's order of emphasis
@@ -448,6 +448,9 @@ STEP 3: Select 2-3 most relevant contexts
   11. What's the cost/revenue exposure? (COGS breakdown, pricing)
   12. What is this entity? (define unfamiliar divisions, targets, products)
 
+CRITICAL: Pick 2-3 of these questions maximum. Do NOT try to answer all 12.
+Your context budget is 50-75 words total - roughly 2-3 data points.
+
 STEP 4: Verify thread mapping before synthesizing
 - For EACH key thread in your content, identify which context substantiates it
 - If a content thread has no supporting context → either the thread shouldn't be in content, or use escape hatch
@@ -458,6 +461,13 @@ STEP 5: Synthesize into 50-75 words
 - Combine into natural prose with proper citations (per FY2024 10-K, per Q3 10-Q, per Oct 23 call)
 - Remove redundancy if multiple contexts cite the same fact
 - Use semicolons to separate distinct data points
+
+MANDATORY CONTEXT LENGTH CHECK:
+After writing context, count words. If >75 words:
+1. Keep only the 2-3 most material data points
+2. Remove any data point not directly linked to a content thread
+3. Condense citations (combine "per 10-K" and "per 10-Q" where possible)
+4. Recount - repeat until ≤75 words
 
 CONTEXT RELEVANCE CRITERIA (all must be met):
 ✓ Thread match: Context supports a specific thread in your content paragraph

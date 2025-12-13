@@ -17519,9 +17519,13 @@ async def process_regenerate_email_phase(job: dict):
         with db() as conn, conn.cursor() as cur:
             # Fetch real articles from articles table
             if real_article_ids:
+                # Query matches fetch_digest_articles() for consistency:
+                # - Includes tf.value_chain_type for upstream/downstream categorization
+                # - No is_rejected filter (original stored article_ids, trust them)
                 cur.execute("""
                     SELECT a.id, a.title, a.url, a.resolved_url, a.domain, a.published_at,
                            tf.category, f.search_keyword, f.feed_ticker,
+                           tf.value_chain_type,
                            ta.relevance_score, ta.relevance_reason,
                            ta.ai_summary
                     FROM articles a
@@ -17530,7 +17534,6 @@ async def process_regenerate_email_phase(job: dict):
                     JOIN feeds f ON ta.feed_id = f.id
                     WHERE ta.ticker = %s
                     AND a.id = ANY(%s)
-                    AND (ta.is_rejected = FALSE OR ta.is_rejected IS NULL)
                     ORDER BY a.published_at DESC
                 """, (ticker, real_article_ids))
                 articles = list(cur.fetchall())

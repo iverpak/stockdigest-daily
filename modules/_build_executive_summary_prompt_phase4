@@ -48,10 +48,15 @@ OUTPUT SECTIONS:
 INPUT FORMAT
 ===============================================================================
 
-You receive surviving bullets organized by section:
+You receive surviving bullets organized by section, plus pre-computed signal counts:
 
 ```json
 {
+  "_signal_counts": {
+    "total_count": 7,       // ← USE THIS for Bottom Line escape hatch decision
+    "bullish_count": 4,     // ← USE THIS for Upside escape hatch decision
+    "bearish_count": 3      // ← USE THIS for Downside escape hatch decision
+  },
   "sections": {
     "major_developments": [
       {
@@ -73,9 +78,11 @@ You receive surviving bullets organized by section:
 }
 ```
 
-IMPORTANT: Only bullets shown in input survived all filters. DO NOT reference any content
-not present in the input. Phase 1/2/3 may have generated more bullets that were filtered -
-you have no knowledge of them.
+IMPORTANT:
+- _signal_counts contains PRE-COMPUTED authoritative counts. Use them directly.
+- Only bullets shown in input survived all filters. DO NOT reference any content
+  not present in the input. Phase 1/2/3 may have generated more bullets that were
+  filtered - you have no knowledge of them.
 
 ===============================================================================
 OUTPUT FORMAT
@@ -137,12 +144,34 @@ QUIET DAY HANDLING - ESCAPE HATCH FOR MINIMAL SURVIVING BULLETS
 ===============================================================================
 
 Phase 4 receives surviving bullets (filtered by Phase 1.5 and Phase 3).
-Count surviving bullets by sentiment to determine output:
 
-SIGNAL COUNTING:
-- Count surviving bullets where sentiment = "bullish" → bullish_count
-- Count surviving bullets where sentiment = "bearish" → bearish_count
-- Count total surviving bullets → total_count
+===============================================================================
+PRE-COMPUTED SIGNAL COUNTS - USE THESE EXACT VALUES (DO NOT RECOUNT)
+===============================================================================
+
+The input JSON includes "_signal_counts" with authoritative counts:
+
+```json
+"_signal_counts": {
+    "total_count": X,      // Total bullets from ALL 6 sections
+    "bullish_count": Y,    // Bullets with sentiment="bullish"
+    "bearish_count": Z     // Bullets with sentiment="bearish"
+}
+```
+
+⚠️ CRITICAL: USE THESE VALUES DIRECTLY. DO NOT RECOUNT.
+
+These counts include ALL bullets from ALL 6 sections:
+- major_developments
+- financial_performance
+- risk_factors (these ARE material - risks count toward total)
+- wall_street_sentiment
+- competitive_industry_dynamics (industry trends ARE material)
+- upcoming_catalysts
+
+If _signal_counts shows total_count=7, there ARE 7 material items to synthesize,
+even if major_developments is empty. Industry trends, risk factors, and competitor
+news all count as material content for the Bottom Line.
 
 ===============================================================================
 ESCAPE HATCH TEXT - USE VERBATIM (DO NOT PARAPHRASE)
@@ -152,19 +181,19 @@ CRITICAL: Copy these EXACT phrases. Do not shorten, rephrase, or paraphrase.
 
 CONTENT ESCAPE HATCHES (copy verbatim):
 
-1. BOTTOM LINE (total_count = 0):
+1. BOTTOM LINE (when _signal_counts.total_count = 0):
    COPY EXACTLY: "No material developments reported this period."
 
-2. UPSIDE (bullish_count = 0):
+2. UPSIDE (when _signal_counts.bullish_count = 0):
    COPY EXACTLY: "No material upside catalysts discussed in recent articles."
 
-3. UPSIDE (bullish_count = 1):
+3. UPSIDE (when _signal_counts.bullish_count = 1):
    Write 1-2 sentences, then APPEND EXACTLY: "No additional upside catalysts discussed in recent articles."
 
-4. DOWNSIDE (bearish_count = 0):
+4. DOWNSIDE (when _signal_counts.bearish_count = 0):
    COPY EXACTLY: "No material downside risks discussed in recent articles."
 
-5. DOWNSIDE (bearish_count = 1):
+5. DOWNSIDE (when _signal_counts.bearish_count = 1):
    Write 1-2 sentences, then APPEND EXACTLY: "No additional downside risks discussed in recent articles."
 
 CONTEXT ESCAPE HATCH (copy verbatim):
@@ -174,21 +203,23 @@ For ALL sections when no relevant filing context exists:
 
 ===============================================================================
 
-SCENARIO OUTPUT BY SIGNAL COUNT:
+SCENARIO OUTPUT BY SIGNAL COUNT (use _signal_counts values):
 
-BOTTOM LINE:
-- total_count = 0 → Use verbatim escape hatch above
-- total_count ≥ 1 → Full synthesis from surviving bullets
+Read _signal_counts from input JSON and apply these rules:
 
-UPSIDE SCENARIO:
-- bullish_count = 0 → Use verbatim escape hatch above
-- bullish_count = 1 → Write 1-2 sentences + verbatim escape hatch above
-- bullish_count ≥ 2 → Full 80-160 word scenario
+BOTTOM LINE (check _signal_counts.total_count):
+- If _signal_counts.total_count = 0 → Use verbatim escape hatch above
+- If _signal_counts.total_count ≥ 1 → Full synthesis from ALL surviving bullets across ALL sections
 
-DOWNSIDE SCENARIO:
-- bearish_count = 0 → Use verbatim escape hatch above
-- bearish_count = 1 → Write 1-2 sentences + verbatim escape hatch above
-- bearish_count ≥ 2 → Full 80-160 word scenario
+UPSIDE SCENARIO (check _signal_counts.bullish_count):
+- If _signal_counts.bullish_count = 0 → Use verbatim escape hatch above
+- If _signal_counts.bullish_count = 1 → Write 1-2 sentences + verbatim escape hatch above
+- If _signal_counts.bullish_count ≥ 2 → Full 80-160 word scenario
+
+DOWNSIDE SCENARIO (check _signal_counts.bearish_count):
+- If _signal_counts.bearish_count = 0 → Use verbatim escape hatch above
+- If _signal_counts.bearish_count = 1 → Write 1-2 sentences + verbatim escape hatch above
+- If _signal_counts.bearish_count ≥ 2 → Full 80-160 word scenario
 
 QUIET DAY OUTPUT EXAMPLE (0 total surviving bullets):
 {
@@ -212,8 +243,11 @@ QUIET DAY OUTPUT EXAMPLE (0 total surviving bullets):
   }
 }
 
-CRITICAL: When signals are low (0-1), output minimal scenario. Do not fabricate
-scenarios from tangentially related data. Use escape hatch phrases VERBATIM as written above.
+CRITICAL: Use _signal_counts to decide escape hatches. When counts are 0 (or 0-1 for
+scenarios), use escape hatch phrases VERBATIM as written above.
+
+NOTE: All surviving bullets passed triage for this ticker - they are NOT tangential.
+If _signal_counts.total_count >= 1, there IS material content to synthesize.
 
 ===============================================================================
 IMPLICATION DIRECTION CHECK - VERIFY BEFORE WRITING SCENARIOS
@@ -626,24 +660,29 @@ OK "Revenue beat consensus per Bloomberg and Reuters"
 FINAL CHECKLIST BEFORE OUTPUT
 ===============================================================================
 
-BOTTOM LINE:
-[ ] <=150 words (or escape hatch if 0 total surviving bullets)
+FIRST: Check _signal_counts from input JSON:
+[ ] Read _signal_counts.total_count → decides Bottom Line escape hatch
+[ ] Read _signal_counts.bullish_count → decides Upside escape hatch
+[ ] Read _signal_counts.bearish_count → decides Downside escape hatch
+
+BOTTOM LINE (if _signal_counts.total_count >= 1, write full synthesis):
+[ ] <=150 words (or escape hatch if _signal_counts.total_count = 0)
 [ ] Escape hatch: "No material developments reported this period."
 [ ] 100% attribution density
 [ ] No banned phrases/verbs
 [ ] Balance rule applied (bullish/bearish proportional)
 [ ] source_articles contains only used bullet indices
 
-UPSIDE SCENARIO:
-[ ] 80-160 words (or escape hatch if 0-1 bullish signals)
+UPSIDE SCENARIO (check _signal_counts.bullish_count):
+[ ] 80-160 words (or escape hatch if _signal_counts.bullish_count = 0-1)
 [ ] Escape hatch (0 bullish): "No material upside catalysts discussed in recent articles."
 [ ] Escape hatch (1 bullish): 1-2 sentences + "No additional upside catalysts discussed in recent articles."
 [ ] 100% attribution density
 [ ] Named sources (analyst+firm or publication)
 [ ] source_articles contains only used bullet indices
 
-DOWNSIDE SCENARIO:
-[ ] 80-160 words (or escape hatch if 0-1 bearish signals)
+DOWNSIDE SCENARIO (check _signal_counts.bearish_count):
+[ ] 80-160 words (or escape hatch if _signal_counts.bearish_count = 0-1)
 [ ] Escape hatch (0 bearish): "No material downside risks discussed in recent articles."
 [ ] Escape hatch (1 bearish): 1-2 sentences + "No additional downside risks discussed in recent articles."
 [ ] 100% attribution density

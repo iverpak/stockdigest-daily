@@ -90,28 +90,41 @@ def _build_phase4_user_content(ticker: str, phase3_json: Dict) -> str:
     """
     Build user content for Phase 4 prompt containing only surviving bullets.
 
+    Includes pre-computed signal counts to eliminate LLM counting ambiguity.
+    The _signal_counts field provides authoritative counts that the LLM must use
+    directly for escape hatch decisions.
+
     Args:
         ticker: Stock ticker
         phase3_json: Complete Phase 3 merged JSON
 
     Returns:
-        JSON string with surviving bullets formatted for Phase 4 prompt
+        JSON string with surviving bullets and pre-computed counts
     """
     surviving = _filter_surviving_bullets(phase3_json)
 
-    # Count sentiment distribution for logging
+    # Count ALL surviving bullets across ALL sections
+    total_count = 0
     bullish_count = 0
     bearish_count = 0
 
     for section_name in BULLET_SECTIONS:
         for bullet in surviving["sections"].get(section_name, []):
+            total_count += 1  # Every surviving bullet counts toward total
             sentiment = bullet.get('sentiment', '').lower()
             if sentiment == 'bullish':
                 bullish_count += 1
             elif sentiment == 'bearish':
                 bearish_count += 1
 
-    LOG.info(f"[{ticker}] Phase 4 sentiment distribution: {bullish_count} bullish, {bearish_count} bearish")
+    LOG.info(f"[{ticker}] Phase 4 signal counts: total={total_count}, bullish={bullish_count}, bearish={bearish_count}")
+
+    # Add pre-computed counts to JSON - LLM must use these directly
+    surviving["_signal_counts"] = {
+        "total_count": total_count,
+        "bullish_count": bullish_count,
+        "bearish_count": bearish_count
+    }
 
     return json.dumps(surviving, indent=2)
 

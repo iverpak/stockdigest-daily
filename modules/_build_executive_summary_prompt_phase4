@@ -153,7 +153,7 @@ CRITICAL: Copy these EXACT phrases. Do not shorten, rephrase, or paraphrase.
 CONTENT ESCAPE HATCHES (copy verbatim):
 
 1. BOTTOM LINE (total_count = 0):
-   COPY EXACTLY: "No material developments reported for the target company this period."
+   COPY EXACTLY: "No material developments reported this period."
 
 2. UPSIDE (bullish_count = 0):
    COPY EXACTLY: "No material upside catalysts discussed in recent articles."
@@ -193,7 +193,7 @@ DOWNSIDE SCENARIO:
 QUIET DAY OUTPUT EXAMPLE (0 total surviving bullets):
 {
   "phase4_bottom_line": {
-    "content": "No material developments reported for the target company this period.",
+    "content": "No material developments reported this period.",
     "context": "No relevant filing context found for this development",
     "source_articles": [],
     "date_range": ""
@@ -247,6 +247,20 @@ BOTTOM LINE - EDITORIAL DISCIPLINE (<=150 words)
 ===============================================================================
 
 Bottom Line is a PARAGRAPH synthesized from surviving bullets.
+
+BULLET SOURCE TYPES - ALL ARE VALID:
+Synthesize ALL surviving bullets - they passed triage and filtering for this ticker.
+Source types (company-specific, competitor, industry, upstream, downstream) are
+equally valid inputs. If a bullet survived to Phase 4, it's relevant to the
+investment thesis. Do not ignore bullets because they're about competitors or
+industry trends rather than direct company news.
+
+PRIORITIZATION ORDER (when synthesizing):
+1. HIGH IMPACT bullets before MEDIUM IMPACT (use the impact field)
+2. DIRECT relevance before INDIRECT relevance (use the relevance field)
+3. Lead with the most material developments regardless of source type
+4. A competitor CEO departure or major industry regulation may be MORE material
+   than routine company operational updates - let impact guide you
 
 INFERENCE TIER: TIER 0 ONLY - Facts + Attribution. No inference, no framing.
 
@@ -341,10 +355,14 @@ INFERENCE DISCIPLINE: TIER 0 ONLY (Facts + Attribution). No unattributed inferen
 
 STRUCTURE:
 - Synthesize bullish narrative from surviving bullish bullets
+- Include bullish bullets from ALL source types (company news, competitor setbacks,
+  favorable industry trends, supply chain advantages). A competitor stumbling or
+  favorable industry shift IS a bullish signal for the target.
 - Base on: analyst bull cases, management optimism, positive catalysts
 - Include analyst price targets if mentioned in surviving bullets
 - Format as coherent paragraph (not bullet points)
 - Include quantification when bullets provide: price targets, %, $, margins
+- Prioritize HIGH IMPACT bullets over MEDIUM IMPACT
 
 ATTRIBUTION REQUIREMENTS:
 [ ] Every sentence has attribution (100% requirement)
@@ -380,10 +398,14 @@ INFERENCE DISCIPLINE: TIER 0 ONLY (Facts + Attribution). No unattributed inferen
 
 STRUCTURE:
 - Synthesize bearish narrative from surviving bearish bullets
+- Include bearish bullets from ALL source types (company news, competitor gains,
+  unfavorable industry trends, supply chain pressures). A competitor winning or
+  unfavorable industry shift IS a bearish signal for the target.
 - Base on: analyst concerns, risks flagged, negative developments
 - Include analyst bear targets if mentioned in surviving bullets
 - Format as coherent paragraph (not bullet points)
 - Include quantification when bullets provide: price targets, %, $, margins
+- Prioritize HIGH IMPACT bullets over MEDIUM IMPACT
 
 ATTRIBUTION REQUIREMENTS (same as Upside):
 [ ] Every sentence has attribution (100% requirement)
@@ -606,7 +628,7 @@ FINAL CHECKLIST BEFORE OUTPUT
 
 BOTTOM LINE:
 [ ] <=150 words (or escape hatch if 0 total surviving bullets)
-[ ] Escape hatch: "No material developments reported for the target company this period."
+[ ] Escape hatch: "No material developments reported this period."
 [ ] 100% attribution density
 [ ] No banned phrases/verbs
 [ ] Balance rule applied (bullish/bearish proportional)

@@ -13147,7 +13147,7 @@ async def generate_executive_summary_all_phases(
         # =====================================================================
         LOG.info(f"[{ticker}] 📝 Running Phase 4 (paragraph generation from surviving bullets)...")
 
-        from modules.executive_summary_phase4 import generate_executive_summary_phase4
+        from modules.executive_summary_phase4 import generate_executive_summary_phase4, post_process_phase4_dates
 
         phase4_result, phase4_usage = generate_executive_summary_phase4(
             ticker=ticker,
@@ -13174,6 +13174,13 @@ async def generate_executive_summary_all_phases(
                 calculate_claude_api_cost(phase4_usage, "executive_summary_phase4", model_name=phase4_model)
             elif "gemini" in phase4_model.lower():
                 calculate_gemini_api_cost(phase4_usage, "executive_summary_phase4", model="pro", model_name=phase4_model)
+
+        # Post-process Phase 4 dates (compute date_range from bullet dates, not AI)
+        phase4_result = post_process_phase4_dates(
+            phase4_result=phase4_result,
+            phase3_json=phase3_merged_json,
+            report_type=report_type
+        )
 
         # Add Phase 4 results to JSON
         phase3_merged_json['phase4'] = phase4_result
@@ -17883,7 +17890,7 @@ async def process_regenerate_email_phase(job: dict):
                         # ============================================================
                         LOG.info(f"[{ticker}] 📝 [JOB {job_id}] Running Phase 4...")
 
-                        from modules.executive_summary_phase4 import generate_executive_summary_phase4
+                        from modules.executive_summary_phase4 import generate_executive_summary_phase4, post_process_phase4_dates
 
                         phase4_result, phase4_usage = generate_executive_summary_phase4(
                             ticker=ticker,
@@ -17905,6 +17912,13 @@ async def process_regenerate_email_phase(job: dict):
                         if not phase4_result:
                             LOG.error(f"[{ticker}] ❌ [JOB {job_id}] Phase 4 generation failed - no paragraphs generated")
                             raise RuntimeError(f"Phase 4 generation failed for {ticker} - no paragraphs")
+
+                        # Post-process Phase 4 dates (compute date_range from bullet dates, not AI)
+                        phase4_result = post_process_phase4_dates(
+                            phase4_result=phase4_result,
+                            phase3_json=phase3_merged_json,
+                            report_type=report_type
+                        )
 
                         # Add Phase 4 results to JSON
                         phase3_merged_json['phase4'] = phase4_result

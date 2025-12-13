@@ -573,11 +573,11 @@ TRANSCRIPT SECTIONS (15 available):
 3. OPERATIONAL METRICS
 4. MAJOR DEVELOPMENTS
 5. TRANSACTION DETAILS
-6. GUIDANCE & OUTLOOK
+6. GUIDANCE
 7. STRATEGIC INITIATIVES
-8. RISK FACTORS & HEADWINDS
+8. RISK FACTORS
 9. INDUSTRY & COMPETITIVE LANDSCAPE
-10. CAPITAL ALLOCATION & BALANCE SHEET
+10. CAPITAL ALLOCATION
 11. KEY VARIABLES TO MONITOR
 
 8-K SELECTION GUIDANCE:
@@ -607,7 +607,7 @@ Financial metrics (revenue, margins, EPS):
 → 10-K: FINANCIAL SNAPSHOT (Latest Year), REVENUE STREAMS
 → 10-Q: QUARTERLY FINANCIAL PERFORMANCE (QoQ & YoY), SEGMENT PERFORMANCE TRENDS (QoQ & YoY)
 → Transcript: FINANCIAL RESULTS
-→ 8-K: FINANCIAL RESULTS, GUIDANCE & OUTLOOK
+→ 8-K: FINANCIAL RESULTS, GUIDANCE
 
 Operational metrics (production, deliveries, users, capacity):
 → 10-K: KEY OPERATIONAL METRICS (KPIs), INFRASTRUCTURE & ASSETS
@@ -625,19 +625,19 @@ Risks (regulatory, competitive, operational):
 → 10-K: SPECIFIC RISKS & CONCENTRATIONS, REGULATORY OVERSIGHT
 → 10-Q: NEW RISKS & MATERIAL DEVELOPMENTS, MANAGEMENT COMMENTARY
 → Transcript: RISK FACTORS & HEADWINDS, Q&A HIGHLIGHTS
-→ 8-K: RISK FACTORS & HEADWINDS, MAJOR DEVELOPMENTS
+→ 8-K: RISK FACTORS, MAJOR DEVELOPMENTS
 
 Guidance and outlook:
 → 10-K: STRATEGIC PRIORITIES & OUTLOOK
 → 10-Q: GUIDANCE & OUTLOOK UPDATES, MANAGEMENT COMMENTARY
 → Transcript: GUIDANCE, MANAGEMENT SENTIMENT & TONE
-→ 8-K: GUIDANCE & OUTLOOK, BOTTOM LINE
+→ 8-K: GUIDANCE, BOTTOM LINE
 
 Balance sheet items (cash, debt, inventory):
 → 10-K: FINANCIAL SNAPSHOT (Latest Year), COST STRUCTURE
 → 10-Q: BALANCE SHEET CHANGES (vs Prior Quarter & Year-End), CASH FLOW ANALYSIS (QTD & YTD)
 → Transcript: CAPITAL ALLOCATION & BALANCE SHEET
-→ 8-K: CAPITAL ALLOCATION & BALANCE SHEET, FINANCIAL RESULTS
+→ 8-K: CAPITAL ALLOCATION, FINANCIAL RESULTS
 
 Multi-theme bullets (e.g., "Q3 revenue beat and raised guidance"):
 → Include sections for ALL themes mentioned (max 3 per filing type)
@@ -2014,7 +2014,7 @@ Example bullet: "Q3 deliveries 462,890 vehicles exceeded estimates"
 
 Rationale: Operational KPIs need capacity context (INFRASTRUCTURE & ASSETS), recent trends (10-Q), and management interpretation (Transcript)
 
-3. GUIDANCE & OUTLOOK
+3. GUIDANCE
 
 Bullet discusses: Forward guidance, management outlook, future expectations, targets
 
@@ -2154,7 +2154,7 @@ Select:
 → 10-K: "STRATEGIC PRIORITIES & OUTLOOK", "KEY THINGS TO MONITOR"
 → 10-Q: "GUIDANCE & OUTLOOK UPDATES", "RECENT EVENTS & SUBSEQUENT EVENTS"
 → Transcript: "GUIDANCE", "MAJOR DEVELOPMENTS"
-→ 8-K: "GUIDANCE & OUTLOOK", "MAJOR DEVELOPMENTS"
+→ 8-K: "GUIDANCE", "MAJOR DEVELOPMENTS"
 
 Example bullet: "Q3 earnings October 22 - Q4 guidance and margin outlook expected"
 → These sections will have forward-looking statements, upcoming milestones
@@ -2184,7 +2184,7 @@ Select:
 → 10-K: "MATERIAL DEPENDENCIES", "SPECIFIC RISKS & CONCENTRATIONS"
 → 10-Q: "NEW RISKS & MATERIAL DEVELOPMENTS", "MANAGEMENT COMMENTARY"
 → Transcript: "RISK FACTORS & HEADWINDS", "Q&A HIGHLIGHTS"
-→ 8-K: "TRANSACTION DETAILS", "RISK FACTORS & HEADWINDS"
+→ 8-K: "TRANSACTION DETAILS", "RISK FACTORS"
 
 Example bullet: "Top customer contract renewal secured for 5 years"
 → These sections will have customer concentration data, supplier dependencies, concentration metrics
@@ -2199,7 +2199,7 @@ Select:
 → 10-K: "LEGAL PROCEEDINGS & CONTINGENCIES", "SPECIFIC RISKS & CONCENTRATIONS"
 → 10-Q: "NEW RISKS & MATERIAL DEVELOPMENTS", "RECENT EVENTS & SUBSEQUENT EVENTS"
 → Transcript: "RISK FACTORS & HEADWINDS", "Q&A HIGHLIGHTS"
-→ 8-K: "RISK FACTORS & HEADWINDS", "MAJOR DEVELOPMENTS"
+→ 8-K: "RISK FACTORS", "MAJOR DEVELOPMENTS"
 
 Example bullet: "Class action lawsuit filed alleging securities fraud"
 → These sections will have existing legal proceedings, contingent liabilities, litigation history
@@ -2222,7 +2222,7 @@ Filing hints should cover BOTH:
     "10-K": ["FINANCIAL SNAPSHOT (Latest Year)", "STRATEGIC PRIORITIES & OUTLOOK"],
     "10-Q": ["QUARTERLY FINANCIAL PERFORMANCE (QoQ & YoY)", "GUIDANCE & OUTLOOK UPDATES"],
     "Transcript": ["FINANCIAL RESULTS", "GUIDANCE"],
-    "8-K": ["FINANCIAL RESULTS", "GUIDANCE & OUTLOOK"]
+    "8-K": ["FINANCIAL RESULTS", "GUIDANCE"]
   }
 }
 
@@ -2256,7 +2256,7 @@ Select:
 → 10-K: "REGULATORY OVERSIGHT", "INFRASTRUCTURE & ASSETS"
 → 10-Q: "NEW RISKS & MATERIAL DEVELOPMENTS", "CASH FLOW ANALYSIS (QTD & YTD)"
 → Transcript: "RISK FACTORS & HEADWINDS", "CAPITAL ALLOCATION & BALANCE SHEET"
-→ 8-K: "RISK FACTORS & HEADWINDS", "CAPITAL ALLOCATION & BALANCE SHEET"
+→ 8-K: "RISK FACTORS", "CAPITAL ALLOCATION"
 
 COMPETITIVE THREAT TO MARKET POSITION:
 Themes: Competitive (theme 1) + Market share/positioning (theme 2)

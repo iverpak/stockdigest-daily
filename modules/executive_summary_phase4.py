@@ -20,8 +20,10 @@ import json
 import logging
 import os
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 import requests
+import pytz
 
 LOG = logging.getLogger(__name__)
 
@@ -609,3 +611,221 @@ def generate_executive_summary_phase4(
         }
     }
     return empty_result, None
+
+
+def compute_report_period_date_range(report_type: str = 'daily') -> str:
+    """
+    Compute the report period date range WITHOUT year.
+
+    Uses same logic as Email #3 header but formats without year to match
+    bullet date_range format.
+
+    Args:
+        report_type: 'daily' or 'weekly'
+
+    Returns:
+        Date string without year: "Dec 13" (daily) or "Dec 06-12" (weekly)
+    """
+    eastern = pytz.timezone('US/Eastern')
+    now_eastern = datetime.now(timezone.utc).astimezone(eastern)
+
+    if report_type == 'weekly':
+        # Weekly: 7-day lookback ending yesterday
+        end_date = now_eastern - timedelta(days=1)
+        start_date = end_date - timedelta(days=6)
+
+        # Format without year: "Dec 06-12"
+        if start_date.month == end_date.month:
+            # Same month: "Dec 06-12"
+            return f"{start_date.strftime('%b %d')}-{end_date.strftime('%d')}"
+        else:
+            # Different months: "Nov 28-Dec 04"
+            return f"{start_date.strftime('%b %d')}-{end_date.strftime('%b %d')}"
+    else:
+        # Daily: Current date without year
+        return now_eastern.strftime("%b %d")
+
+
+def _collect_all_bullet_dates(phase3_json: Dict) -> List[str]:
+    """
+    Collect all date_range values from surviving bullets across all sections.
+
+    Args:
+        phase3_json: Phase 3 merged JSON with bullet sections
+
+    Returns:
+        List of date strings (e.g., ["Dec 11", "Dec 12", "Dec 11-12"])
+    """
+    dates = []
+    sections = phase3_json.get('sections', {})
+
+    for section_name in BULLET_SECTIONS:
+        bullets = sections.get(section_name, [])
+        for bullet in bullets:
+            # Skip filtered bullets
+            filter_status = bullet.get('filter_status', '').lower()
+            if filter_status == 'filtered_out':
+                continue
+
+            # Skip duplicates
+            dedup = bullet.get('deduplication', {})
+            if dedup.get('status', '').lower() == 'duplicate':
+                continue
+
+            date_range = bullet.get('date_range', '')
+            if date_range:
+                dates.append(date_range)
+
+    return dates
+
+
+def _parse_date_string(date_str: str) -> List[datetime]:
+    """
+    Parse a date string like "Dec 11" or "Dec 11-12" into datetime objects.
+
+    Args:
+        date_str: Date string without year (e.g., "Dec 11", "Dec 11-12", "Dec 11, Dec 15")
+
+    Returns:
+        List of datetime objects (using current year, adjusting for year boundary)
+    """
+    eastern = pytz.timezone('US/Eastern')
+    now = datetime.now(timezone.utc).astimezone(eastern)
+    current_year = now.year
+
+    dates = []
+
+    # Handle comma-separated dates: "Dec 11, Dec 15"
+    if ', ' in date_str and not date_str.count('-') > 0:
+        parts = date_str.split(', ')
+        for part in parts:
+            dates.extend(_parse_date_string(part.strip()))
+        return dates
+
+    # Handle date ranges: "Dec 11-12" or "Nov 28-Dec 04"
+    if '-' in date_str:
+        parts = date_str.split('-')
+        if len(parts) == 2:
+            start_part = parts[0].strip()
+            end_part = parts[1].strip()
+            start_date = None
+
+            # Parse start date
+            try:
+                start_date = datetime.strptime(f"{start_part} {current_year}", "%b %d %Y")
+                start_date = eastern.localize(start_date)
+                dates.append(start_date)
+            except ValueError:
+                pass
+
+            # Parse end date - might be just day number or full "Mon DD"
+            try:
+                if len(end_part) <= 2 and start_date:  # Just day number: "12"
+                    # Use same month as start
+                    end_date = datetime.strptime(f"{start_date.strftime('%b')} {end_part} {current_year}", "%b %d %Y")
+                else:  # Full "Dec 04"
+                    end_date = datetime.strptime(f"{end_part} {current_year}", "%b %d %Y")
+                end_date = eastern.localize(end_date)
+                dates.append(end_date)
+            except ValueError:
+                pass
+        return dates
+
+    # Handle single date: "Dec 11"
+    try:
+        date = datetime.strptime(f"{date_str} {current_year}", "%b %d %Y")
+        date = eastern.localize(date)
+        dates.append(date)
+    except ValueError:
+        pass
+
+    return dates
+
+
+def _consolidate_dates(date_strings: List[str]) -> str:
+    """
+    Consolidate multiple date strings into a single range without year.
+
+    Args:
+        date_strings: List of date strings (e.g., ["Dec 11", "Dec 12", "Dec 11-12"])
+
+    Returns:
+        Consolidated date range: "Dec 11-12" or "Dec 11" if single date
+    """
+    if not date_strings:
+        return ""
+
+    # Parse all dates
+    all_dates = []
+    for date_str in date_strings:
+        parsed = _parse_date_string(date_str)
+        all_dates.extend(parsed)
+
+    if not all_dates:
+        return ""
+
+    # Find min and max dates
+    min_date = min(all_dates)
+    max_date = max(all_dates)
+
+    # Format result without year
+    if min_date.date() == max_date.date():
+        # Single date
+        return min_date.strftime("%b %d")
+    elif min_date.month == max_date.month:
+        # Same month range: "Dec 11-12"
+        return f"{min_date.strftime('%b %d')}-{max_date.strftime('%d')}"
+    else:
+        # Cross-month range: "Nov 28-Dec 04"
+        return f"{min_date.strftime('%b %d')}-{max_date.strftime('%b %d')}"
+
+
+def post_process_phase4_dates(
+    phase4_result: Dict,
+    phase3_json: Dict,
+    report_type: str = 'daily'
+) -> Dict:
+    """
+    Post-process Phase 4 date_range fields using Python (not AI).
+
+    Computes date_range from surviving bullet dates. Falls back to report period
+    if no bullets have dates.
+
+    This ensures consistent date format (no year) and correct dates.
+
+    Args:
+        phase4_result: Phase 4 output dict with phase4_bottom_line, etc.
+        phase3_json: Phase 3 merged JSON with bullet sections
+        report_type: 'daily' or 'weekly'
+
+    Returns:
+        Updated phase4_result with corrected date_range fields
+    """
+    LOG.info("Post-processing Phase 4 date_range fields...")
+
+    # Collect all bullet dates
+    all_bullet_dates = _collect_all_bullet_dates(phase3_json)
+    computed_date_range = _consolidate_dates(all_bullet_dates) if all_bullet_dates else ""
+
+    # Fallback to report period if no bullet dates found
+    if not computed_date_range:
+        computed_date_range = compute_report_period_date_range(report_type)
+        LOG.info(f"No bullet dates found, using report period: {computed_date_range}")
+    else:
+        LOG.info(f"Computed date range from bullets: {computed_date_range}")
+
+    # Apply the same date range to all paragraph sections
+    paragraph_keys = [
+        "phase4_bottom_line",
+        "phase4_upside_scenario",
+        "phase4_downside_scenario"
+    ]
+
+    for phase4_key in paragraph_keys:
+        section = phase4_result.get(phase4_key, {})
+        section['date_range'] = computed_date_range
+        phase4_result[phase4_key] = section
+
+    LOG.info(f"Phase 4 date_range post-processing complete. Date range: {computed_date_range}")
+
+    return phase4_result
